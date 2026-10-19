@@ -104,6 +104,25 @@ at `/api/webhooks/unifonic` (`WEBHOOK_SECRET_UNIFONIC`) and `/api/webhooks/whats
 has no receipt webhook; email stays at "sent". See
 IMPLEMENTATION_PLAN.md: the live adapters still need verification with real accounts.
 
+## Deploy on Vercel
+
+The app runs on Vercel with Neon Postgres and a **private** Vercel Blob store:
+
+1. Create the Vercel project from this repo (framework Next.js; `vercel.json` sets the build
+   command `pnpm vercel-build`, which runs migrations + RLS, an optional seed, then `next build`).
+2. Storage → create a Neon database and a private Blob store, both connected to the project.
+   Neon injects `DATABASE_URL` / `DATABASE_URL_UNPOOLED` (owner role); Blob injects
+   `BLOB_READ_WRITE_TOKEN`.
+3. Environment variables: `APP_SECRET`, `APP_DB_PASSWORD` (the build creates the
+   NOBYPASSRLS role `operra_app` with it and the app connects as that role — it refuses to serve
+   on a role that bypasses RLS), `CRON_SECRET`, `JOBS_MODE=inline`, `STORAGE_DRIVER=vercel-blob`,
+   `COOKIE_SECURE=true`, `MAX_UPLOAD_MB=4`; optionally `SEED_DEMO=true` + `SEED_PASSWORD`.
+4. Pick a function region next to the database (this deployment uses `fra1`).
+
+Differences from the Docker setup: there is no long-running worker — jobs run inside the
+request, and a daily Vercel Cron (`/api/cron/scheduler`, Hobby plan limit) sends due-soon/overdue
+reminders; without Redis, rate limits are per function instance; uploads are limited to ~4 MB.
+
 ## Project layout
 
 ```

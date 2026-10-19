@@ -17,9 +17,10 @@ export function tenantKey(orgId: string, area: string, id: string, fileName: str
 }
 
 class LocalDriver implements StorageDriver {
-  private root = resolve(process.env.STORAGE_LOCAL_DIR ?? "./storage");
+  // turbopackIgnore: dynamic paths here would otherwise make the bundler trace the whole project
+  private root = resolve(/*turbopackIgnore: true*/ process.env.STORAGE_LOCAL_DIR ?? "./storage");
   private path(key: string) {
-    const p = resolve(join(this.root, key));
+    const p = resolve(/*turbopackIgnore: true*/ join(/*turbopackIgnore: true*/ this.root, key));
     if (!p.startsWith(this.root)) throw new Error("invalid storage key");
     return p;
   }
