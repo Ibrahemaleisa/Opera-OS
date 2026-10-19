@@ -30,7 +30,7 @@ export function isLocale(v: unknown): v is Locale {
   return v === "ar" || v === "en";
 }
 
-export function dirFor(locale: Locale) {
+export function dirFor(locale: Locale): "rtl" | "ltr" {
   return locale === "ar" ? "rtl" : "ltr";
 }
 

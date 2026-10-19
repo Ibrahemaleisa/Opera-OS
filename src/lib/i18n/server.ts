@@ -17,5 +17,5 @@ export const getCalendar = cache(async (): Promise<CalendarPref> => {
 export async function getI18n() {
   const locale = await getLocale();
   const calendar = await getCalendar();
-  return { locale, dir: dirFor(locale), m: getMessages(locale), calendar, fmt: { locale, calendar } as const };
+  return { locale, dir: dirFor(locale) as "rtl" | "ltr", m: getMessages(locale), calendar, fmt: { locale, calendar } as const };
 }

@@ -60,7 +60,7 @@ export function RegisterForm() {
         <Input id="orgName" name="orgName" required onChange={(e) => !slugTouched && setSlug(slugify(e.target.value))} />
       </Field>
       <Field label={m.auth.agencySlug} error={fe("orgSlug")} hint={m.auth.agencySlugHint} htmlFor="orgSlug">
-        <Input id="orgSlug" name="orgSlug" required dir="ltr" value={slug} onChange={(e) => { setSlugTouched(true); setSlug(e.target.value); }} pattern="[a-z0-9-]{3,40}" />
+        <Input id="orgSlug" name="orgSlug" required dir="ltr" value={slug} onChange={(e) => { setSlugTouched(true); setSlug(e.target.value); }} pattern="[a-z0-9\-]{3,40}" />
       </Field>
       {error && <p role="alert" className="rounded-md bg-danger-soft px-3 py-2 text-sm text-danger">{error}</p>}
       <Button type="submit" disabled={pending} className="h-10">
