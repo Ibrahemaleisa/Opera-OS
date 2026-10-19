@@ -1093,6 +1093,7 @@ model InvitationCampaign {
   rsvpEnabled      Boolean        @default(true)
   rsvpDeadline     DateTime?
   qrEnabled        Boolean        @default(false)
+  config           Json           @default("{}") // { requireEvidence, requireReceiverName, maxAttempts }
   approvedById     String?
   approvedAt       DateTime?
   createdById      String
@@ -1247,6 +1248,7 @@ model Delivery {
   campaignId            String
   recipientId           String
   batchId               String?
+  importBatchId         String?
   trackingCode          String
   status                DeliveryStatus       @default(PENDING)
   priority              Priority             @default(MEDIUM)
@@ -1275,6 +1277,7 @@ model Delivery {
 
   @@unique([campaignId, recipientId])
   @@unique([organizationId, trackingCode])
+  @@index([importBatchId])
   @@index([organizationId, projectId, status])
   @@index([organizationId, agentId, status])
 }
@@ -1289,6 +1292,7 @@ model DeliveryEvent {
   reason           String?
   note             String?
   source           String          @default("WEB") // WEB | FIELD | FIELD_OFFLINE | SYSTEM | IMPORT
+  clientMutationId String?         @unique
   createdAt        DateTime        @default(now())
   delivery         Delivery        @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
 

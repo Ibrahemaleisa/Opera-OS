@@ -1,1 +1,569 @@
-export {};
+import ExcelJS from "exceljs";
+import { z } from "zod";
+import type { ImportRowStatus, Prisma } from "@/generated/prisma/client";
+import { neutralizeFormula } from "@/lib/csv";
+import { createId, shortCode } from "@/lib/id";
+import { systemContext, type ServiceContext } from "@/server/authz/context";
+import { assertCan, projectScope } from "@/server/authz/policy";
+import { withTenant, type Tx } from "@/server/db/tenant";
+import { AppError, ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/server/errors";
+import { audit } from "@/server/modules/audit/audit";
+import { emit } from "@/server/modules/automation/outbox";
+import { storeAttachment } from "@/server/modules/files/service";
+import { storage } from "@/server/modules/files/storage";
+import { enqueue } from "@/server/jobs/dispatch";
+import { CANONICAL_FIELDS, headerSignature, suggestMapping } from "./canonical";
+import { DEFAULT_OPTIONS, nameKey, normalizeRow, type ImportOptions, type Mapping, type NormalizedRecipient } from "./normalize";
+import { detectHeaderRow, extractTable, parseWorkbook } from "./parse";
+
+/** Imports up to this many rows are processed within the request; larger ones go to the worker. */
+export const INLINE_ROW_LIMIT = Number(process.env.IMPORT_INLINE_ROW_LIMIT ?? 1500);
+const CHUNK = 300;
+
+export const optionsSchema = z.object({
+  duplicateScope: z.enum(["PROJECT", "ORGANIZATION"]).default("PROJECT"),
+  matchOn: z.array(z.enum(["mobile", "email", "externalRef", "name"])).min(1).default(["mobile", "externalRef", "name"]),
+  requireMobile: z.boolean().default(true),
+  requireLocation: z.boolean().default(true),
+  defaultCity: z.string().trim().max(80).nullish(),
+});
+
+function readOptions(raw: unknown): ImportOptions {
+  const p = optionsSchema.safeParse(raw ?? {});
+  return p.success ? { ...DEFAULT_OPTIONS, ...p.data, defaultCity: p.data.defaultCity ?? null } : DEFAULT_OPTIONS;
+}
+
+async function loadBatch(tx: Tx, ctx: ServiceContext, batchId: string) {
+  const batch = await tx.importBatch.findUnique({ where: { id: batchId } });
+  if (!batch) throw new NotFoundError();
+  const scope = await projectScope(tx, ctx, batch.projectId);
+  if (!scope.operate || scope.clientView) throw new ForbiddenError();
+  assertCan(ctx, "recipient.import");
+  return { batch, scope };
+}
+
+async function readTable(batch: { storageKey: string; fileName: string; sheetName: string | null; headerRow: number }) {
+  const buf = await storage().get(batch.storageKey);
+  const sheets = await parseWorkbook(buf, batch.fileName);
+  const sheet = sheets.find((s) => s.name === batch.sheetName) ?? sheets[0];
+  if (!sheet) throw new ValidationError("errors.fileType");
+  return { sheets, sheet, ...extractTable(sheet.grid, batch.headerRow) };
+}
+
+// ── 1. Upload ───────────────────────────────────────────────────────────────
+
+export async function createImport(ctx: ServiceContext, input: { projectId: string; campaignId?: string | null; fileName: string; declaredType: string; body: Buffer }) {
+  assertCan(ctx, "recipient.import");
+  const ext = input.fileName.toLowerCase().split(".").pop();
+  if (!["xlsx", "csv"].includes(ext ?? "")) throw new ValidationError("errors.fileType");
+  const sheets = await parseWorkbook(input.body, input.fileName); // validate before storing
+  if (!sheets.length || sheets.every((s) => s.grid.length < 2)) throw new ValidationError("errors.noRowsSelected");
+  const first = sheets.find((s) => s.grid.length >= 2) ?? sheets[0];
+  const headerRow = detectHeaderRow(first.grid);
+  const { headers, rows } = extractTable(first.grid, headerRow);
+  return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
+    const scope = await projectScope(tx, ctx, input.projectId);
+    if (!scope.operate || scope.clientView) throw new ForbiddenError();
+    if (input.campaignId && !(await tx.invitationCampaign.findFirst({ where: { id: input.campaignId, projectId: input.projectId, type: "PHYSICAL" } }))) throw new NotFoundError();
+    const batchId = createId();
+    const att = await storeAttachment(tx, ctx, { projectId: input.projectId, entityType: "IMPORT", entityId: batchId, kind: "FILE", fileName: input.fileName, declaredType: input.declaredType, body: input.body });
+    const saved = await tx.importMapping.findFirst({ where: { kind: "RECIPIENTS", headerSignature: headerSignature(headers) }, orderBy: { createdAt: "desc" } });
+    const previous = await tx.importBatch.findFirst({ where: { projectId: input.projectId, fileSha256: att.sha256, status: { in: ["COMMITTED", "PARTIALLY_COMMITTED"] } }, select: { id: true, createdAt: true } });
+    const batch = await tx.importBatch.create({
+      data: {
+        id: batchId,
+        organizationId: ctx.orgId,
+        projectId: input.projectId,
+        campaignId: input.campaignId ?? null,
+        fileName: input.fileName,
+        storageKey: att.storageKey,
+        fileSha256: att.sha256,
+        fileSize: att.size,
+        sheetNames: sheets.map((s) => s.name),
+        sheetName: first.name,
+        headerRow,
+        headers,
+        totalRows: rows.length,
+        mapping: (saved?.mapping ?? suggestMapping(headers)) as Prisma.InputJsonValue,
+        options: { ...DEFAULT_OPTIONS, previousIdenticalBatchId: previous?.id ?? null } as Prisma.InputJsonValue,
+        status: "PARSED",
+        createdById: ctx.userId,
+      },
+    });
+    await audit(tx, ctx, { action: "import.upload", entityType: "IMPORT", entityId: batch.id, projectId: input.projectId, summary: `${input.fileName} (${rows.length})`, meta: { sha256: att.sha256, sheets: sheets.length } });
+    return batch;
+  });
+}
+
+// ── 2. Preview & mapping ────────────────────────────────────────────────────
+
+export async function getImportPreview(ctx: ServiceContext, batchId: string, override?: { sheetName?: string; headerRow?: number }) {
+  const { batch, customFields, mappings } = await withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
+    const { batch } = await loadBatch(tx, ctx, batchId);
+    const customFields = await tx.customFieldDefinition.findMany({ where: { entityType: "RECIPIENT", archived: false, OR: [{ projectId: null }, { projectId: batch.projectId }] } });
+    const mappings = await tx.importMapping.findMany({ where: { kind: "RECIPIENTS" }, orderBy: { createdAt: "desc" }, take: 20 });
+    return { batch, customFields, mappings };
+  });
+  const effective = { ...batch, sheetName: override?.sheetName ?? batch.sheetName, headerRow: override?.headerRow ?? batch.headerRow };
+  const { sheet, headers, rows } = await readTable(effective);
+  const changedLayout = !!override && (override.sheetName !== batch.sheetName || override.headerRow !== batch.headerRow);
+  return {
+    batch: { id: batch.id, status: batch.status, fileName: batch.fileName, projectId: batch.projectId, campaignId: batch.campaignId, sheetNames: batch.sheetNames, options: readOptions(batch.options), previousIdenticalBatchId: (batch.options as { previousIdenticalBatchId?: string })?.previousIdenticalBatchId ?? null },
+    sheetName: sheet.name,
+    headerRow: effective.headerRow,
+    headers,
+    totalRows: rows.length,
+    sample: rows.slice(0, 15),
+    topRows: sheet.grid.slice(0, 8),
+    mapping: (changedLayout ? suggestMapping(headers) : (batch.mapping as Mapping)) ?? suggestMapping(headers),
+    canonical: CANONICAL_FIELDS.map((f) => ({ key: f.key, ar: f.ar, en: f.en })),
+    customFields: customFields.map((c) => ({ key: `cf:${c.key}`, ar: c.labelAr, en: c.labelEn })),
+    savedMappings: mappings.map((mm) => ({ id: mm.id, name: mm.name, mapping: mm.mapping as Mapping })),
+  };
+}
+
+export const configureSchema = z.object({
+  batchId: z.string(),
+  sheetName: z.string().min(1),
+  headerRow: z.number().int().min(1).max(50),
+  mapping: z.record(z.string(), z.string().nullable()),
+  options: optionsSchema,
+  saveMappingAs: z.string().trim().max(100).nullish(),
+});
+
+/** Saves sheet/header/mapping/options and starts validation (inline or background). */
+export async function configureAndValidate(ctx: ServiceContext, input: z.output<typeof configureSchema>) {
+  const mapping = Object.fromEntries(Object.entries(input.mapping).filter(([, v]) => !!v)) as Mapping;
+  const allowed = new Set([...CANONICAL_FIELDS.map((f) => f.key as string)]);
+  for (const k of Object.keys(mapping)) if (!allowed.has(k) && !k.startsWith("cf:")) delete (mapping as Record<string, unknown>)[k];
+  if (!mapping.nameAr && !mapping.nameEn) throw new ValidationError("errors.validation", { mapping: ["delivery.import.mapName"] });
+  const batch = await withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
+    const { batch } = await loadBatch(tx, ctx, input.batchId);
+    if (!["PARSED", "VALIDATED", "FAILED"].includes(batch.status)) throw new ValidationError("errors.importState");
+    if (!batch.sheetNames.includes(input.sheetName)) throw new ValidationError("errors.validation");
+    const updated = await tx.importBatch.update({
+      where: { id: batch.id },
+      data: { sheetName: input.sheetName, headerRow: input.headerRow, mapping: mapping as Prisma.InputJsonValue, options: { ...(batch.options as object), ...input.options } as Prisma.InputJsonValue, status: "VALIDATING", progress: 0, error: null },
+    });
+    if (input.saveMappingAs) {
+      await tx.importMapping.create({ data: { organizationId: ctx.orgId, name: input.saveMappingAs, mapping: mapping as Prisma.InputJsonValue, headerSignature: headerSignature(batch.headers), createdById: ctx.userId } });
+    }
+    await audit(tx, ctx, { action: "import.configure", entityType: "IMPORT", entityId: batch.id, projectId: batch.projectId, meta: { mapping, options: input.options } });
+    return updated;
+  });
+  const mode = batch.totalRows > INLINE_ROW_LIMIT ? await enqueue("import.validate", { orgId: ctx.orgId, actorId: ctx.userId, batchId: batch.id }, { jobId: `import-validate-${batch.id}-${Date.now()}` }) : (await runValidation(ctx.orgId, ctx.userId, batch.id), "inline");
+  return { batchId: batch.id, mode };
+}
+
+// ── 3. Validation (job) ─────────────────────────────────────────────────────
+
+interface Existing { id: string; mobile: string | null; email: string | null; externalRef: string | null; matchKey: string | null }
+
+function chunked<T>(xs: T[], n: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < xs.length; i += n) out.push(xs.slice(i, i + n));
+  return out;
+}
+
+async function findExisting(tx: Tx, scope: { projectId: string; orgWide: boolean }, keys: { mobiles: string[]; emails: string[]; refs: string[]; names: string[] }): Promise<Existing[]> {
+  const out: Existing[] = [];
+  const base = { deletedAt: null, ...(scope.orgWide ? {} : { projectId: scope.projectId }) };
+  const select = { id: true, mobile: true, email: true, externalRef: true, matchKey: true };
+  for (const part of chunked(keys.mobiles, 5000)) out.push(...(await tx.recipient.findMany({ where: { ...base, mobile: { in: part } }, select })));
+  for (const part of chunked(keys.emails, 5000)) out.push(...(await tx.recipient.findMany({ where: { ...base, email: { in: part } }, select })));
+  for (const part of chunked(keys.refs, 5000)) out.push(...(await tx.recipient.findMany({ where: { ...base, externalRef: { in: part } }, select })));
+  for (const part of chunked(keys.names, 5000)) out.push(...(await tx.recipient.findMany({ where: { ...base, matchKey: { in: part } }, select })));
+  return out;
+}
+
+function keyIndex(existing: Existing[]) {
+  const idx = new Map<string, string>();
+  for (const r of existing) {
+    if (r.mobile) idx.set(`m:${r.mobile}`, r.id);
+    if (r.email) idx.set(`e:${r.email.toLowerCase()}`, r.id);
+    if (r.externalRef) idx.set(`r:${r.externalRef.toLowerCase()}`, r.id);
+    if (r.matchKey) idx.set(r.matchKey, r.id);
+  }
+  return idx;
+}
+
+function classify(errors: unknown[], warnings: unknown[], dup: boolean): ImportRowStatus {
+  if (errors.length) return "INVALID";
+  if (dup) return "DUPLICATE";
+  return warnings.length ? "WARNING" : "VALID";
+}
+
+export async function runValidation(orgId: string, actorId: string, batchId: string) {
+  const ctx = { ...systemContext(orgId), userId: actorId };
+  const batch = await withTenant({ orgId }, (tx) => tx.importBatch.findUnique({ where: { id: batchId } }));
+  if (!batch || batch.status !== "VALIDATING") return { skipped: true };
+  try {
+    const { rows } = await readTable(batch);
+    const mapping = (batch.mapping ?? {}) as Mapping;
+    const opts = readOptions(batch.options);
+    const results = rows.map((r) => ({ r, res: normalizeRow(r.values, mapping, opts) }));
+    const existing = await withTenant({ orgId }, (tx) =>
+      findExisting(tx, { projectId: batch.projectId, orgWide: opts.duplicateScope === "ORGANIZATION" }, {
+        mobiles: [...new Set(results.map((x) => x.res.normalized.mobile).filter((x): x is string => !!x && opts.matchOn.includes("mobile")))],
+        emails: [...new Set(results.map((x) => x.res.normalized.email).filter((x): x is string => !!x && opts.matchOn.includes("email")))],
+        refs: [...new Set(results.map((x) => x.res.normalized.externalRef).filter((x): x is string => !!x && opts.matchOn.includes("externalRef")))],
+        names: opts.matchOn.includes("name") ? [...new Set(results.map((x) => nameKey(x.res.normalized)))] : [],
+      }),
+    );
+    const idx = keyIndex(existing);
+    const firstSeen = new Map<string, number>();
+    const data: Prisma.ImportRowCreateManyInput[] = results.map(({ r, res }) => {
+      let duplicateOfRecipientId: string | null = null;
+      let duplicateOfRow: number | null = null;
+      for (const k of res.keys) {
+        if (!duplicateOfRecipientId && idx.has(k)) duplicateOfRecipientId = idx.get(k)!;
+        if (!duplicateOfRow && firstSeen.has(k)) duplicateOfRow = firstSeen.get(k)!;
+      }
+      for (const k of res.keys) if (!firstSeen.has(k)) firstSeen.set(k, r.rowNumber);
+      const status = classify(res.errors, res.warnings, !!(duplicateOfRecipientId || duplicateOfRow));
+      return {
+        organizationId: orgId,
+        batchId,
+        rowNumber: r.rowNumber,
+        raw: r.values as Prisma.InputJsonValue,
+        normalized: res.normalized as Prisma.InputJsonValue,
+        status,
+        errors: res.errors as unknown as Prisma.InputJsonValue,
+        warnings: res.warnings as unknown as Prisma.InputJsonValue,
+        matchKey: res.keys[0] ?? null,
+        duplicateOfRecipientId,
+        duplicateOfRow,
+        resolution: "PENDING",
+      };
+    });
+    await withTenant({ orgId }, async (tx) => {
+      await tx.importRow.deleteMany({ where: { batchId } });
+    });
+    let done = 0;
+    for (const part of chunked(data, 1000)) {
+      await withTenant({ orgId }, async (tx) => {
+        await tx.importRow.createMany({ data: part });
+        done += part.length;
+        await tx.importBatch.update({ where: { id: batchId }, data: { progress: Math.round((done / Math.max(1, data.length)) * 100) } });
+      });
+    }
+    await refreshCounts(orgId, batchId, "VALIDATED");
+    await withTenant({ orgId, userId: actorId }, (tx) => audit(tx, ctx, { action: "import.validated", entityType: "IMPORT", entityId: batchId, projectId: batch.projectId, summary: `${data.length} rows` }));
+    return { rows: data.length };
+  } catch (err) {
+    const message = err instanceof AppError ? err.message : "errors.unexpected";
+    await withTenant({ orgId }, (tx) => tx.importBatch.update({ where: { id: batchId }, data: { status: "FAILED", error: message } }));
+    await withTenant({ orgId, userId: actorId }, (tx) => emit(tx, ctx, "import.failed", { batchId, projectId: batch.projectId, link: `/projects/${batch.projectId}/delivery/imports/${batchId}` }));
+    if (!(err instanceof AppError)) throw err;
+    return { failed: true };
+  }
+}
+
+async function refreshCounts(orgId: string, batchId: string, status?: "VALIDATED") {
+  await withTenant({ orgId }, async (tx) => {
+    const counts = await tx.importRow.groupBy({ by: ["status"], where: { batchId }, _count: true });
+    const c = (s: string) => counts.find((x) => x.status === s)?._count ?? 0;
+    await tx.importBatch.update({
+      where: { id: batchId },
+      data: { validRows: c("VALID"), warningRows: c("WARNING"), invalidRows: c("INVALID"), duplicateRows: c("DUPLICATE"), committedRows: c("COMMITTED"), totalRows: counts.reduce((n, x) => n + x._count, 0), ...(status ? { status, progress: 100 } : {}) },
+    });
+  });
+}
+
+// ── 4. Review: list rows, edit, resolve ─────────────────────────────────────
+
+export async function listImportRows(ctx: ServiceContext, batchId: string, filter: { status?: string; take?: number; skip?: number } = {}) {
+  return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
+    const { batch, scope } = await loadBatch(tx, ctx, batchId);
+    const where = { batchId, ...(filter.status ? { status: filter.status as ImportRowStatus } : {}) };
+    const [rows, total, counts, history] = await Promise.all([
+      tx.importRow.findMany({ where, orderBy: { rowNumber: "asc" }, take: Math.min(filter.take ?? 200, 1000), skip: filter.skip ?? 0 }),
+      tx.importRow.count({ where }),
+      tx.importRow.groupBy({ by: ["status"], where: { batchId }, _count: true }),
+      tx.auditEvent.findMany({ where: { entityType: "IMPORT", entityId: batchId }, orderBy: { createdAt: "asc" } }),
+    ]);
+    const dupIds = [...new Set(rows.map((r) => r.duplicateOfRecipientId).filter((x): x is string => !!x))];
+    const dups = await tx.recipient.findMany({ where: { id: { in: dupIds } }, select: { id: true, code: true, nameAr: true, nameEn: true, organizationName: true, projectId: true, mobile: true } });
+    const campaign = batch.campaignId ? await tx.invitationCampaign.findUnique({ where: { id: batch.campaignId }, select: { id: true, name: true } }) : null;
+    return {
+      batch,
+      campaign,
+      rows,
+      total,
+      counts: Object.fromEntries(counts.map((c) => [c.status, c._count])) as Record<string, number>,
+      duplicates: Object.fromEntries(dups.map((d) => [d.id, { ...d, mobile: scope.vip ? d.mobile : d.mobile ? `•••${d.mobile.slice(-4)}` : null }])),
+      history,
+      vip: scope.vip,
+    };
+  });
+}
+
+export async function updateImportRow(ctx: ServiceContext, input: { batchId: string; rowId: string; overrides: Partial<NormalizedRecipient> }) {
+  return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
+    const { batch } = await loadBatch(tx, ctx, input.batchId);
+    if (batch.status !== "VALIDATED") throw new ValidationError("errors.importState");
+    const row = await tx.importRow.findFirst({ where: { id: input.rowId, batchId: batch.id } });
+    if (!row) throw new NotFoundError();
+    const opts = readOptions(batch.options);
+    const overrides = { ...((row.overrides as object) ?? {}), ...input.overrides };
+    const res = normalizeRow(row.raw as Record<string, unknown>, (batch.mapping ?? {}) as Mapping, opts, overrides);
+    // re-check duplicates for this row only
+    const existing = await findExisting(tx, { projectId: batch.projectId, orgWide: opts.duplicateScope === "ORGANIZATION" }, {
+      mobiles: res.normalized.mobile && opts.matchOn.includes("mobile") ? [res.normalized.mobile] : [],
+      emails: res.normalized.email && opts.matchOn.includes("email") ? [res.normalized.email] : [],
+      refs: res.normalized.externalRef && opts.matchOn.includes("externalRef") ? [res.normalized.externalRef] : [],
+      names: opts.matchOn.includes("name") ? [nameKey(res.normalized)] : [],
+    });
+    const idx = keyIndex(existing);
+    const dupRecipient = res.keys.map((k) => idx.get(k)).find(Boolean) ?? null;
+    const others = await tx.importRow.findFirst({ where: { batchId: batch.id, rowNumber: { lt: row.rowNumber }, matchKey: { in: res.keys }, status: { notIn: ["SKIPPED", "INVALID"] } }, select: { rowNumber: true } });
+    const status = classify(res.errors, res.warnings, !!(dupRecipient || others));
+    const updated = await tx.importRow.update({
+      where: { id: row.id },
+      data: { overrides: overrides as Prisma.InputJsonValue, normalized: res.normalized as Prisma.InputJsonValue, errors: res.errors as unknown as Prisma.InputJsonValue, warnings: res.warnings as unknown as Prisma.InputJsonValue, status, matchKey: res.keys[0] ?? null, duplicateOfRecipientId: dupRecipient, duplicateOfRow: others?.rowNumber ?? null, resolution: "PENDING" },
+    });
+    await audit(tx, ctx, { action: "import.row_edit", entityType: "IMPORT", entityId: batch.id, projectId: batch.projectId, summary: `row ${row.rowNumber}`, meta: { fields: Object.keys(input.overrides), status } });
+    const counts = await tx.importRow.groupBy({ by: ["status"], where: { batchId: batch.id }, _count: true });
+    const c = (s: string) => counts.find((x) => x.status === s)?._count ?? 0;
+    await tx.importBatch.update({ where: { id: batch.id }, data: { validRows: c("VALID"), warningRows: c("WARNING"), invalidRows: c("INVALID"), duplicateRows: c("DUPLICATE") } });
+    return updated;
+  });
+}
+
+export async function resolveRows(ctx: ServiceContext, input: { batchId: string; rowIds?: string[]; scope?: "ALL_DUPLICATES" | "ALL_INVALID"; resolution: "SKIP" | "IMPORT_AS_NEW" | "LINK_EXISTING" | "PENDING" }) {
+  return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
+    const { batch } = await loadBatch(tx, ctx, input.batchId);
+    if (batch.status !== "VALIDATED") throw new ValidationError("errors.importState");
+    const where: Prisma.ImportRowWhereInput = { batchId: batch.id, ...(input.rowIds ? { id: { in: input.rowIds } } : input.scope === "ALL_INVALID" ? { status: "INVALID" } : { status: "DUPLICATE" }) };
+    // Only rows that matched an existing recipient can be linked; invalid rows can only be skipped.
+    if (input.resolution === "LINK_EXISTING") where.duplicateOfRecipientId = { not: null };
+    if (input.resolution !== "SKIP" && input.resolution !== "PENDING") where.status = { not: "INVALID" };
+    const r = await tx.importRow.updateMany({ where, data: { resolution: input.resolution } });
+    await audit(tx, ctx, { action: "import.resolve", entityType: "IMPORT", entityId: batch.id, projectId: batch.projectId, summary: `${r.count} → ${input.resolution}` });
+    return { updated: r.count };
+  });
+}
+
+// ── 5. Commit ───────────────────────────────────────────────────────────────
+
+export const commitSchema = z.object({ batchId: z.string(), includeWarnings: z.boolean().default(true), acceptPartial: z.boolean().default(false), campaignId: z.string().nullish() });
+
+export async function commitImport(ctx: ServiceContext, input: z.output<typeof commitSchema>) {
+  const batch = await withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
+    const { batch } = await loadBatch(tx, ctx, input.batchId);
+    if (batch.status !== "VALIDATED") throw new ValidationError("errors.importState");
+    if (input.campaignId !== undefined && input.campaignId !== batch.campaignId) {
+      if (input.campaignId && !(await tx.invitationCampaign.findFirst({ where: { id: input.campaignId, projectId: batch.projectId, type: "PHYSICAL" } }))) throw new NotFoundError();
+    }
+    const blocking = await tx.importRow.count({ where: { batchId: batch.id, OR: [{ status: "INVALID", resolution: { not: "SKIP" } }, { status: "DUPLICATE", resolution: "PENDING" }] } });
+    const importable = await tx.importRow.count({ where: { batchId: batch.id, OR: [{ status: "VALID" }, ...(input.includeWarnings ? [{ status: "WARNING" as const }] : []), { status: "DUPLICATE", resolution: { in: ["IMPORT_AS_NEW", "LINK_EXISTING"] } }] } });
+    if (!importable) throw new ValidationError("errors.noRowsSelected");
+    // Partial imports require explicit approval — never silently drop rows.
+    if (blocking > 0 && !input.acceptPartial) throw new AppError("delivery.import.partialRequired", "PARTIAL_REQUIRED", 409);
+    const claimed = await tx.importBatch.updateMany({
+      where: { id: batch.id, status: "VALIDATED" },
+      data: { status: "COMMITTING", progress: 0, committedById: ctx.userId, campaignId: input.campaignId === undefined ? batch.campaignId : input.campaignId, options: { ...(batch.options as object), includeWarnings: input.includeWarnings, acceptPartial: input.acceptPartial } as Prisma.InputJsonValue },
+    });
+    if (!claimed.count) throw new ConflictError();
+    await audit(tx, ctx, { action: "import.commit_start", entityType: "IMPORT", entityId: batch.id, projectId: batch.projectId, meta: { importable, blocking, acceptPartial: input.acceptPartial } });
+    return { ...batch, importable };
+  });
+  const mode = batch.importable > INLINE_ROW_LIMIT ? await enqueue("import.commit", { orgId: ctx.orgId, actorId: ctx.userId, batchId: batch.id }, { jobId: `import-commit-${batch.id}` }) : (await runCommit(ctx.orgId, ctx.userId, batch.id), "inline");
+  return { batchId: batch.id, mode };
+}
+
+async function nextRecipientNumber(tx: Tx, projectId: string): Promise<number> {
+  const last = await tx.$queryRaw<{ n: number | null }[]>`SELECT max(nullif(regexp_replace(code, '\\D', '', 'g'), '')::int) AS n FROM "Recipient" WHERE "projectId" = ${projectId}`;
+  return (last[0]?.n ?? 0) + 1;
+}
+
+/** Idempotent, chunked commit. Safe to re-run after a crash: COMMITTED rows are skipped. */
+export async function runCommit(orgId: string, actorId: string, batchId: string) {
+  const ctx = { ...systemContext(orgId), userId: actorId };
+  const batch = await withTenant({ orgId }, (tx) => tx.importBatch.findUnique({ where: { id: batchId } }));
+  if (!batch || batch.status !== "COMMITTING") return { skipped: true };
+  const opts = batch.options as { includeWarnings?: boolean };
+  const statuses: ImportRowStatus[] = opts.includeWarnings === false ? ["VALID"] : ["VALID", "WARNING"];
+  const config = batch.campaignId ? await withTenant({ orgId }, (tx) => tx.invitationCampaign.findUnique({ where: { id: batch.campaignId! } })) : null;
+  let created = 0;
+  let linked = 0;
+  for (;;) {
+    const n = await withTenant({ orgId, userId: actorId }, async (tx) => {
+      // serialize code allocation per project across concurrent imports
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${batch.projectId}))`;
+      const rows = await tx.importRow.findMany({
+        where: { batchId, OR: [{ status: { in: statuses } }, { status: "DUPLICATE", resolution: { in: ["IMPORT_AS_NEW", "LINK_EXISTING"] } }] },
+        orderBy: { rowNumber: "asc" },
+        take: CHUNK,
+      });
+      if (!rows.length) return 0;
+      let seq = await nextRecipientNumber(tx, batch.projectId);
+      const recipients: Prisma.RecipientCreateManyInput[] = [];
+      const deliveries: Prisma.DeliveryCreateManyInput[] = [];
+      const rowUpdates: { id: string; recipientId: string }[] = [];
+      const customValues: Prisma.CustomFieldValueCreateManyInput[] = [];
+      const defs = await tx.customFieldDefinition.findMany({ where: { entityType: "RECIPIENT", archived: false, OR: [{ projectId: null }, { projectId: batch.projectId }] } });
+      const retentionDays = Number(((await tx.organization.findUnique({ where: { id: orgId }, select: { settings: true } }))?.settings as { recipientRetentionDays?: number })?.recipientRetentionDays ?? 365);
+      for (const row of rows) {
+        const nr = row.normalized as NormalizedRecipient;
+        let recipientId: string;
+        if (row.status === "DUPLICATE" && row.resolution === "LINK_EXISTING" && row.duplicateOfRecipientId) {
+          recipientId = row.duplicateOfRecipientId;
+          // linking never overwrites the existing record; for org-scope matches in another project, create a project copy
+          const existing = await tx.recipient.findUnique({ where: { id: recipientId } });
+          if (!existing || existing.projectId !== batch.projectId) {
+            recipientId = "";
+          } else linked++;
+        } else recipientId = "";
+        if (!recipientId) {
+          recipientId = createId();
+          recipients.push({
+            id: recipientId,
+            organizationId: orgId,
+            projectId: batch.projectId,
+            code: `R-${String(seq++).padStart(5, "0")}`,
+            externalRef: nr.externalRef ?? null,
+            nameAr: nr.nameAr ?? null,
+            nameEn: nr.nameEn ?? null,
+            honorific: nr.honorific ?? null,
+            jobTitle: nr.jobTitle ?? null,
+            organizationName: nr.organizationName ?? null,
+            vipTier: nr.vipTier ?? null,
+            category: nr.category ?? null,
+            mobile: nr.mobile ?? null,
+            mobileRaw: nr.mobileRaw ?? null,
+            altPhone: nr.altPhone ?? null,
+            email: nr.email ?? null,
+            address: nr.address ?? null,
+            city: nr.city ?? null,
+            district: nr.district ?? null,
+            mapsUrl: nr.mapsUrl ?? null,
+            lat: nr.lat ?? null,
+            lng: nr.lng ?? null,
+            deliveryInstructions: nr.deliveryInstructions ?? null,
+            preferredWindow: nr.preferredWindow ?? null,
+            invitationType: nr.invitationType ?? config?.invitationType ?? null,
+            priority: nr.priority ?? "MEDIUM",
+            notes: nr.notes ?? null,
+            matchKey: nameKey(nr),
+            verificationStatus: nr.mobile ? "UNVERIFIED" : "INVALID",
+            retentionUntil: new Date(Date.now() + retentionDays * 86400_000),
+            importBatchId: batchId,
+            importRowId: row.id,
+            createdById: actorId,
+          });
+          for (const [k, v] of Object.entries(nr.custom ?? {})) {
+            const def = defs.find((d) => d.key === k);
+            if (def && v !== null) customValues.push({ organizationId: orgId, definitionId: def.id, entityType: "RECIPIENT", entityId: recipientId, value: v as Prisma.InputJsonValue });
+          }
+          created++;
+        }
+        rowUpdates.push({ id: row.id, recipientId });
+        if (batch.campaignId) {
+          const hasLocation = !!(nr.address || nr.mapsUrl || (nr.lat != null && nr.lng != null));
+          deliveries.push({ id: createId(), organizationId: orgId, projectId: batch.projectId, campaignId: batch.campaignId, recipientId, importBatchId: batchId, trackingCode: `DLV-${shortCode(7)}`, status: hasLocation ? "READY" : "PENDING", priority: nr.priority ?? "MEDIUM" });
+        }
+      }
+      if (recipients.length) await tx.recipient.createMany({ data: recipients });
+      if (customValues.length) await tx.customFieldValue.createMany({ data: customValues, skipDuplicates: true });
+      if (deliveries.length) {
+        // (campaign, recipient) is unique: existing cards for linked recipients are kept, not duplicated
+        const existing = await tx.delivery.findMany({ where: { campaignId: batch.campaignId!, recipientId: { in: deliveries.map((d) => d.recipientId) } }, select: { recipientId: true } });
+        const have = new Set(existing.map((e) => e.recipientId));
+        const fresh = deliveries.filter((d) => !have.has(d.recipientId));
+        if (fresh.length) {
+          await tx.delivery.createMany({ data: fresh });
+          await tx.deliveryEvent.createMany({ data: fresh.map((d) => ({ organizationId: orgId, deliveryId: d.id!, toStatus: d.status!, actorId, source: "IMPORT", note: batch.fileName })) });
+        }
+      }
+      for (const u of rowUpdates) await tx.importRow.update({ where: { id: u.id }, data: { status: "COMMITTED", recipientId: u.recipientId } });
+      const done = await tx.importRow.count({ where: { batchId, status: "COMMITTED" } });
+      await tx.importBatch.update({ where: { id: batchId }, data: { committedRows: done, progress: Math.min(99, Math.round((done / Math.max(1, batch.totalRows)) * 100)) } });
+      return rows.length;
+    }, { timeout: 120_000 });
+    if (!n) break;
+  }
+  await withTenant({ orgId, userId: actorId }, async (tx) => {
+    await tx.importRow.updateMany({ where: { batchId, status: { notIn: ["COMMITTED"] } }, data: { status: "SKIPPED" } });
+    const skipped = await tx.importRow.count({ where: { batchId, status: "SKIPPED" } });
+    const committed = await tx.importRow.count({ where: { batchId, status: "COMMITTED" } });
+    await tx.importBatch.update({ where: { id: batchId }, data: { status: skipped ? "PARTIALLY_COMMITTED" : "COMMITTED", committedRows: committed, committedAt: new Date(), progress: 100 } });
+    await audit(tx, ctx, { action: "import.commit", entityType: "IMPORT", entityId: batchId, projectId: batch.projectId, summary: `${committed} committed, ${skipped} skipped`, meta: { created, linked, campaignId: batch.campaignId } });
+    await emit(tx, ctx, "import.completed", { batchId, projectId: batch.projectId, count: committed, link: `/projects/${batch.projectId}/delivery/imports/${batchId}`, entityType: "IMPORT", entityId: batchId });
+  });
+  return { created, linked };
+}
+
+// ── 6. Rollback ─────────────────────────────────────────────────────────────
+
+/**
+ * Rolls back a committed batch only when it is safe: none of the recipients it created were
+ * edited afterwards and none of its delivery cards were assigned, attempted or progressed.
+ */
+export async function rollbackImport(ctx: ServiceContext, batchId: string) {
+  return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
+    const { batch, scope } = await loadBatch(tx, ctx, batchId);
+    if (!scope.manage && !scope.operate) throw new ForbiddenError();
+    if (!["COMMITTED", "PARTIALLY_COMMITTED"].includes(batch.status) || !batch.committedAt) throw new ValidationError("errors.importState");
+    const safeUntil = new Date(batch.committedAt.getTime() + 5_000);
+    const [modifiedRecipients, progressedDeliveries, linkedElsewhere] = await Promise.all([
+      tx.recipient.count({ where: { importBatchId: batchId, updatedAt: { gt: safeUntil } } }),
+      tx.delivery.count({ where: { importBatchId: batchId, OR: [{ status: { notIn: ["PENDING", "VALIDATING", "READY"] } }, { attemptsCount: { gt: 0 } }, { agentId: { not: null } }, { batchId: { not: null } }] } }),
+      tx.delivery.count({ where: { recipient: { importBatchId: batchId }, importBatchId: { not: batchId } } }),
+    ]);
+    if (modifiedRecipients || progressedDeliveries || linkedElsewhere) throw new AppError("errors.rollbackUnsafe", "ROLLBACK_UNSAFE", 409, { blocked: [String(modifiedRecipients + progressedDeliveries + linkedElsewhere)] });
+    const claimed = await tx.importBatch.updateMany({ where: { id: batchId, status: batch.status }, data: { status: "ROLLED_BACK", rolledBackAt: new Date(), rolledBackById: ctx.userId } });
+    if (!claimed.count) throw new ConflictError();
+    const d = await tx.delivery.deleteMany({ where: { importBatchId: batchId } });
+    const r = await tx.recipient.deleteMany({ where: { importBatchId: batchId } });
+    await tx.importRow.updateMany({ where: { batchId, status: "COMMITTED" }, data: { status: "ROLLED_BACK" } });
+    await audit(tx, ctx, { action: "import.rollback", entityType: "IMPORT", entityId: batchId, projectId: batch.projectId, summary: `${r.count} recipients, ${d.count} deliveries removed` });
+    return { recipients: r.count, deliveries: d.count };
+  });
+}
+
+export async function listImports(ctx: ServiceContext, projectId: string) {
+  return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
+    await projectScope(tx, ctx, projectId);
+    return tx.importBatch.findMany({ where: { projectId }, orderBy: { createdAt: "desc" }, take: 100 });
+  });
+}
+
+export async function importStatus(ctx: ServiceContext, batchId: string) {
+  return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
+    const { batch } = await loadBatch(tx, ctx, batchId);
+    return { status: batch.status, progress: batch.progress, committedRows: batch.committedRows, totalRows: batch.totalRows, error: batch.error };
+  });
+}
+
+// ── 7. Reports ──────────────────────────────────────────────────────────────
+
+/** Error report / normalized export as XLSX. All cells are formula-neutralized. */
+export async function importReport(ctx: ServiceContext, batchId: string, kind: "errors" | "normalized" | "original", messages: (code: string) => string) {
+  const { batch, rows } = await withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
+    const { batch, scope } = await loadBatch(tx, ctx, batchId);
+    if (kind !== "errors" && !scope.vip && !scope.export) throw new ForbiddenError();
+    const rows = await tx.importRow.findMany({ where: { batchId, ...(kind === "errors" ? { status: { in: ["INVALID", "DUPLICATE", "WARNING", "SKIPPED"] } } : {}) }, orderBy: { rowNumber: "asc" } });
+    await audit(tx, ctx, { action: "export.import_report", entityType: "IMPORT", entityId: batchId, projectId: batch.projectId, meta: { kind, rows: rows.length } });
+    return { batch, rows };
+  });
+  const wb = new ExcelJS.Workbook();
+  wb.creator = "Operra";
+  const ws = wb.addWorksheet(kind === "errors" ? "Errors" : kind === "normalized" ? "Normalized" : "Original", { views: [{ rightToLeft: ctx.locale === "ar" }] });
+  const canonical = CANONICAL_FIELDS.map((f) => f.key);
+  const headers = kind === "normalized" ? ["row", "status", ...canonical] : ["row", "status", "errors", "warnings", ...batch.headers];
+  ws.addRow(headers);
+  ws.getRow(1).font = { bold: true };
+  for (const r of rows) {
+    const issues = (xs: unknown) => (xs as { field: string; code: string }[]).map((i) => `${i.field}: ${messages(i.code)}`).join("; ");
+    if (kind === "normalized") {
+      const nr = (r.normalized ?? {}) as Record<string, unknown>;
+      ws.addRow([r.rowNumber, r.status, ...canonical.map((k) => neutralizeFormula(nr[k]))]);
+    } else {
+      const raw = r.raw as Record<string, unknown>;
+      ws.addRow([r.rowNumber, r.status, neutralizeFormula(issues(r.errors) + (r.duplicateOfRow ? `; duplicate of row ${r.duplicateOfRow}` : r.duplicateOfRecipientId ? "; duplicate of existing recipient" : "")), neutralizeFormula(issues(r.warnings)), ...batch.headers.map((h) => neutralizeFormula(raw[h]))]);
+    }
+  }
+  ws.columns.forEach((c) => (c.width = 18));
+  return { buffer: Buffer.from(await wb.xlsx.writeBuffer()), fileName: `${batch.fileName.replace(/\.[^.]+$/, "")}-${kind}.xlsx` };
+}

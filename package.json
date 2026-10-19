@@ -17,6 +17,7 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate deploy && tsx scripts/apply-rls.ts",
     "db:migrate:dev": "prisma migrate dev && tsx scripts/apply-rls.ts",
+    "db:diff": "prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --script",
     "db:rls": "tsx scripts/apply-rls.ts",
     "db:seed": "tsx prisma/seed.ts",
     "db:reset": "prisma migrate reset --force --skip-seed && tsx scripts/apply-rls.ts && tsx prisma/seed.ts",

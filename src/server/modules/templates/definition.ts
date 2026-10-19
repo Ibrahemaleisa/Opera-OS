@@ -4,7 +4,7 @@ const text = z.object({ ar: z.string().min(1), en: z.string().min(1) });
 const key = z.string().regex(/^[a-z0-9][a-z0-9-]*$/, "lowercase-kebab key");
 
 export const statusDef = z.object({
-  key,
+  key: z.string().regex(/^[a-z][a-z0-9_-]*$/, "status key"),
   ar: z.string(),
   en: z.string(),
   category: z.enum(["TODO", "ACTIVE", "BLOCKED", "REVIEW", "DONE", "CANCELLED"]),
