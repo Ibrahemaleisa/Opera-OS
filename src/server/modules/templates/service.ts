@@ -1,4 +1,5 @@
 import type { Prisma, Project } from "@/generated/prisma/client";
+import { createDefaultReadiness } from "@/server/modules/events/service";
 import { createId } from "@/lib/id";
 import type { ServiceContext } from "@/server/authz/context";
 import { assertCan, projectScope } from "@/server/authz/policy";
@@ -286,6 +287,7 @@ export async function applyTemplateVersion(tx: Tx, ctx: ServiceContext, project:
       const e = await tx.event.create({
         data: { organizationId: ctx.orgId, projectId: project.id, workstreamId: wsId, name: project.name, type: project.type, startsAt: anchors.event, endsAt: project.eventEndAt ?? new Date(anchors.event.getTime() + 8 * 3600_000) },
       });
+      await createDefaultReadiness(tx, ctx.orgId, e, ctx.locale);
       (created.events ??= []).push(e.id);
     } else if (r.type === "BOOTH" || r.type === "PAVILION") {
       const b = await tx.booth.create({ data: { organizationId: ctx.orgId, projectId: project.id, workstreamId: wsId, name: `${name} — ${project.name}`, kind: r.type, handoverAt: new Date(anchors.event.getTime() - DAY) } });
