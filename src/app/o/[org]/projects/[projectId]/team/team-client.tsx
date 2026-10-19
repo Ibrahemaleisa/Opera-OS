@@ -25,11 +25,11 @@ export function TeamClient({ orgSlug, projectId, canManage, members, people, wor
       title={`${m.projects.members} (${members.length})`}
       actions={canManage && (
         <div className="flex items-center gap-2">
-          <NativeSelect className="h-8 w-56" value={newUser} onChange={(e) => setNewUser(e.target.value)}>
+          <NativeSelect className="h-8 w-56" data-testid="team-add-select" value={newUser} onChange={(e) => setNewUser(e.target.value)}>
             <option value="">{m.projects.addMember}…</option>
             {people.filter((p) => !members.some((x) => x.userId === p.id)).map((p) => <option key={p.id} value={p.id}>{p.name} · {p.roleName}</option>)}
           </NativeSelect>
-          <Button size="sm" disabled={!newUser || upsert.pending} onClick={() => { const p = people.find((x) => x.id === newUser)!; upsert.run({ projectId, userId: newUser, role: defaultRole(p.baseRole) as never, canViewFinance: false, canViewVip: false, canExport: false, canApprove: false, workstreamIds: [] }).then(() => setNewUser("")); }}><UserPlus /></Button>
+          <Button size="sm" data-testid="team-add" aria-label={m.projects.addMember} disabled={!newUser || upsert.pending} onClick={() => { const p = people.find((x) => x.id === newUser)!; upsert.run({ projectId, userId: newUser, role: defaultRole(p.baseRole) as never, canViewFinance: false, canViewVip: false, canExport: false, canApprove: false, workstreamIds: [] }).then(() => setNewUser("")); }}><UserPlus /></Button>
         </div>
       )}
     >

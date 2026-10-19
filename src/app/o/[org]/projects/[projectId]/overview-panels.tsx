@@ -14,7 +14,8 @@ import { useAction } from "@/hooks/use-action";
 import { formObject } from "@/lib/form";
 import { formatDate, parseRiyadhDate, toDateInput } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/client";
-import { saveDeliverableAction, saveMilestoneAction, saveRiskAction, setProjectStatusAction } from "../actions";
+import { FormDialog, enumOptions, type FieldDef } from "@/components/app/form-dialog";
+import { saveDeliverableAction, saveMilestoneAction, saveRiskAction, setProjectStatusAction, updateProjectAction } from "../actions";
 
 const MS_STATUS = { PENDING: "PENDING", IN_PROGRESS: "IN_PROGRESS", BLOCKED: "BLOCKED", DONE: "DONE" } as const;
 
@@ -167,5 +168,35 @@ export function RisksPanel({ orgSlug, projectId, risks, canEdit, members }: { or
         </DialogContent>
       </Dialog>
     </Section>
+  );
+}
+
+interface EditableProject { id: string; name: string; nameEn: string | null; description: string | null; clientId: string | null; type: string; priority: string; contractRef: string | null; poReference: string | null; budgetAmount: string | number | null; currency: string; startDate: string | Date | null; deadline: string | Date | null; eventStartAt: string | Date | null; eventEndAt: string | Date | null; clientPortal: boolean; venueIds: string[] }
+
+/** Edits project details; venues and manager are kept as they are. */
+export function EditProjectButton({ orgSlug, project, clients, canFinance }: { orgSlug: string; project: EditableProject; clients: { id: string; name: string }[]; canFinance: boolean }) {
+  const { m } = useI18n();
+  const [open, setOpen] = useState(false);
+  const save = useAction(updateProjectAction, { orgSlug, onSuccess: () => setOpen(false) });
+  const fields: FieldDef[] = [
+    { name: "name", label: m.common.nameAr, required: true, wide: true },
+    { name: "nameEn", label: m.common.nameEn, ltr: true, wide: true },
+    { name: "clientId", label: m.projects.client, type: "select", empty: "—", options: clients.map((c) => ({ value: c.id, label: c.name })) },
+    { name: "priority", label: m.common.priority, type: "select", options: enumOptions(m.enums.priority) },
+    { name: "contractRef", label: m.projects.contractRef, ltr: true },
+    { name: "poReference", label: m.projects.poReference, ltr: true },
+    ...(canFinance ? [{ name: "budgetAmount", label: m.projects.budget, type: "number" as const, min: 0 }] : []),
+    { name: "startDate", label: m.common.startDate, type: "datetime" },
+    { name: "deadline", label: m.projects.deadline, type: "datetime" },
+    { name: "eventStartAt", label: m.projects.eventStart, type: "datetime" },
+    { name: "eventEndAt", label: m.projects.eventEnd, type: "datetime" },
+    { name: "clientPortal", label: m.projects.clientPortal, type: "checkbox", wide: true },
+    { name: "description", label: m.common.description, type: "textarea" },
+  ];
+  return (
+    <>
+      <Button variant="ghost" size="sm" onClick={() => setOpen(true)} data-testid="edit-project">{m.common.edit}</Button>
+      <FormDialog open={open} onOpenChange={setOpen} title={project.name} fields={fields} values={{ ...project, startDate: project.startDate && new Date(project.startDate), deadline: project.deadline && new Date(project.deadline), eventStartAt: project.eventStartAt && new Date(project.eventStartAt), eventEndAt: project.eventEndAt && new Date(project.eventEndAt) }} extra={{ id: project.id, type: project.type, currency: project.currency, venueIds: project.venueIds }} onSubmit={(v) => save.run(v as never)} pending={save.pending} errorFor={save.errorFor} testId="form-project" />
+    </>
   );
 }

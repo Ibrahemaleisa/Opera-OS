@@ -72,6 +72,7 @@ export const org = defineMessages(
     providers: "مزودو الإرسال",
     providersDesc: "قنوات الإرسال الرسمية. تعمل في وضع المحاكاة حتى يتم إعداد بيانات الاعتماد.",
     accountTitle: "حسابي",
+    automation: { title: "قواعد الأتمتة", desc: "تُنفَّذ القواعد عند وقوع الأحداث، مرة واحدة لكل حدث (تنفيذ متكرر آمن).", trigger: "المحفّز", enabled: "مفعّلة", system: "قاعدة أساسية", runs: "التنفيذ (٣٠ يوماً)", succeeded: "نجح", failed: "فشل", skipped: "تم تجاوزه", recent: "آخر عمليات التنفيذ", backlog: "أحداث بانتظار المعالجة" },
     tabs: { general: "عام", members: "المستخدمون", clients: "العملاء", venues: "المواقع", fields: "الحقول المخصصة", automation: "الأتمتة", audit: "التدقيق", providers: "المزودون" },
   },
   {
@@ -145,6 +146,7 @@ export const org = defineMessages(
     providers: "Messaging providers",
     providersDesc: "Official sending channels. They run in simulation mode until credentials are configured.",
     accountTitle: "My account",
+    automation: { title: "Automation rules", desc: "Rules run when events happen, exactly once per event (idempotent).", trigger: "Trigger", enabled: "Enabled", system: "Built-in", runs: "Runs (30 days)", succeeded: "Succeeded", failed: "Failed", skipped: "Skipped", recent: "Recent executions", backlog: "Events waiting to be processed" },
     tabs: { general: "General", members: "Users", clients: "Clients", venues: "Venues", fields: "Custom fields", automation: "Automation", audit: "Audit", providers: "Providers" },
   },
 );

@@ -48,6 +48,7 @@ async function accept(browser: Browser, invitePath: string, name: string, mobile
 }
 
 test("Operra acceptance scenario", async ({ page, browser }) => {
+  test.setTimeout(420_000);
   // 1. Agency admin creates organization
   await register(page, slug, `owner-${stamp}@example.test`);
   await expect(page.getByRole("heading", { name: "لوحة القيادة" })).toBeVisible();
@@ -141,6 +142,45 @@ test("Operra acceptance scenario", async ({ page, browser }) => {
   const deliveredStat = pm.locator("a", { hasText: "تم التسليم" }).first();
   await expect(deliveredStat).toContainText("1");
 
+  // 13. Client sees only approved progress (portal: client-visible items, aggregates only, no VIP data)
+  await page.goto(`/o/${slug}/settings/clients`);
+  await page.getByRole("button", { name: "عميل جديد" }).first().click();
+  await page.getByRole("dialog").locator("input[name=name]").fill("الجهة الراعية التجريبية");
+  await page.getByRole("dialog").getByRole("button", { name: "حفظ" }).click();
+  await expect(page.getByRole("dialog")).toBeHidden();
+  await page.goto(`/o/${slug}/settings/members`);
+  await page.getByRole("button", { name: "دعوة مستخدم" }).first().click();
+  const inv = page.getByRole("dialog");
+  await inv.locator("input[name=email]").fill(`client-${stamp}@example.test`);
+  await inv.locator("select[name=roleId]").selectOption({ label: "معتمد لدى العميل" });
+  await inv.locator("select[name=clientId]").selectOption({ label: "الجهة الراعية التجريبية" });
+  await inv.getByRole("button", { name: "دعوة مستخدم" }).click();
+  const clientInvite = new URL(await inv.getByTestId("invite-link").inputValue()).pathname;
+  await page.keyboard.press("Escape");
+  const client = await accept(browser, clientInvite, "ممثل العميل");
+  await expect(client).toHaveURL(new RegExp(`/portal/${slug}$`));
+  await expect(client.getByTestId("portal-project")).toHaveCount(0); // not a project member yet
+  // a client contact may only join projects of their own client company
+  await pm.goto(projectPath);
+  await pm.getByTestId("edit-project").click();
+  await pm.getByTestId("form-project").locator("select[name=clientId]").selectOption({ label: "الجهة الراعية التجريبية" });
+  await pm.getByTestId("form-project").getByRole("button", { name: "حفظ" }).click();
+  await expect(pm.getByTestId("form-project")).toBeHidden();
+  await pm.goto(`${projectPath}/team`);
+  const addSelect = pm.getByTestId("team-add-select");
+  const clientOption = await addSelect.locator("option", { hasText: "ممثل العميل" }).getAttribute("value");
+  await addSelect.selectOption(clientOption!);
+  await pm.getByTestId("team-add").click();
+  await expect(pm.locator("table").getByText("ممثل العميل").first()).toBeVisible();
+  await client.reload();
+  await client.getByTestId("portal-project").first().click();
+  await expect(client.getByText("التقدم المعتمد").first()).toBeVisible();
+  await expect(client.getByText("توصيل الدعوات")).toBeVisible();
+  await expect(client.locator("body")).not.toContainText("+9665"); // no recipient contact data
+  const internal = await client.goto(projectUrl.replace(/^https?:\/\/[^/]+/, ""));
+  expect(client.url()).not.toContain("/o/"); // clients are kept out of the internal workspace
+  void internal;
+
   // 14. Unauthorized access: another agent cannot open the project; another tenant cannot open the org
   const agent2 = await accept(browser, agent2Invite, "مندوب ثاني", true);
   const resp = await agent2.goto(projectUrl);
@@ -155,6 +195,7 @@ test("Operra acceptance scenario", async ({ page, browser }) => {
   expect(r3?.status()).toBe(404);
 
   // 15. Manager exports a delivery report
+  await pm.goto(`${projectPath}/delivery`);
   const [download] = await Promise.all([pm.waitForEvent("download"), pm.getByRole("link", { name: /تقرير التوصيل/ }).click()]);
   expect(download.suggestedFilename()).toMatch(/^deliveries-.*\.xlsx$/);
 

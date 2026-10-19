@@ -8,13 +8,15 @@ import { interpolate } from "@/lib/i18n";
 import { getI18n } from "@/lib/i18n/server";
 import { getProjectOverview } from "@/server/modules/projects/service";
 import { requirePageContext } from "@/server/request";
-import { DeliverablesPanel, MilestonesPanel, ProjectStatusMenu, RisksPanel } from "./overview-panels";
+import { listClients } from "@/server/modules/org/service";
+import { DeliverablesPanel, EditProjectButton, MilestonesPanel, ProjectStatusMenu, RisksPanel } from "./overview-panels";
 
 export default async function ProjectOverviewPage({ params }: { params: Promise<{ org: string; projectId: string }> }) {
   const { org, projectId } = await params;
   const ctx = await requirePageContext(org);
   const { m, fmt, locale } = await getI18n();
   const o = await getProjectOverview(ctx, projectId);
+  const clients = o.scope.manage ? (await listClients(ctx)).map((c) => ({ id: c.id, name: c.name })) : [];
   const b = `/o/${org}/projects/${projectId}`;
   const p = o.project;
   const progress = o.tasks.total ? o.tasks.done / o.tasks.total : 0;
@@ -54,7 +56,7 @@ export default async function ProjectOverviewPage({ params }: { params: Promise<
         </div>
 
         <div className="grid content-start gap-5">
-          <Section title={m.common.details} actions={o.scope.manage && <ProjectStatusMenu orgSlug={org} projectId={projectId} status={p.status} />}>
+          <Section title={m.common.details} actions={o.scope.manage && <div className="flex items-center"><EditProjectButton orgSlug={org} canFinance={o.scope.finance} clients={clients} project={{ id: p.id, name: p.name, nameEn: p.nameEn, description: p.description, clientId: p.clientId, type: p.type, priority: p.priority, contractRef: p.contractRef, poReference: p.poReference, budgetAmount: p.budgetAmount?.toString() ?? null, currency: p.currency, startDate: p.startDate, deadline: p.deadline, eventStartAt: p.eventStartAt, eventEndAt: p.eventEndAt, clientPortal: p.clientPortal, venueIds: p.venues.map((v) => v.venueId) }} /><ProjectStatusMenu orgSlug={org} projectId={projectId} status={p.status} /></div>}>
             <dl className="px-4 py-2">
               <KV label={m.projects.code}><span className="ltr-nums font-mono text-xs">{p.code}</span></KV>
               <KV label={m.projects.client}>{p.client?.name ?? "—"}</KV>
