@@ -74,10 +74,19 @@ export async function authorizeAttachment(ctx: ServiceContext, attachmentId: str
         const d = await tx.delivery.findUnique({ where: { id: att.entityId }, select: { agentId: true } });
         if (d?.agentId !== ctx.userId) throw new NotFoundError();
       }
-      if (att.entityType === "EXPENSE" && !scope.finance) throw new ForbiddenError();
+      if (att.entityType === "EXPENSE" && !scope.finance && att.uploadedById !== ctx.userId) throw new ForbiddenError();
       if (att.entityType === "IMPORT" && !can(ctx, "recipient.import")) throw new ForbiddenError();
     } else if (att.entityType === "VENDOR" && !can(ctx, "vendor.view")) {
       throw new ForbiddenError();
+    } else if (att.entityType === "WORK_ORDER") {
+      const w = await tx.workOrder.findUnique({ where: { id: att.entityId }, select: { vendorId: true, projectId: true } });
+      if (!w) throw new NotFoundError();
+      if (ctx.role === "VENDOR") {
+        if (ctx.vendorId !== w.vendorId) throw new NotFoundError();
+      } else {
+        await projectScope(tx, ctx, w.projectId);
+        if (!can(ctx, "vendor.view")) throw new ForbiddenError();
+      }
     }
     return att;
   });

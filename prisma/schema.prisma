@@ -675,6 +675,7 @@ model Project {
   contractRef       String?
   poReference       String?
   budgetAmount      Decimal?       @db.Decimal(14, 2)
+  contractValue     Decimal?       @db.Decimal(14, 2) // agreed client contract value (revenue), excl. VAT
   currency          String         @default("SAR")
   startDate         DateTime?
   deadline          DateTime?

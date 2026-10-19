@@ -58,7 +58,8 @@ export async function uploadForEntity(ctx: ServiceContext, input: Input) {
         const e = await tx.expense.findUnique({ where: { id: input.entityId } });
         if (!e) throw new NotFoundError();
         const s = await projectScope(tx, ctx, e.projectId);
-        if (!s.finance) throw new ForbiddenError();
+        if (!s.finance && e.submittedById !== ctx.userId) throw new ForbiddenError();
+        if (e.status !== "SUBMITTED" && e.status !== "REJECTED") throw new ValidationError("errors.invalidTransition"); // evidence is frozen once approved
         projectId = e.projectId;
         input.clientVisible = false;
         break;
@@ -66,6 +67,19 @@ export async function uploadForEntity(ctx: ServiceContext, input: Input) {
       case "VENDOR": {
         if (!can(ctx, "vendor.manage")) throw new ForbiddenError();
         if (!(await tx.vendor.findUnique({ where: { id: input.entityId } }))) throw new NotFoundError();
+        input.clientVisible = false;
+        break;
+      }
+      case "WORK_ORDER": {
+        const w = await tx.workOrder.findUnique({ where: { id: input.entityId } });
+        if (!w) throw new NotFoundError();
+        if (ctx.role === "VENDOR") {
+          if (!can(ctx, "vendor.portal") || ctx.vendorId !== w.vendorId) throw new NotFoundError();
+        } else {
+          const s = await projectScope(tx, ctx, w.projectId);
+          if (!can(ctx, "vendor.manage") || !s.operate) throw new ForbiddenError();
+        }
+        // stored without a project so vendor users (not project members) can reach their own files
         input.clientVisible = false;
         break;
       }
