@@ -1,5 +1,11 @@
 import { defineConfig, devices } from "@playwright/test";
 
+try {
+  process.loadEnvFile(".env");
+} catch {
+  // .env is optional (CI provides env vars)
+}
+
 const executablePath = process.env.PW_CHROMIUM ?? (process.env.CI ? undefined : "/opt/pw-browsers/chromium");
 
 export default defineConfig({

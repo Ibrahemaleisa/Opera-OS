@@ -1449,7 +1449,7 @@ model WebhookReceipt {
   processedAt     DateTime?
   createdAt       DateTime @default(now())
 
-  @@unique([provider, externalId])
+  @@unique([organizationId, provider, externalId])
 }
 
 // ───────────────────────────── Events & Conference ─────────────────────────────

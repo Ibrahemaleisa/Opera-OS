@@ -84,7 +84,11 @@ export async function decideApproval(ctx: ServiceContext, input: z.output<typeof
     } else {
       if (scope.clientView) throw new NotFoundError();
       const designated = a.approverUserId === ctx.userId;
-      if (!designated && !scope.approve) throw new ForbiddenError();
+      if (!designated && !scope.approve && !(a.entityType === "CAMPAIGN" && can(ctx, "campaign.approve"))) throw new ForbiddenError();
+      if (a.entityType === "CAMPAIGN") {
+        // bulk outbound messaging: dedicated permission + four-eyes principle
+        if (!can(ctx, "campaign.approve") || a.requestedById === ctx.userId) throw new ForbiddenError();
+      }
       if (FINANCIAL.has(a.entityType)) {
         if (!can(ctx, "finance.approve")) throw new ForbiddenError();
         if (a.requestedById === ctx.userId) throw new ForbiddenError(); // segregation of duties

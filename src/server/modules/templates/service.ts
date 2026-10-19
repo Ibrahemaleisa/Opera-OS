@@ -10,6 +10,9 @@ import { DEFAULT_STATUSES, definitionStats, validateDefinition, type TemplateDef
 
 const DAY = 86400_000;
 
+const DEFAULT_INVITE_AR = "{{honorific}} {{name}}\nيسرنا دعوتكم لحضور {{event_name}} بتاريخ {{event_date}}.\nللتأكيد: {{rsvp_link}}\nلإيقاف الدعوات: {{opt_out_link}}";
+const DEFAULT_INVITE_EN = "Dear {{honorific}} {{name}},\nYou are cordially invited to {{event_name}} on {{event_date}}.\nRSVP: {{rsvp_link}}\nUnsubscribe: {{opt_out_link}}";
+
 export async function listTemplates(ctx: ServiceContext) {
   return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
     const templates = await tx.template.findMany({ where: { archived: false }, orderBy: [{ isSystem: "desc" }, { category: "asc" }, { createdAt: "asc" }], include: { versions: { orderBy: { version: "desc" }, take: 1 } } });
@@ -276,7 +279,7 @@ export async function applyTemplateVersion(tx: Tx, ctx: ServiceContext, project:
     const name = ctx.locale === "en" ? r.name.en : r.name.ar;
     if (r.type === "PHYSICAL_CAMPAIGN" || r.type === "DIGITAL_CAMPAIGN") {
       const c = await tx.invitationCampaign.create({
-        data: { organizationId: ctx.orgId, projectId: project.id, workstreamId: wsId, type: r.type === "PHYSICAL_CAMPAIGN" ? "PHYSICAL" : "DIGITAL", name, channel: r.type === "DIGITAL_CAMPAIGN" ? "EMAIL" : null, deliveryDeadline: anchors.event, createdById: ctx.userId },
+        data: { organizationId: ctx.orgId, projectId: project.id, workstreamId: wsId, type: r.type === "PHYSICAL_CAMPAIGN" ? "PHYSICAL" : "DIGITAL", name, ...(r.type === "DIGITAL_CAMPAIGN" ? { channel: "SMS" as const, rsvpEnabled: true, qrEnabled: true, bodyTemplate: ctx.locale === "en" ? DEFAULT_INVITE_EN : DEFAULT_INVITE_AR } : {}), deliveryDeadline: anchors.event, createdById: ctx.userId },
       });
       (created.campaigns ??= []).push(c.id);
     } else if (r.type === "EVENT") {
