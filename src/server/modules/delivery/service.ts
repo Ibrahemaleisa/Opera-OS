@@ -304,7 +304,7 @@ export async function updateDeliveryStatus(ctx: ServiceContext, input: StatusInp
 export async function updateDeliveryStatusTx(tx: Tx, ctx: ServiceContext, input: StatusInput) {
   // idempotent replay of offline mutations
   if (input.clientMutationId) {
-    const seen = await tx.deliveryEvent.findUnique({ where: { clientMutationId: input.clientMutationId } });
+    const seen = await tx.deliveryEvent.findUnique({ where: { organizationId_clientMutationId: { organizationId: ctx.orgId, clientMutationId: input.clientMutationId } } });
     if (seen) {
       const d = await tx.delivery.findUniqueOrThrow({ where: { id: seen.deliveryId } });
       return { delivery: d, replayed: true };

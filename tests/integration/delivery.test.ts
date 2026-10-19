@@ -133,7 +133,7 @@ describe("VIP physical delivery: dispatch, field and KPIs", () => {
     // DELIVERED requires evidence + receiver name
     await expect(updateDeliveryStatus(agent.ctx, { deliveryId: d.id, to: "DELIVERED", evidenceIds: [], receivedByName: "مدير المكتب", source: "FIELD" })).rejects.toThrow("delivery.evidenceRequired");
     const att = await withTenant({ orgId: a.orgId, userId: agent.userId }, (tx) => storeAttachment(tx, agent.ctx, { projectId: project.id, entityType: "DELIVERY", entityId: d.id, kind: "EVIDENCE", fileName: "proof.png", declaredType: "image/png", body: PNG }));
-    const done = await updateDeliveryStatus(agent.ctx, { deliveryId: d.id, to: "DELIVERED", evidenceIds: [att.id], receivedByName: "مدير المكتب", source: "FIELD", clientMutationId: "m-delivered-0001" });
+    const done = await updateDeliveryStatus(agent.ctx, { deliveryId: d.id, to: "DELIVERED", evidenceIds: [att.id], receivedByName: "مدير المكتب", source: "FIELD", clientMutationId: `${Date.now()}-m-delivered-0001` });
     expect(done.delivery.status).toBe("DELIVERED");
     expect(done.delivery.attemptsCount).toBe(1);
     // after delivery, contact data is no longer exposed to the agent
@@ -144,14 +144,14 @@ describe("VIP physical delivery: dispatch, field and KPIs", () => {
     // offline queue: second delivery out + failed attempt; replaying the same batch is a no-op; stale version is a conflict
     const d2 = mine[1];
     const batch = [
-      { deliveryId: d2.id, to: "OUT_FOR_DELIVERY" as const, version: d2.version, clientMutationId: "m-out-0002", evidenceIds: [], source: "FIELD_OFFLINE" as const },
-      { deliveryId: d2.id, to: "FAILED_ATTEMPT" as const, reason: "NO_ANSWER" as const, clientMutationId: "m-fail-0003", evidenceIds: [], source: "FIELD_OFFLINE" as const },
+      { deliveryId: d2.id, to: "OUT_FOR_DELIVERY" as const, version: d2.version, clientMutationId: `${Date.now()}-m-out-0002`, evidenceIds: [], source: "FIELD_OFFLINE" as const },
+      { deliveryId: d2.id, to: "FAILED_ATTEMPT" as const, reason: "NO_ANSWER" as const, clientMutationId: `${Date.now()}-m-fail-0003`, evidenceIds: [], source: "FIELD_OFFLINE" as const },
     ];
     const r1 = await syncFieldMutations(agent.ctx, batch);
     expect(r1.every((x) => x.ok)).toBe(true);
     const r2 = await syncFieldMutations(agent.ctx, batch);
     expect(r2.every((x) => x.ok && x.replayed)).toBe(true);
-    const r3 = await syncFieldMutations(agent.ctx, [{ deliveryId: mine[2].id, to: "OUT_FOR_DELIVERY", version: 999, clientMutationId: "m-stale-0004", evidenceIds: [], source: "FIELD_OFFLINE" }]);
+    const r3 = await syncFieldMutations(agent.ctx, [{ deliveryId: mine[2].id, to: "OUT_FOR_DELIVERY", version: 999, clientMutationId: `${Date.now()}-m-stale-0004`, evidenceIds: [], source: "FIELD_OFFLINE" }]);
     expect(r3[0].ok).toBe(false);
     expect(r3[0].conflict?.status).toBe("ASSIGNED");
 

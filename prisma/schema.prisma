@@ -1292,10 +1292,11 @@ model DeliveryEvent {
   reason           String?
   note             String?
   source           String          @default("WEB") // WEB | FIELD | FIELD_OFFLINE | SYSTEM | IMPORT
-  clientMutationId String?         @unique
+  clientMutationId String?
   createdAt        DateTime        @default(now())
   delivery         Delivery        @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
 
+  @@unique([organizationId, clientMutationId])
   @@index([deliveryId, createdAt])
 }
 
@@ -1313,10 +1314,11 @@ model DeliveryAttempt {
   lng              Float?
   occurredAt       DateTime
   recordedAt       DateTime @default(now())
-  clientMutationId String?  @unique
+  clientMutationId String?
   delivery         Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
 
   @@unique([deliveryId, attemptNo])
+  @@unique([organizationId, clientMutationId])
 }
 
 model DeliveryAssignment {
