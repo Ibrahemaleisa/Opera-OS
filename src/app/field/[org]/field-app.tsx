@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Camera, CheckCircle2, ChevronLeft, ChevronRight, Clock, CloudOff, LogOut, MapPin, MessageCircle, Navigation, Phone, RefreshCw, RotateCcw, ShieldAlert, Truck, Undo2, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -29,11 +29,20 @@ function navHref(r: FieldDelivery["recipient"]) {
   return null;
 }
 
+function subscribeOnline(cb: () => void) {
+  window.addEventListener("online", cb);
+  window.addEventListener("offline", cb);
+  return () => {
+    window.removeEventListener("online", cb);
+    window.removeEventListener("offline", cb);
+  };
+}
+
 export function FieldApp({ orgSlug, orgName, agentName }: { orgSlug: string; orgName: string; agentName: string }) {
   const { m, fmt, tk, locale } = useI18n();
   const f = m.delivery.field;
   const [items, setItems] = useState<FieldDelivery[] | null>(null);
-  const [online, setOnline] = useState(true);
+  const online = useSyncExternalStore(subscribeOnline, () => navigator.onLine, () => true);
   const [pending, setPending] = useState<QueuedMutation[]>([]);
   const [syncing, setSyncing] = useState(false);
   const [openId, setOpenId] = useState<string | null>(null);
@@ -116,16 +125,15 @@ export function FieldApp({ orgSlug, orgName, agentName }: { orgSlug: string; org
   }, [orgSlug, refreshQueue, load, f, m, tk]);
 
   useEffect(() => {
-    setOnline(navigator.onLine);
     // replay anything queued before a reload / while offline, then load fresh state
+    // (state is set after the IndexedDB read resolves — this effect syncs with an external store)
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     refreshQueue().then(() => (navigator.onLine ? flush() : load()));
     if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => undefined);
-    const on = () => { setOnline(true); flush(); };
-    const off = () => setOnline(false);
+    const on = () => flush();
     window.addEventListener("online", on);
-    window.addEventListener("offline", off);
     const id = setInterval(() => { if (navigator.onLine) flush(); }, 30_000);
-    return () => { window.removeEventListener("online", on); window.removeEventListener("offline", off); clearInterval(id); };
+    return () => { window.removeEventListener("online", on); clearInterval(id); };
   }, [load, refreshQueue, flush]);
 
   /** Records a status change locally (optimistic) and queues it; flushes immediately when online. */

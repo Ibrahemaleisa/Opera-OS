@@ -16,7 +16,8 @@ export function CommandPalette({ orgSlug, open, onOpenChange, nav }: { orgSlug: 
   const { m } = useI18n();
   const router = useRouter();
   const [q, setQ] = useState("");
-  const [hits, setHits] = useState<SearchHit[]>([]);
+  const [results, setHits] = useState<SearchHit[]>([]);
+  const hits = q.trim().length < 2 ? [] : results;
   const [help, setHelp] = useState(false);
   const seq = useRef(0);
   const base = `/o/${orgSlug}`;
@@ -57,10 +58,7 @@ export function CommandPalette({ orgSlug, open, onOpenChange, nav }: { orgSlug: 
   useEffect(() => {
     if (!open) return;
     const term = q.trim();
-    if (term.length < 2) {
-      setHits([]);
-      return;
-    }
+    if (term.length < 2) return;
     const id = ++seq.current;
     const t = setTimeout(async () => {
       const r = await searchAction(orgSlug, { q: term });

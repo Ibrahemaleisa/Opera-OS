@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
-import { useEffect, useState, useTransition } from "react";
+import { useEffect, useState, useTransition, useSyncExternalStore } from "react";
 import { Bell, CalendarRange, Check, ChevronsUpDown, Globe, LogOut, Menu, Moon, Search, Sun, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
@@ -34,6 +34,8 @@ function OrgMark({ name, color, className }: { name: string; color: string; clas
     </span>
   );
 }
+
+const noopSubscribe = () => () => undefined;
 
 export function AppShell({ org, user, orgs, nav, unread, children }: ShellProps) {
   const { m, locale } = useI18n();
@@ -112,8 +114,7 @@ function PreferenceButtons() {
   const { resolvedTheme, setTheme } = useTheme();
   const router = useRouter();
   const [, start] = useTransition();
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
+  const mounted = useSyncExternalStore(noopSubscribe, () => true, () => false);
   return (
     <>
       <Button
@@ -157,7 +158,12 @@ function NotificationBell({ orgSlug, initialUnread }: { orgSlug: string; initial
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<NotificationItem[]>([]);
   const [unread, setUnread] = useState(initialUnread);
-  useEffect(() => setUnread(initialUnread), [initialUnread]);
+  const [seenInitial, setSeenInitial] = useState(initialUnread);
+  if (seenInitial !== initialUnread) {
+    // server sent a fresh count (navigation/refresh): adopt it
+    setSeenInitial(initialUnread);
+    setUnread(initialUnread);
+  }
 
   useEffect(() => {
     if (!open) return;

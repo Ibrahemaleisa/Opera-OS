@@ -228,9 +228,10 @@ function MonthCalendarProjects({ orgSlug, projects }: { orgSlug: string; project
 }
 
 export function GanttRows({ rows, locale }: { rows: { id: string; label: React.ReactNode; sub?: React.ReactNode; start: Date | null; end: Date | null; href?: string; tone?: "jade" | "danger" | "warning" | "muted"; progress?: number }[]; locale: "ar" | "en" }) {
+  const [now] = useState(() => Date.now());
   const dated = rows.filter((r) => r.start || r.end);
-  const min = Math.min(...dated.map((r) => (r.start ?? r.end)!.getTime()), Date.now());
-  const max = Math.max(...dated.map((r) => (r.end ?? r.start)!.getTime()), Date.now() + 7 * 86400_000);
+  const min = Math.min(...dated.map((r) => (r.start ?? r.end)!.getTime()), now);
+  const max = Math.max(...dated.map((r) => (r.end ?? r.start)!.getTime()), now + 7 * 86400_000);
   const span = Math.max(1, max - min);
   const pct = (t: number) => ((t - min) / span) * 100;
   const months: { label: string; left: number }[] = [];
@@ -257,7 +258,7 @@ export function GanttRows({ rows, locale }: { rows: { id: string; label: React.R
                 {r.sub && <div className="truncate text-[11px] text-muted-foreground">{r.sub}</div>}
               </div>
               <div className="relative h-full flex-1">
-                <div className="absolute inset-y-0 w-px bg-danger/50" style={{ insetInlineStart: `${pct(Date.now())}%` }} />
+                <div className="absolute inset-y-0 w-px bg-danger/50" style={{ insetInlineStart: `${pct(now)}%` }} />
                 {s !== undefined && e !== undefined && (
                   <div className={cn("absolute top-1/2 h-3.5 -translate-y-1/2 overflow-hidden rounded-sm opacity-80", tones[r.tone ?? "jade"])} style={{ insetInlineStart: `${pct(s)}%`, width: `${Math.max(0.6, pct(e) - pct(s))}%` }}>
                     {r.progress !== undefined && <div className="h-full bg-black/20" style={{ width: `${r.progress * 100}%` }} />}

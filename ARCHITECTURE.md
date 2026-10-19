@@ -3,14 +3,14 @@
 ## 1. Shape of the system
 
 Operra is a **modular monolith**: one Next.js (App Router) application that serves
-the agency workspace, the field (driver) PWA, the white‑labeled client portal and
+the agency workspace, the field (driver) PWA, the client and vendor portals and
 the public RSVP pages, plus **one background worker process** that consumes BullMQ
 queues. Both processes share the same TypeScript modules under `src/server`.
 
 ```
                 ┌──────────────────────────── Next.js app (src/app) ────────────────────────────┐
- Browser ──────▶│ /o/[org]/…  agency workspace   /o/[org]/field  driver PWA                      │
- (RTL / LTR)    │ /portal/[org]/… client portal  /rsvp/[token]   public RSVP   /api/* route hdlrs │
+ Browser ──────▶│ /o/[org]/…  agency workspace   /field/[org]   driver PWA   /vendor/[org] vendor │
+ (RTL / LTR)    │ /portal/[org]/… client portal  /rsvp/[token]  public RSVP  /api/* route hdlrs   │
                 └──────────────┬───────────────────────────────────────────────┬────────────────┘
                                │ server actions / route handlers                │ enqueue
                                ▼                                                ▼
@@ -33,29 +33,32 @@ queues. Both processes share the same TypeScript modules under `src/server`.
 Why a monolith: one team, one deployable, transactional consistency across
 modules (e.g. an import commit creates recipients + deliveries + audit rows in a
 single transaction). Module boundaries are enforced by folder structure and by
-each module exposing only its `service.ts` / `actions.ts` / `queries.ts`.
+each module exposing its `service.ts`; server actions live next to the routes
+that use them (`src/app/**/actions.ts`) and are thin `orgAction(schema, service)` wrappers.
 
 ## 2. Repository layout
 
 ```
 prisma/                 schema.prisma, migrations/, seed.ts
 prisma/sql/rls.sql      row‑level security policies + grants (idempotent)
-scripts/                apply-rls.ts, generate-samples.ts
+scripts/                apply-rls.ts, generate-samples.ts, reset-demo.ts (dev only)
 samples/                synthetic XLSX/CSV import files (generated)
 src/app/                routes (App Router)
   (auth)/               login, register, invitation acceptance
   o/[org]/              agency workspace (sidebar shell)
-  o/[org]/field/        driver mobile workspace (PWA, offline queue)
-  portal/[org]/         client portal (white‑labeled shell)
-  rsvp/[token]/         public RSVP landing page
-  api/                  files, exports, webhooks, field sync, health
+  field/[org]/          driver mobile workspace (PWA, offline queue)
+  portal/[org]/         client portal (slim branded shell)
+  vendor/[org]/         vendor portal (slim branded shell)
+  rsvp/[token]/         public RSVP landing page (noindex)
+  account/              profile, password, signed-in devices
+  api/                  uploads, files, imports, exports, reports, webhooks, field sync, health
 src/components/ui       design‑system primitives (shadcn/ui style on Radix)
 src/components/app      shell, data table, command palette, page scaffolding
 src/lib                 pure utilities: i18n, formatting (SAR/Hijri), phone, csv‑safe
 src/server/db           Prisma clients, tenant transaction boundary
 src/server/auth         sessions, password hashing, rate limiting
 src/server/authz        permission catalog, role defaults, scoped policy checks
-src/server/modules/*    domain modules (service + actions + queries)
+src/server/modules/*    domain modules (service.ts + schemas)
 src/server/jobs         queue definitions + job handlers
 src/worker              worker entrypoint
 tests/unit|integration  Vitest
@@ -68,8 +71,8 @@ tests/e2e               Playwright
 * `prisma/sql/rls.sql` enables **and forces** RLS on every such table and installs
   a policy `organizationId = current_setting('app.org_id', true)`. The script is
   generic (it discovers tables by column), idempotent, and re‑applied after every
-  migration (`pnpm db:migrate`). An integration test fails if any table with an
-  `organizationId` column lacks RLS.
+  migration (`pnpm db:migrate`). `tests/integration/tenancy.test.ts` fails if any
+  table with an `organizationId` column lacks RLS.
 * The runtime connects as `operra_app` (`NOSUPERUSER NOBYPASSRLS`). Migrations and
   seeds run as the owner `operra`. A forgotten `where organizationId` filter in
   application code therefore returns nothing rather than another tenant's data.
@@ -77,11 +80,14 @@ tests/e2e               Playwright
   interactive transaction and issues `set_config('app.org_id', …, true)` (and
   `app.user_id`) — `SET LOCAL` semantics, so pooled connections never leak context.
 * Pre‑tenant lookups use global tables only: `User`, `Session`, `PublicToken`
-  (hashed tokens for invitations / RSVP / webhooks that map to an org), `Permission`.
-* `Membership` and `Organization` additionally allow rows belonging to the current
-  `app.user_id` so the org switcher works before an org is selected.
-* Platform super‑admin operations use a separate owner connection that is only
-  importable from `src/server/modules/platform`.
+  (hashed tokens for invitations / RSVP that map to an org), `MessageRef`
+  (provider message id → org, for webhook receipts) and the `Permission` catalog.
+* `Membership`, `Role` and `Organization` additionally allow rows belonging to the
+  current `app.user_id` (`withUser`) so login and the org switcher work before an
+  org is selected.
+* An owner‑role client (`src/server/db/admin.ts`) exists for migrations, tests and
+  maintenance scripts only; no request path imports it. There is no platform
+  super‑admin UI.
 
 ## 4. Identity & authorization
 
@@ -126,7 +132,12 @@ tests/e2e               Playwright
 | finance | budgets per category, POs, expenses with evidence, change orders, thresholds, planned vs committed vs actual |
 | automation | outbox events → rule matching → idempotent executions (notify, create task, escalate, reopen) |
 | notifications | in‑app notification center, preferences, email adapter |
-| analytics | KPI queries computed from live records, exports |
+| approvals | generic approval requests/decisions, four‑eyes rules for campaigns and finance, entity side effects |
+| portal | client portal read model (client‑visible, aggregate only), change requests |
+| reports | permission‑gated, audited CSV exports computed from live records |
+| resources | capacity/load board from shifts, tasks and deliveries; resource profiles |
+| search | command‑palette search across projects, tasks, recipients (scoped) |
+| analytics | KPI queries computed from live records |
 | audit | append‑only audit events for all critical mutations |
 | files | storage adapter (S3 / local), checksums, versions, signed URLs, permission‑checked download |
 
@@ -158,8 +169,9 @@ tests/e2e               Playwright
 ## 8. Frontend
 
 * React Server Components for data reads; server actions for mutations; TanStack
-  Table for dense grids; TanStack Query only where client polling is required
-  (dispatch refresh, import progress, field sync).
+  Table for dense grids; live boards (dispatch, command center, arrivals) re‑render
+  server data on an interval with `router.refresh()`; the field PWA keeps an
+  IndexedDB offline queue replayed through `/api/o/[org]/field/sync`.
 * i18n: typed dictionaries (`src/lib/i18n`), Arabic default, locale from user
   preference/cookie, `dir` set on `<html>`; logical CSS properties (`ms-`, `pe-`)
   throughout so layouts mirror correctly.
@@ -170,6 +182,9 @@ tests/e2e               Playwright
 
 ## 9. Deployment topology
 
-* `docker-compose.yml`: postgres, redis, minio, app, worker.
-* Stateless app containers; sessions in Postgres; files in object storage.
-* Health check: `/api/health` (DB + Redis).
+* `docker-compose.yml`: postgres (with a least‑privilege runtime role created on
+  init), redis, a one‑shot `migrate` job (migrations + RLS), app (Next.js
+  standalone), worker. S3/MinIO is configured by environment variables, not bundled.
+* Stateless app containers; sessions in Postgres; files in object storage (or a
+  shared volume with the local driver).
+* Health check: `/api/health` (database required, Redis reported).

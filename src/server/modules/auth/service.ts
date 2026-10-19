@@ -92,7 +92,7 @@ export async function acceptInvitation(input: z.input<typeof acceptInviteSchema>
   const resolved = await resolveInvitation(data.token);
   if (!resolved) throw new NotFoundError("errors.tokenInvalid");
   const { invitation: inv, orgId, role, org } = resolved;
-  let user = await db.user.findUnique({ where: { email: inv.email } });
+  const user = await db.user.findUnique({ where: { email: inv.email } });
   if (user) {
     if (!user.passwordHash || !(await verifyPassword(user.passwordHash, data.password))) throw new AppError("auth.invalidCredentials", "INVALID_CREDENTIALS", 401);
   } else {

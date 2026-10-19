@@ -42,8 +42,9 @@ export function TemplateBuilder({ orgSlug, templateId, versions, usage }: { orgS
   const setTask = (i: number, patch: Partial<TaskDef>) => mutate((d) => { d.workstreams[wsIndex].tasks[i] = { ...d.workstreams[wsIndex].tasks[i], ...patch }; });
 
   // preview with a sample event date 30 days from today
+  const [now] = useState(() => Date.now());
   const preview = useMemo(() => {
-    const start = Date.now();
+    const start = now;
     const anchors = { start, event: start + 30 * 86400_000, deadline: start + 32 * 86400_000 };
     return def.workstreams.flatMap((w) =>
       w.tasks.map((tk) => {
@@ -146,7 +147,7 @@ export function TemplateBuilder({ orgSlug, templateId, versions, usage }: { orgS
         </div>
       )}
 
-      <Section title={m.templates.preview} description={formatDate(new Date(Date.now() + 30 * 86400_000), fmt)}>
+      <Section title={m.templates.preview} description={formatDate(new Date(now + 30 * 86400_000), fmt)}>
         <GanttRows locale={locale} rows={preview} />
       </Section>
 
