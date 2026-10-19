@@ -5,7 +5,7 @@ import { storage, verifyLocalSignature } from "@/server/modules/files/storage";
 import { getSession } from "@/server/request";
 
 /**
- * Serves a file for the local storage driver. Requires BOTH a valid HMAC signature
+ * Serves a file for the local and Vercel Blob (private) storage drivers. Requires BOTH a valid HMAC signature
  * (issued only after an authorization check) AND an authenticated session.
  */
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {

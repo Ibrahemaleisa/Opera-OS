@@ -8,6 +8,9 @@ import type { Metadata, Viewport } from "next";
 import { getI18n } from "@/lib/i18n/server";
 import { Providers } from "./providers";
 
+// imports, campaign launches and automations run in-request on serverless (JOBS_MODE=inline)
+export const maxDuration = 300;
+
 export const metadata: Metadata = {
   title: { default: "Operra Events OS", template: "%s · Operra" },
   description: "Operations platform for event, protocol and VIP invitation agencies",

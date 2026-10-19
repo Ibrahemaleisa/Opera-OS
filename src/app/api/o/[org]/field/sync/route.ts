@@ -7,6 +7,9 @@ import { jsonError } from "@/server/route";
 import { kickOutbox } from "@/server/jobs/dispatch";
 import { ValidationError } from "@/server/errors";
 
+// imports, campaign launches and automations run in-request on serverless (JOBS_MODE=inline)
+export const maxDuration = 300;
+
 const body = z.object({ mutations: z.array(statusSchema).max(100) });
 
 /** Offline queue replay endpoint for the field PWA. Each mutation is idempotent (clientMutationId). */

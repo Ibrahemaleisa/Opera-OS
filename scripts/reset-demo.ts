@@ -6,11 +6,12 @@
  */
 import "dotenv/config";
 import pg from "pg";
+import { migrationDatabaseUrl } from "../src/server/db/urls";
 
 async function main() {
   if (process.env.NODE_ENV === "production") throw new Error("refusing to run in production");
   const slug = process.argv[2] ?? "demo";
-  const url = process.env.MIGRATION_DATABASE_URL;
+  const url = migrationDatabaseUrl();
   if (!url) throw new Error("MIGRATION_DATABASE_URL is required (owner role)");
   const c = new pg.Client({ connectionString: url });
   await c.connect();

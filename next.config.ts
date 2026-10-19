@@ -11,7 +11,8 @@ const securityHeaders = [
 
 const nextConfig: NextConfig = {
   poweredByHeader: false,
-  output: "standalone",
+  // standalone bundle for the Docker image; Vercel uses its own output
+  output: process.env.VERCEL ? undefined : "standalone",
   serverExternalPackages: ["@node-rs/argon2", "exceljs", "bullmq", "ioredis", "pg"],
   experimental: {
     serverActions: { bodySizeLimit: "30mb" },

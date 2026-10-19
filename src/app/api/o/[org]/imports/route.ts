@@ -7,6 +7,9 @@ import { ValidationError } from "@/server/errors";
 import { requireActionContext } from "@/server/request";
 import { jsonError } from "@/server/route";
 
+// imports, campaign launches and automations run in-request on serverless (JOBS_MODE=inline)
+export const maxDuration = 300;
+
 export async function POST(req: NextRequest, { params }: { params: Promise<{ org: string }> }) {
   try {
     assertSameOrigin(req);

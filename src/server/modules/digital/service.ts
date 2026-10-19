@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { appBaseUrl } from "@/server/app-url";
 import type { Channel, DigitalInvitation, Recipient } from "@/generated/prisma/client";
 import { formatDateTime } from "@/lib/format";
 import { shortCode } from "@/lib/id";
@@ -32,7 +33,7 @@ export const digitalCampaignSchema = z.object({
 });
 
 function appUrl() {
-  return (process.env.APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
+  return appBaseUrl();
 }
 
 /** Renders {{variables}}; unknown variables are left visible so reviewers notice them. */

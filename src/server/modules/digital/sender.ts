@@ -1,3 +1,4 @@
+import { appBaseUrl } from "@/server/app-url";
 import { systemContext } from "@/server/authz/context";
 import { db } from "@/server/db/client";
 import { withTenant } from "@/server/db/tenant";
@@ -6,7 +7,7 @@ import { enqueue } from "@/server/jobs/dispatch";
 import { ProviderError, resolveProvider } from "./providers";
 import { issueRsvpToken, personalization, renderTemplate } from "./service";
 
-const APP = () => (process.env.APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
+const APP = appBaseUrl;
 
 /**
  * Creates one MessageJob per queued invitation (idempotency key campaign:invitation:initial)

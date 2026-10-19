@@ -35,10 +35,15 @@ class LocalDriver implements StorageDriver {
     await rm(this.path(key), { force: true });
   }
   async signedUrl(_key: string, opts: { expiresIn: number; attachmentId: string }) {
-    const exp = Math.floor(Date.now() / 1000) + opts.expiresIn;
-    const sig = hmacHex(appSecret(), `${opts.attachmentId}.${exp}`);
-    return `/api/files/${opts.attachmentId}?exp=${exp}&sig=${sig}`;
+    return appSignedUrl(opts.attachmentId, opts.expiresIn);
   }
+}
+
+/** HMAC-signed, expiring URL of the app's permission-checked download route. */
+function appSignedUrl(attachmentId: string, expiresIn: number) {
+  const exp = Math.floor(Date.now() / 1000) + expiresIn;
+  const sig = hmacHex(appSecret(), `${attachmentId}.${exp}`);
+  return `/api/files/${attachmentId}?exp=${exp}&sig=${sig}`;
 }
 
 export function verifyLocalSignature(attachmentId: string, exp: string | null, sig: string | null) {
@@ -82,9 +87,35 @@ class S3Driver implements StorageDriver {
   }
 }
 
+/**
+ * Vercel Blob in a PRIVATE store. Blobs are never publicly addressable: downloads go through
+ * the same signed, session- and permission-checked `/api/files/[id]` route as the local driver.
+ */
+class VercelBlobDriver implements StorageDriver {
+  private sdk = import("@vercel/blob");
+  async put(key: string, body: Buffer, contentType: string) {
+    const { put } = await this.sdk;
+    await put(key, body, { access: "private", contentType, addRandomSuffix: false, allowOverwrite: true });
+  }
+  async get(key: string) {
+    const { get } = await this.sdk;
+    const r = await get(key, { access: "private", useCache: false });
+    if (!r || r.statusCode !== 200 || !r.stream) throw new Error("blob not found");
+    return Buffer.from(await new Response(r.stream).arrayBuffer());
+  }
+  async delete(key: string) {
+    const { del } = await this.sdk;
+    await del(key);
+  }
+  async signedUrl(_key: string, opts: { expiresIn: number; attachmentId: string }) {
+    return appSignedUrl(opts.attachmentId, opts.expiresIn);
+  }
+}
+
 let driver: StorageDriver | undefined;
 export function storage(): StorageDriver {
-  return (driver ??= process.env.STORAGE_DRIVER === "s3" ? new S3Driver() : new LocalDriver());
+  const kind = process.env.STORAGE_DRIVER;
+  return (driver ??= kind === "s3" ? new S3Driver() : kind === "vercel-blob" ? new VercelBlobDriver() : new LocalDriver());
 }
 
 export const ALLOWED_MIME = new Set([
