@@ -1,0 +1,1955 @@
+// Operra Events OS — data model
+// Conventions:
+//  * Every tenant-owned model has `organizationId` (enforced by Postgres RLS, see prisma/sql/rls.sql).
+//  * Global (pre-tenant) models: User, Session, PublicToken, Permission.
+//  * Money: Decimal(14,2). Timestamps: timestamptz (UTC); displayed in Asia/Riyadh.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ───────────────────────────── Enums ─────────────────────────────
+
+enum OrgRole {
+  OWNER
+  OPS_DIRECTOR
+  PROJECT_MANAGER
+  TEAM_LEAD
+  EMPLOYEE
+  FREELANCER
+  FIELD_AGENT
+  CLIENT
+  CLIENT_APPROVER
+  VENDOR
+}
+
+enum MemberStatus {
+  INVITED
+  ACTIVE
+  SUSPENDED
+  REVOKED
+}
+
+enum ProjectStatus {
+  DRAFT
+  PLANNING
+  ACTIVE
+  ON_HOLD
+  AT_RISK
+  COMPLETED
+  CLOSED
+  CANCELLED
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum ProjectRole {
+  MANAGER
+  LEAD
+  MEMBER
+  FREELANCER
+  FIELD_AGENT
+  CLIENT_VIEWER
+  CLIENT_APPROVER
+  VENDOR
+}
+
+enum WorkstreamKind {
+  GENERAL
+  VIP_DELIVERY
+  DIGITAL_INVITES
+  EVENT_OPS
+  CONFERENCE
+  PROTOCOL
+  BOOTH
+  PAVILION
+}
+
+enum StatusCategory {
+  TODO
+  ACTIVE
+  BLOCKED
+  REVIEW
+  DONE
+  CANCELLED
+}
+
+enum Visibility {
+  INTERNAL
+  CLIENT
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum ApproverType {
+  INTERNAL
+  CLIENT
+}
+
+enum ImportStatus {
+  UPLOADED
+  PARSED
+  VALIDATING
+  VALIDATED
+  COMMITTING
+  COMMITTED
+  PARTIALLY_COMMITTED
+  FAILED
+  ROLLED_BACK
+  CANCELLED
+}
+
+enum ImportRowStatus {
+  VALID
+  WARNING
+  INVALID
+  DUPLICATE
+  SKIPPED
+  COMMITTED
+  ROLLED_BACK
+}
+
+enum DuplicateResolution {
+  PENDING
+  SKIP
+  IMPORT_AS_NEW
+  LINK_EXISTING
+}
+
+enum DeliveryStatus {
+  PENDING
+  VALIDATING
+  READY
+  ASSIGNED
+  OUT_FOR_DELIVERY
+  DELIVERED
+  FAILED_ATTEMPT
+  RESCHEDULED
+  RETURNED
+  CANCELLED
+}
+
+enum CampaignType {
+  PHYSICAL
+  DIGITAL
+}
+
+enum CampaignStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  SCHEDULED
+  SENDING
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+enum Channel {
+  EMAIL
+  SMS
+  WHATSAPP
+}
+
+enum MessageStatus {
+  QUEUED
+  SENDING
+  SENT
+  DELIVERED
+  READ
+  FAILED
+  SUPPRESSED
+  CANCELLED
+}
+
+enum RsvpResponse {
+  ATTENDING
+  DECLINED
+  MAYBE
+}
+
+enum EventPhase {
+  PLANNING
+  SETUP
+  REHEARSAL
+  LIVE
+  TEARDOWN
+  CLOSED
+}
+
+enum Severity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum IncidentStatus {
+  OPEN
+  ACKNOWLEDGED
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+enum GuestAttendance {
+  EXPECTED
+  CONFIRMED
+  ARRIVED
+  SEATED
+  DEPARTED
+  NO_SHOW
+  CANCELLED
+}
+
+enum BoothStage {
+  BRIEF
+  DESIGN
+  CLIENT_APPROVAL
+  PROCUREMENT
+  FABRICATION
+  LOGISTICS
+  INSTALLATION
+  INSPECTION
+  HANDOVER
+  LIVE
+  DISMANTLING
+  CLOSED
+}
+
+enum RevisionStatus {
+  DRAFT
+  SUBMITTED
+  APPROVED
+  REJECTED
+  SUPERSEDED
+}
+
+enum QuoteStatus {
+  REQUESTED
+  RECEIVED
+  SHORTLISTED
+  ACCEPTED
+  REJECTED
+  EXPIRED
+}
+
+enum POStatus {
+  DRAFT
+  PENDING_APPROVAL
+  APPROVED
+  ISSUED
+  PARTIALLY_RECEIVED
+  RECEIVED
+  CLOSED
+  CANCELLED
+}
+
+enum ExpenseStatus {
+  SUBMITTED
+  APPROVED
+  REJECTED
+  PAID
+}
+
+enum ExecutionStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+  SKIPPED
+}
+
+enum PublicTokenKind {
+  INVITATION
+  RSVP
+  PASSWORD_RESET
+}
+
+// ───────────────────────────── Global (pre-tenant) ─────────────────────────────
+
+model User {
+  id              String    @id @default(cuid())
+  email           String    @unique
+  name            String
+  nameAr          String?
+  phone           String?
+  passwordHash    String?
+  locale          String    @default("ar")
+  calendar        String    @default("gregory") // gregory | islamic-umalqura
+  theme           String    @default("system")
+  isPlatformAdmin Boolean   @default(false)
+  emailVerifiedAt DateTime?
+  lastLoginAt     DateTime?
+  failedLogins    Int       @default(0)
+  lockedUntil     DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  sessions           Session[]
+  memberships        Membership[]
+  projectMemberships ProjectMember[]
+  ownedTasks         Task[]              @relation("TaskOwner")
+  collaborations     TaskCollaborator[]
+  comments           Comment[]
+  notifications      Notification[]
+  agentDeliveries    Delivery[]          @relation("DeliveryAgent")
+}
+
+model Session {
+  id               String    @id // sha256(token) hex
+  userId           String
+  activeOrgId      String?
+  userAgent        String?
+  ip               String?
+  deviceLabel      String?
+  createdAt        DateTime  @default(now())
+  lastSeenAt       DateTime  @default(now())
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  user             User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+/// Hashed opaque tokens that resolve to a tenant before the tenant context exists
+/// (invitation acceptance, public RSVP links, password resets).
+model PublicToken {
+  id             String          @id // sha256(token) hex
+  kind           PublicTokenKind
+  organizationId String
+  refId          String
+  expiresAt      DateTime?
+  usedAt         DateTime?
+  createdAt      DateTime        @default(now())
+
+  @@index([organizationId, kind])
+}
+
+/// Global lookup so inbound provider webhooks can resolve the tenant of a message
+/// before entering the tenant boundary. id = "<provider>:<providerMessageId>".
+model MessageRef {
+  id             String   @id
+  organizationId String
+  messageJobId   String
+  createdAt      DateTime @default(now())
+}
+
+/// Catalog of permission keys (synchronized from code by the seed). Roles store keys.
+model Permission {
+  key         String @id
+  module      String
+  description String
+}
+
+// ───────────────────────────── Organization ─────────────────────────────
+
+model Organization {
+  id           String   @id @default(cuid())
+  slug         String   @unique
+  name         String
+  nameEn       String?
+  legalName    String?
+  crNumber     String?
+  vatNumber    String?
+  email        String?
+  phone        String?
+  city         String?
+  logoKey      String?
+  brandColor   String   @default("#0F5E57")
+  defaultLocale String  @default("ar")
+  calendar     String   @default("gregory")
+  timezone     String   @default("Asia/Riyadh")
+  currency     String   @default("SAR")
+  plan         String   @default("trial") // subscription-ready, billing not implemented
+  settings     Json     @default("{}")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  memberships Membership[]
+  roles       Role[]
+  invitations Invitation[]
+  projects    Project[]
+  clients     Client[]
+  vendors     Vendor[]
+  venues      Venue[]
+  templates   Template[]
+  teams       Team[]
+}
+
+model Role {
+  id             String       @id @default(cuid())
+  organizationId String
+  key            String
+  nameAr         String
+  nameEn         String
+  baseRole       OrgRole
+  isSystem       Boolean      @default(false)
+  permissions    String[]
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  memberships    Membership[]
+
+  @@unique([organizationId, key])
+}
+
+model Membership {
+  id             String       @id @default(cuid())
+  organizationId String
+  userId         String
+  roleId         String
+  status         MemberStatus @default(ACTIVE)
+  title          String?
+  departmentId   String?
+  clientId       String? // for CLIENT / CLIENT_APPROVER
+  vendorId       String? // for VENDOR
+  invitedById    String?
+  joinedAt       DateTime     @default(now())
+  revokedAt      DateTime?
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role           Role         @relation(fields: [roleId], references: [id])
+
+  @@unique([organizationId, userId])
+  @@index([userId])
+}
+
+model Invitation {
+  id             String       @id @default(cuid())
+  organizationId String
+  email          String
+  name           String?
+  roleId         String
+  clientId       String?
+  vendorId       String?
+  projectId      String? // optionally add to a project on acceptance
+  projectRole    ProjectRole?
+  invitedById    String
+  expiresAt      DateTime
+  acceptedAt     DateTime?
+  revokedAt      DateTime?
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, email])
+}
+
+model Department {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  nameEn         String?
+  createdAt      DateTime @default(now())
+
+  @@index([organizationId])
+}
+
+model Team {
+  id             String       @id @default(cuid())
+  organizationId String
+  name           String
+  nameEn         String?
+  departmentId   String?
+  leadId         String?
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  members        TeamMember[]
+}
+
+model TeamMember {
+  id             String @id @default(cuid())
+  organizationId String
+  teamId         String
+  userId         String
+  team           Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, userId])
+}
+
+/// Capacity / availability profile used by Resources, Dispatch and Workload views.
+model ResourceProfile {
+  id             String   @id @default(cuid())
+  organizationId String
+  userId         String
+  kind           String   @default("EMPLOYEE") // EMPLOYEE | FREELANCER | DRIVER
+  dailyCapacity  Int      @default(8) // hours for staff, deliveries for drivers
+  skills         String[]
+  territories    String[] // cities / districts
+  vehicle        String?
+  availability   Json     @default("{}")
+  hourlyRate     Decimal? @db.Decimal(14, 2)
+  active         Boolean  @default(true)
+  updatedAt      DateTime @updatedAt
+
+  @@unique([organizationId, userId])
+}
+
+model Client {
+  id             String       @id @default(cuid())
+  organizationId String
+  name           String
+  nameEn         String?
+  sector         String?
+  crNumber       String?
+  vatNumber      String?
+  city           String?
+  website        String?
+  notes          String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  contacts       Contact[]
+  projects       Project[]
+
+  @@index([organizationId])
+}
+
+model Contact {
+  id             String   @id @default(cuid())
+  organizationId String
+  clientId       String?
+  vendorId       String?
+  name           String
+  nameEn         String?
+  title          String?
+  email          String?
+  phone          String?
+  isPrimary      Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  client         Client?  @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  vendor         Vendor?  @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+}
+
+model Venue {
+  id             String         @id @default(cuid())
+  organizationId String
+  name           String
+  nameEn         String?
+  city           String
+  district       String?
+  address        String?
+  mapsUrl        String?
+  lat            Float?
+  lng            Float?
+  capacity       Int?
+  notes          String?
+  createdAt      DateTime       @default(now())
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  projects       ProjectVenue[]
+
+  @@index([organizationId])
+}
+
+model CustomFieldDefinition {
+  id             String   @id @default(cuid())
+  organizationId String
+  entityType     String // PROJECT | TASK | RECIPIENT | GUEST | VENDOR
+  projectId      String? // null = org-wide
+  key            String
+  labelAr        String
+  labelEn        String
+  fieldType      String // TEXT | NUMBER | DATE | SELECT | BOOLEAN
+  options        Json     @default("[]")
+  required       Boolean  @default(false)
+  sortOrder      Int      @default(0)
+  archived       Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  values         CustomFieldValue[]
+
+  @@unique([organizationId, entityType, projectId, key])
+}
+
+model CustomFieldValue {
+  id             String                @id @default(cuid())
+  organizationId String
+  definitionId   String
+  entityType     String
+  entityId       String
+  value          Json
+  updatedAt      DateTime              @updatedAt
+  definition     CustomFieldDefinition @relation(fields: [definitionId], references: [id], onDelete: Cascade)
+
+  @@unique([definitionId, entityId])
+  @@index([organizationId, entityType, entityId])
+}
+
+model AuditEvent {
+  id             String   @id @default(cuid())
+  organizationId String
+  actorId        String?
+  actorName      String?
+  action         String // e.g. project.create, delivery.status_change, vip.contact_reveal
+  entityType     String
+  entityId       String?
+  projectId      String?
+  summary        String?
+  before         Json?
+  after          Json?
+  meta           Json?
+  ip             String?
+  userAgent      String?
+  createdAt      DateTime @default(now())
+
+  @@index([organizationId, createdAt])
+  @@index([organizationId, entityType, entityId])
+  @@index([organizationId, projectId, createdAt])
+}
+
+model Notification {
+  id             String    @id @default(cuid())
+  organizationId String
+  userId         String
+  type           String
+  title          String
+  body           String?
+  link           String?
+  entityType     String?
+  entityId       String?
+  readAt         DateTime?
+  emailedAt      DateTime?
+  createdAt      DateTime  @default(now())
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, userId, readAt])
+}
+
+model NotificationPreference {
+  id             String  @id @default(cuid())
+  organizationId String
+  userId         String
+  type           String // notification type or "*"
+  inApp          Boolean @default(true)
+  email          Boolean @default(false)
+  digest         String  @default("none") // none | daily | weekly
+
+  @@unique([organizationId, userId, type])
+}
+
+model SavedView {
+  id             String   @id @default(cuid())
+  organizationId String
+  userId         String
+  scope          String // tasks | deliveries | recipients | projects
+  projectId      String?
+  name           String
+  filters        Json
+  shared         Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  @@index([organizationId, userId, scope])
+}
+
+// ───────────────────────────── Projects ─────────────────────────────
+
+model Project {
+  id                String         @id @default(cuid())
+  organizationId    String
+  code              String
+  name              String
+  nameEn            String?
+  description       String?
+  clientId          String?
+  type              String         @default("CONFERENCE") // CONFERENCE | EVENT | EXHIBITION | VIP_DELIVERY | PROTOCOL | BOOTH | PAVILION | CUSTOM
+  serviceScopes     String[]
+  status            ProjectStatus  @default(PLANNING)
+  priority          Priority       @default(MEDIUM)
+  contractRef       String?
+  poReference       String?
+  budgetAmount      Decimal?       @db.Decimal(14, 2)
+  currency          String         @default("SAR")
+  startDate         DateTime?
+  deadline          DateTime?
+  eventStartAt      DateTime?
+  eventEndAt        DateTime?
+  healthScore       Int?
+  clientPortal      Boolean        @default(true)
+  taskSeq           Int            @default(0)
+  createdById       String
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  archivedAt        DateTime?
+  organization      Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  client            Client?        @relation(fields: [clientId], references: [id])
+  members           ProjectMember[]
+  workstreams       Workstream[]
+  tasks             Task[]
+  milestones        Milestone[]
+  deliverables      Deliverable[]
+  risks             Risk[]
+  venues            ProjectVenue[]
+  templateInstances TemplateInstance[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId, status])
+}
+
+model ProjectMember {
+  id             String      @id @default(cuid())
+  organizationId String
+  projectId      String
+  userId         String
+  role           ProjectRole @default(MEMBER)
+  workstreamIds  String[] // empty = all workstreams
+  canViewFinance Boolean     @default(false)
+  canViewVip     Boolean     @default(false)
+  canExport      Boolean     @default(false)
+  canApprove     Boolean     @default(false)
+  addedById      String?
+  createdAt      DateTime    @default(now())
+  project        Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user           User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, userId])
+  @@index([organizationId, userId])
+}
+
+model ProjectVenue {
+  id             String  @id @default(cuid())
+  organizationId String
+  projectId      String
+  venueId        String
+  project        Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  venue          Venue   @relation(fields: [venueId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, venueId])
+}
+
+model Risk {
+  id             String   @id @default(cuid())
+  organizationId String
+  projectId      String
+  title          String
+  description    String?
+  likelihood     Int      @default(2) // 1..5
+  impact         Int      @default(2) // 1..5
+  status         String   @default("OPEN") // OPEN | MITIGATING | CLOSED
+  ownerId        String?
+  mitigation     String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  project        Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, projectId])
+}
+
+model Milestone {
+  id               String    @id @default(cuid())
+  organizationId   String
+  projectId        String
+  workstreamId     String?
+  templateKey      String?
+  title            String
+  dueDate          DateTime?
+  status           String    @default("PENDING") // PENDING | IN_PROGRESS | BLOCKED | DONE
+  clientVisible    Boolean   @default(true)
+  completedAt      DateTime?
+  sortOrder        Int       @default(0)
+  createdAt        DateTime  @default(now())
+  project          Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, projectId])
+}
+
+model Deliverable {
+  id             String    @id @default(cuid())
+  organizationId String
+  projectId      String
+  workstreamId   String?
+  templateKey    String?
+  title          String
+  description    String?
+  status         String    @default("PENDING") // PENDING | IN_PROGRESS | SUBMITTED | APPROVED | REJECTED
+  dueDate        DateTime?
+  clientVisible  Boolean   @default(true)
+  requiresApproval Boolean @default(false)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  project        Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, projectId])
+}
+
+model ChangeRequest {
+  id             String   @id @default(cuid())
+  organizationId String
+  projectId      String
+  title          String
+  description    String
+  status         String   @default("OPEN") // OPEN | UNDER_REVIEW | ACCEPTED | DECLINED
+  requestedById  String
+  response       String?
+  respondedById  String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([organizationId, projectId])
+}
+
+// ───────────────────────────── Templates ─────────────────────────────
+
+model Template {
+  id               String            @id @default(cuid())
+  organizationId   String
+  key              String
+  nameAr           String
+  nameEn           String
+  descriptionAr    String?
+  descriptionEn    String?
+  category         String
+  icon             String?
+  isSystem         Boolean           @default(false)
+  archived         Boolean           @default(false)
+  latestVersion    Int               @default(0)
+  createdById      String?
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  organization     Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  versions         TemplateVersion[]
+
+  @@unique([organizationId, key])
+}
+
+/// Immutable once published. `definition` is validated by src/server/modules/templates/definition.ts
+model TemplateVersion {
+  id             String             @id @default(cuid())
+  organizationId String
+  templateId     String
+  version        Int
+  definition     Json
+  changelog      String?
+  status         String             @default("PUBLISHED") // DRAFT | PUBLISHED
+  createdById    String?
+  createdAt      DateTime           @default(now())
+  template       Template           @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  instances      TemplateInstance[]
+
+  @@unique([templateId, version])
+}
+
+model TemplateInstance {
+  id                String          @id @default(cuid())
+  organizationId    String
+  projectId         String
+  templateVersionId String
+  templateKey       String
+  versionNumber     Int
+  keyPrefix         String // used to keep composed workstreams distinct
+  appliedById       String
+  appliedAt         DateTime        @default(now())
+  summary           Json            @default("{}")
+  project           Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  templateVersion   TemplateVersion @relation(fields: [templateVersionId], references: [id])
+  workstreams       Workstream[]
+
+  @@index([organizationId, projectId])
+}
+
+model Workstream {
+  id                 String            @id @default(cuid())
+  organizationId     String
+  projectId          String
+  templateInstanceId String?
+  key                String
+  name               String
+  nameEn             String?
+  kind               WorkstreamKind    @default(GENERAL)
+  color              String?
+  leadId             String?
+  statuses           Json // [{key,labelAr,labelEn,category}]
+  config             Json              @default("{}")
+  sortOrder          Int               @default(0)
+  createdAt          DateTime          @default(now())
+  project            Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  templateInstance   TemplateInstance? @relation(fields: [templateInstanceId], references: [id])
+  tasks              Task[]
+
+  @@unique([projectId, key])
+  @@index([organizationId, projectId])
+}
+
+// ───────────────────────────── Tasks ─────────────────────────────
+
+model Task {
+  id               String             @id @default(cuid())
+  organizationId   String
+  projectId        String
+  workstreamId     String?
+  parentId         String?
+  number           Int
+  templateKey      String?
+  title            String
+  description      String?
+  status           String             @default("todo")
+  statusCategory   StatusCategory     @default(TODO)
+  priority         Priority           @default(MEDIUM)
+  ownerId          String?
+  startAt          DateTime?
+  dueAt            DateTime?
+  slaHours         Int?
+  estimateMinutes  Int?
+  actualMinutes    Int?
+  requiresApproval Boolean            @default(false)
+  clientVisible    Boolean            @default(false)
+  tags             String[]
+  recurrence       Json? // {freq:'DAILY'|'WEEKLY'|'MONTHLY', interval, until}
+  recurrenceParentId String?
+  blockedReason    String?
+  escalatedAt      DateTime?
+  completedAt      DateTime?
+  sortOrder        Float              @default(0)
+  version          Int                @default(1)
+  createdById      String
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  project          Project            @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  workstream       Workstream?        @relation(fields: [workstreamId], references: [id], onDelete: SetNull)
+  parent           Task?              @relation("Subtasks", fields: [parentId], references: [id], onDelete: Cascade)
+  subtasks         Task[]             @relation("Subtasks")
+  owner            User?              @relation("TaskOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  collaborators    TaskCollaborator[]
+  dependencies     TaskDependency[]   @relation("TaskDependsOn")
+  dependents       TaskDependency[]   @relation("TaskBlocks")
+  checklists       Checklist[]
+  assignments      TaskAssignmentHistory[]
+
+  @@unique([projectId, number])
+  @@index([organizationId, projectId, statusCategory])
+  @@index([organizationId, ownerId, statusCategory])
+  @@index([organizationId, dueAt])
+}
+
+model TaskCollaborator {
+  id             String @id @default(cuid())
+  organizationId String
+  taskId         String
+  userId         String
+  task           Task   @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  user           User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, userId])
+  @@index([organizationId, userId])
+}
+
+model TaskDependency {
+  id             String @id @default(cuid())
+  organizationId String
+  taskId         String // the dependent task
+  dependsOnId    String // must finish first
+  type           String @default("FS")
+  task           Task   @relation("TaskDependsOn", fields: [taskId], references: [id], onDelete: Cascade)
+  dependsOn      Task   @relation("TaskBlocks", fields: [dependsOnId], references: [id], onDelete: Cascade)
+
+  @@unique([taskId, dependsOnId])
+}
+
+model TaskAssignmentHistory {
+  id             String   @id @default(cuid())
+  organizationId String
+  taskId         String
+  fromUserId     String?
+  toUserId       String?
+  changedById    String
+  reason         String?
+  createdAt      DateTime @default(now())
+  task           Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+}
+
+model Checklist {
+  id             String          @id @default(cuid())
+  organizationId String
+  taskId         String
+  title          String
+  sortOrder      Int             @default(0)
+  task           Task            @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  items          ChecklistItem[]
+}
+
+model ChecklistItem {
+  id             String    @id @default(cuid())
+  organizationId String
+  checklistId    String
+  label          String
+  done           Boolean   @default(false)
+  doneById       String?
+  doneAt         DateTime?
+  sortOrder      Int       @default(0)
+  checklist      Checklist @relation(fields: [checklistId], references: [id], onDelete: Cascade)
+}
+
+model Comment {
+  id             String     @id @default(cuid())
+  organizationId String
+  projectId      String?
+  entityType     String // TASK | PROJECT | DELIVERY | APPROVAL | BOOTH | INCIDENT
+  entityId       String
+  authorId       String
+  body           String
+  visibility     Visibility @default(INTERNAL)
+  mentions       String[]
+  editedAt       DateTime?
+  deletedAt      DateTime?
+  createdAt      DateTime   @default(now())
+  author         User       @relation(fields: [authorId], references: [id])
+
+  @@index([organizationId, entityType, entityId])
+}
+
+model Attachment {
+  id             String    @id @default(cuid())
+  organizationId String
+  projectId      String?
+  entityType     String // TASK | PROJECT | DELIVERY | BOOTH | REVISION | EXPENSE | VENDOR | IMPORT | QUOTE
+  entityId       String
+  kind           String    @default("FILE") // FILE | EVIDENCE | DRAWING | CONTRACT | INVITATION_ASSET
+  storageKey     String
+  fileName       String
+  mimeType       String
+  size           Int
+  sha256         String
+  version        Int       @default(1)
+  previousId     String? // version chain
+  clientVisible  Boolean   @default(false)
+  uploadedById   String
+  createdAt      DateTime  @default(now())
+  deletedAt      DateTime?
+
+  @@index([organizationId, entityType, entityId])
+}
+
+model Approval {
+  id             String             @id @default(cuid())
+  organizationId String
+  projectId      String
+  entityType     String // TASK | DELIVERABLE | DESIGN_REVISION | CAMPAIGN | PURCHASE_ORDER | EXPENSE | CHANGE_ORDER | MILESTONE
+  entityId       String
+  title          String
+  description    String?
+  status         ApprovalStatus     @default(PENDING)
+  approverType   ApproverType       @default(INTERNAL)
+  approverUserId String?
+  requestedById  String
+  dueAt          DateTime?
+  decidedById    String?
+  decidedAt      DateTime?
+  decisionComment String?
+  clientVisible  Boolean            @default(false)
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  decisions      ApprovalDecision[]
+
+  @@index([organizationId, projectId, status])
+  @@index([organizationId, entityType, entityId])
+}
+
+model ApprovalDecision {
+  id             String         @id @default(cuid())
+  organizationId String
+  approvalId     String
+  decision       ApprovalStatus
+  comment        String?
+  actorId        String
+  createdAt      DateTime       @default(now())
+  approval       Approval       @relation(fields: [approvalId], references: [id], onDelete: Cascade)
+}
+
+// ───────────────────────────── VIP Physical Delivery ─────────────────────────────
+
+model InvitationCampaign {
+  id               String         @id @default(cuid())
+  organizationId   String
+  projectId        String
+  workstreamId     String?
+  eventId          String?
+  type             CampaignType
+  name             String
+  invitationType   String? // e.g. Royal, Ministerial, VIP, General
+  status           CampaignStatus @default(DRAFT)
+  deliveryDeadline DateTime?
+  // digital-specific
+  channel          Channel?
+  subject          String?
+  bodyTemplate     String?
+  assetAttachmentId String?
+  scheduledAt      DateTime?
+  rsvpEnabled      Boolean        @default(true)
+  rsvpDeadline     DateTime?
+  qrEnabled        Boolean        @default(false)
+  approvedById     String?
+  approvedAt       DateTime?
+  createdById      String
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  @@index([organizationId, projectId])
+}
+
+model Recipient {
+  id                   String    @id @default(cuid())
+  organizationId       String
+  projectId            String
+  code                 String
+  externalRef          String?
+  nameAr               String?
+  nameEn               String?
+  honorific            String?
+  jobTitle             String?
+  organizationName     String?
+  vipTier              String?
+  category             String?
+  mobile               String? // E.164
+  mobileRaw            String?
+  altPhone             String?
+  email                String?
+  address              String?
+  city                 String?
+  district             String?
+  mapsUrl              String?
+  lat                  Float?
+  lng                  Float?
+  deliveryInstructions String?
+  preferredWindow      String? // free text e.g. "09:00-12:00"
+  invitationType       String?
+  priority             Priority  @default(MEDIUM)
+  verificationStatus   String    @default("UNVERIFIED") // UNVERIFIED | VERIFIED | INVALID
+  notes                String?
+  consentBasis         String    @default("CONTRACT") // CONTRACT | CONSENT | LEGITIMATE_INTEREST
+  retentionUntil       DateTime?
+  matchKey             String? // normalized key for duplicate detection
+  importBatchId        String?
+  importRowId          String?
+  createdById          String
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  anonymizedAt         DateTime?
+  deletedAt            DateTime?
+  deliveries           Delivery[]
+
+  @@unique([projectId, code])
+  @@index([organizationId, projectId])
+  @@index([organizationId, mobile])
+  @@index([organizationId, matchKey])
+  @@index([importBatchId])
+}
+
+model ImportMapping {
+  id              String   @id @default(cuid())
+  organizationId  String
+  name            String
+  kind            String   @default("RECIPIENTS")
+  mapping         Json // { canonicalField: headerName }
+  headerSignature String?
+  createdById     String
+  createdAt       DateTime @default(now())
+
+  @@index([organizationId, kind])
+}
+
+model ImportBatch {
+  id             String        @id @default(cuid())
+  organizationId String
+  projectId      String
+  campaignId     String?
+  kind           String        @default("RECIPIENTS")
+  fileName       String
+  storageKey     String
+  fileSha256     String
+  fileSize       Int
+  sheetNames     String[]
+  sheetName      String?
+  headerRow      Int           @default(1)
+  headers        String[]
+  mapping        Json?
+  options        Json          @default("{}") // { duplicateScope: 'PROJECT'|'ORGANIZATION', matchOn: [...], defaultCity }
+  status         ImportStatus  @default(UPLOADED)
+  totalRows      Int           @default(0)
+  validRows      Int           @default(0)
+  warningRows    Int           @default(0)
+  invalidRows    Int           @default(0)
+  duplicateRows  Int           @default(0)
+  committedRows  Int           @default(0)
+  progress       Int           @default(0)
+  error          String?
+  createdById    String
+  committedById  String?
+  committedAt    DateTime?
+  rolledBackAt   DateTime?
+  rolledBackById String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  rows           ImportRow[]
+
+  @@index([organizationId, projectId, createdAt])
+}
+
+model ImportRow {
+  id                   String              @id @default(cuid())
+  organizationId       String
+  batchId              String
+  rowNumber            Int
+  raw                  Json
+  normalized           Json?
+  overrides            Json?
+  status               ImportRowStatus
+  errors               Json                @default("[]")
+  warnings             Json                @default("[]")
+  matchKey             String?
+  duplicateOfRecipientId String?
+  duplicateOfRow       Int?
+  resolution           DuplicateResolution @default(PENDING)
+  recipientId          String?
+  batch                ImportBatch         @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@unique([batchId, rowNumber])
+  @@index([batchId, status])
+}
+
+model DeliveryBatch {
+  id             String     @id @default(cuid())
+  organizationId String
+  projectId      String
+  campaignId     String
+  code           String
+  name           String
+  territory      String?
+  plannedDate    DateTime?
+  status         String     @default("OPEN") // OPEN | DISPATCHED | CLOSED
+  createdById    String
+  createdAt      DateTime   @default(now())
+  deliveries     Delivery[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId, campaignId])
+}
+
+model Delivery {
+  id                    String               @id @default(cuid())
+  organizationId        String
+  projectId             String
+  campaignId            String
+  recipientId           String
+  batchId               String?
+  trackingCode          String
+  status                DeliveryStatus       @default(PENDING)
+  priority              Priority             @default(MEDIUM)
+  agentId               String?
+  windowStart           DateTime?
+  windowEnd             DateTime?
+  scheduledFor          DateTime?
+  attemptsCount         Int                  @default(0)
+  deliveredAt           DateTime?
+  receivedByName        String?
+  receivedByRelation    String?
+  failureReason         String?
+  escalatedAt           DateTime?
+  escalationNote        String?
+  notes                 String?
+  version               Int                  @default(1)
+  createdAt             DateTime             @default(now())
+  updatedAt             DateTime             @updatedAt
+  recipient             Recipient            @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+  batch                 DeliveryBatch?       @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  agent                 User?                @relation("DeliveryAgent", fields: [agentId], references: [id], onDelete: SetNull)
+  attempts              DeliveryAttempt[]
+  assignments           DeliveryAssignment[]
+  evidence              DeliveryEvidence[]
+  events                DeliveryEvent[]
+
+  @@unique([campaignId, recipientId])
+  @@unique([organizationId, trackingCode])
+  @@index([organizationId, projectId, status])
+  @@index([organizationId, agentId, status])
+}
+
+model DeliveryEvent {
+  id               String          @id @default(cuid())
+  organizationId   String
+  deliveryId       String
+  fromStatus       DeliveryStatus?
+  toStatus         DeliveryStatus
+  actorId          String?
+  reason           String?
+  note             String?
+  source           String          @default("WEB") // WEB | FIELD | FIELD_OFFLINE | SYSTEM | IMPORT
+  createdAt        DateTime        @default(now())
+  delivery         Delivery        @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+
+  @@index([deliveryId, createdAt])
+}
+
+model DeliveryAttempt {
+  id               String   @id @default(cuid())
+  organizationId   String
+  deliveryId       String
+  attemptNo        Int
+  agentId          String
+  outcome          String // DELIVERED | FAILED | RETURNED
+  failureReason    String?
+  notes            String?
+  receivedByName   String?
+  lat              Float?
+  lng              Float?
+  occurredAt       DateTime
+  recordedAt       DateTime @default(now())
+  clientMutationId String?  @unique
+  delivery         Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+
+  @@unique([deliveryId, attemptNo])
+}
+
+model DeliveryAssignment {
+  id             String    @id @default(cuid())
+  organizationId String
+  deliveryId     String
+  agentId        String
+  assignedById   String
+  assignedAt     DateTime  @default(now())
+  unassignedAt   DateTime?
+  reason         String?
+  delivery       Delivery  @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, agentId])
+}
+
+model DeliveryEvidence {
+  id             String   @id @default(cuid())
+  organizationId String
+  deliveryId     String
+  attemptId      String?
+  attachmentId   String
+  kind           String   @default("PHOTO") // PHOTO | SIGNATURE | DOCUMENT
+  createdAt      DateTime @default(now())
+  delivery       Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+}
+
+// ───────────────────────────── Digital Invitations ─────────────────────────────
+
+model ProviderConfig {
+  id             String   @id @default(cuid())
+  organizationId String
+  channel        Channel
+  provider       String // simulation | smtp | unifonic | twilio | whatsapp_cloud
+  mode           String   @default("SIMULATION") // SIMULATION | LIVE
+  senderId       String?
+  config         Json     @default("{}") // non-secret settings only; secrets come from env
+  enabled        Boolean  @default(true)
+  updatedAt      DateTime @updatedAt
+
+  @@unique([organizationId, channel])
+}
+
+model DigitalInvitation {
+  id             String        @id @default(cuid())
+  organizationId String
+  projectId      String
+  campaignId     String
+  recipientId    String
+  guestId        String?
+  channel        Channel
+  address        String // email or E.164 phone
+  personalization Json         @default("{}")
+  status         MessageStatus @default(QUEUED)
+  rsvpTokenHash  String?       @unique
+  qrCode         String?       @unique
+  rsvpStatus     RsvpResponse?
+  respondedAt    DateTime?
+  checkedInAt    DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  messages       MessageJob[]
+  rsvps          RSVP[]
+
+  @@unique([campaignId, recipientId])
+  @@index([organizationId, campaignId, status])
+}
+
+model MessageJob {
+  id                String            @id @default(cuid())
+  organizationId    String
+  invitationId      String?
+  channel           Channel
+  provider          String
+  simulated         Boolean           @default(true)
+  to                String
+  subject           String?
+  body              String
+  status            MessageStatus     @default(QUEUED)
+  attempts          Int               @default(0)
+  maxAttempts       Int               @default(3)
+  lastError         String?
+  providerMessageId String?
+  idempotencyKey    String            @unique
+  scheduledAt       DateTime?
+  sentAt            DateTime?
+  deliveredAt       DateTime?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  invitation        DigitalInvitation? @relation(fields: [invitationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, status])
+  @@index([provider, providerMessageId])
+}
+
+model RSVP {
+  id             String            @id @default(cuid())
+  organizationId String
+  invitationId   String
+  response       RsvpResponse
+  guestsCount    Int               @default(1)
+  note           String?
+  ip             String?
+  createdAt      DateTime          @default(now())
+  invitation     DigitalInvitation @relation(fields: [invitationId], references: [id], onDelete: Cascade)
+
+  @@index([invitationId, createdAt])
+}
+
+model SuppressionEntry {
+  id             String   @id @default(cuid())
+  organizationId String
+  channel        Channel
+  address        String
+  reason         String // OPT_OUT | BOUNCE | COMPLAINT | MANUAL
+  createdAt      DateTime @default(now())
+
+  @@unique([organizationId, channel, address])
+}
+
+/// Webhook receipts — stored for idempotency and audit (provider + external event id).
+model WebhookReceipt {
+  id              String   @id @default(cuid())
+  organizationId  String
+  provider        String
+  externalId      String
+  payload         Json
+  processedAt     DateTime?
+  createdAt       DateTime @default(now())
+
+  @@unique([provider, externalId])
+}
+
+// ───────────────────────────── Events & Conference ─────────────────────────────
+
+model Event {
+  id             String     @id @default(cuid())
+  organizationId String
+  projectId      String
+  workstreamId   String?
+  name           String
+  nameEn         String?
+  type           String     @default("CONFERENCE")
+  venueId        String?
+  startsAt       DateTime
+  endsAt         DateTime
+  phase          EventPhase @default(PLANNING)
+  brief          String?
+  expectedGuests Int?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  @@index([organizationId, projectId])
+}
+
+model EventSession {
+  id             String   @id @default(cuid())
+  organizationId String
+  eventId        String
+  title          String
+  titleEn        String?
+  kind           String   @default("SESSION") // KEYNOTE | PANEL | WORKSHOP | BREAK | CEREMONY | SESSION
+  room           String?
+  startsAt       DateTime
+  endsAt         DateTime
+  speakerIds     String[]
+  status         String   @default("PLANNED")
+  sortOrder      Int      @default(0)
+
+  @@index([organizationId, eventId, startsAt])
+}
+
+model Speaker {
+  id             String   @id @default(cuid())
+  organizationId String
+  eventId        String
+  name           String
+  nameEn         String?
+  title          String?
+  organizationName String?
+  topic          String?
+  phone          String?
+  email          String?
+  status         String   @default("INVITED") // INVITED | CONFIRMED | MATERIALS_RECEIVED | BRIEFED | DECLINED
+  needs          String?
+  createdAt      DateTime @default(now())
+
+  @@index([organizationId, eventId])
+}
+
+model RunOfShowItem {
+  id             String   @id @default(cuid())
+  organizationId String
+  eventId        String
+  startsAt       DateTime
+  durationMin    Int      @default(15)
+  title          String
+  cue            String?
+  ownerId        String?
+  location       String?
+  status         String   @default("PENDING") // PENDING | STANDBY | GO | DONE | SKIPPED
+  sortOrder      Int      @default(0)
+
+  @@index([organizationId, eventId, startsAt])
+}
+
+model Shift {
+  id             String   @id @default(cuid())
+  organizationId String
+  eventId        String
+  userId         String?
+  role           String
+  location       String?
+  startsAt       DateTime
+  endsAt         DateTime
+  status         String   @default("SCHEDULED") // SCHEDULED | CHECKED_IN | COMPLETED | NO_SHOW
+  checkedInAt    DateTime?
+
+  @@index([organizationId, eventId])
+}
+
+model ReadinessItem {
+  id             String    @id @default(cuid())
+  organizationId String
+  eventId        String
+  category       String // VENUE | AV | REGISTRATION | PROTOCOL | CATERING | SECURITY | LOGISTICS
+  label          String
+  status         String    @default("PENDING") // PENDING | IN_PROGRESS | READY | ISSUE
+  ownerId        String?
+  dueAt          DateTime?
+  note           String?
+  updatedAt      DateTime  @updatedAt
+
+  @@index([organizationId, eventId])
+}
+
+model Incident {
+  id              String         @id @default(cuid())
+  organizationId  String
+  projectId       String
+  eventId         String?
+  title           String
+  description     String?
+  severity        Severity       @default(MEDIUM)
+  status          IncidentStatus @default(OPEN)
+  location        String?
+  reportedById    String
+  ownerId         String?
+  escalationLevel Int            @default(0)
+  resolvedAt      DateTime?
+  resolution      String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@index([organizationId, projectId, status])
+}
+
+model LogisticsItem {
+  id             String    @id @default(cuid())
+  organizationId String
+  projectId      String
+  eventId        String?
+  name           String
+  category       String    @default("EQUIPMENT") // EQUIPMENT | TRANSPORT | PRINT | CATERING | SIGNAGE
+  quantity       Int       @default(1)
+  vendorId       String?
+  status         String    @default("PLANNED") // PLANNED | ORDERED | DELIVERED | INSTALLED | RETURNED
+  neededBy       DateTime?
+  notes          String?
+
+  @@index([organizationId, projectId])
+}
+
+// ───────────────────────────── VIP Protocol ─────────────────────────────
+
+model Guest {
+  id                  String          @id @default(cuid())
+  organizationId      String
+  projectId           String
+  eventId             String?
+  recipientId         String?
+  nameAr              String
+  nameEn              String?
+  honorific           String?
+  title               String?
+  organizationName    String?
+  category            String          @default("VIP") // VVIP | VIP | SPEAKER | MEDIA | DELEGATION | GENERAL
+  protocolLevel       Int             @default(3) // 1 = highest
+  mobile              String?
+  attendance          GuestAttendance @default(EXPECTED)
+  arrivalAt           DateTime?
+  departureAt         DateTime?
+  arrivalPoint        String?
+  seatZoneId          String?
+  seatLabel           String?
+  specialInstructions String?
+  restrictedNotes     String? // visible only with protocol.viewRestricted, access is audited
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+  assignments         ProtocolAssignment[]
+
+  @@index([organizationId, projectId])
+  @@index([organizationId, eventId])
+}
+
+model SeatingZone {
+  id             String @id @default(cuid())
+  organizationId String
+  eventId        String
+  name           String
+  capacity       Int    @default(0)
+  protocolLevel  Int?
+  sortOrder      Int    @default(0)
+
+  @@index([organizationId, eventId])
+}
+
+model ProtocolAssignment {
+  id             String   @id @default(cuid())
+  organizationId String
+  guestId        String
+  escortId       String?
+  checkpoint     String?
+  transport      String?
+  vehicle        String?
+  driverName     String?
+  pickupAt       DateTime?
+  status         String   @default("PLANNED") // PLANNED | CONFIRMED | EN_ROUTE | RECEIVED | COMPLETED
+  notes          String?
+  updatedAt      DateTime @updatedAt
+  guest          Guest    @relation(fields: [guestId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, guestId])
+}
+
+// ───────────────────────────── Booths & Pavilions ─────────────────────────────
+
+model Booth {
+  id             String     @id @default(cuid())
+  organizationId String
+  projectId      String
+  workstreamId   String?
+  name           String
+  kind           String     @default("BOOTH") // BOOTH | PAVILION
+  exhibition     String?
+  hall           String?
+  standNumber    String?
+  widthM         Float?
+  depthM         Float?
+  heightM        Float?
+  stage          BoothStage @default(BRIEF)
+  brief          String?
+  specs          Json       @default("{}")
+  permitStatus   String     @default("NOT_STARTED") // NOT_STARTED | SUBMITTED | APPROVED | REJECTED
+  siteAccessAt   DateTime?
+  buildStartAt   DateTime?
+  handoverAt     DateTime?
+  dismantleAt    DateTime?
+  handoverSignedBy String?
+  handoverSignedAt DateTime?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+  revisions      DesignRevision[]
+  boqItems       BOQItem[]
+  snags          Snag[]
+  inspections    Inspection[]
+
+  @@index([organizationId, projectId])
+}
+
+model DesignRevision {
+  id             String         @id @default(cuid())
+  organizationId String
+  boothId        String
+  revisionNo     Int
+  title          String
+  notes          String?
+  attachmentId   String?
+  status         RevisionStatus @default(DRAFT)
+  approvalId     String?
+  createdById    String
+  createdAt      DateTime       @default(now())
+  booth          Booth          @relation(fields: [boothId], references: [id], onDelete: Cascade)
+
+  @@unique([boothId, revisionNo])
+}
+
+model BOQItem {
+  id             String   @id @default(cuid())
+  organizationId String
+  projectId      String
+  boothId        String
+  code           String
+  description    String
+  category       String   @default("FABRICATION") // STRUCTURE | FINISHES | AV | LIGHTING | GRAPHICS | FURNITURE | FABRICATION | LOGISTICS
+  unit           String   @default("unit")
+  quantity       Decimal  @db.Decimal(14, 3)
+  unitCost       Decimal  @db.Decimal(14, 2) // estimated
+  committedCost  Decimal  @default(0) @db.Decimal(14, 2)
+  actualCost     Decimal  @default(0) @db.Decimal(14, 2)
+  vendorId       String?
+  status         String   @default("PLANNED") // PLANNED | RFQ | ORDERED | IN_PRODUCTION | DELIVERED | INSTALLED
+  sortOrder      Int      @default(0)
+  booth          Booth    @relation(fields: [boothId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, boothId])
+}
+
+model Inspection {
+  id             String   @id @default(cuid())
+  organizationId String
+  boothId        String
+  type           String // STRUCTURAL | ELECTRICAL | FINISH | SAFETY | CLIENT_WALKTHROUGH
+  result         String // PASS | FAIL | CONDITIONAL
+  notes          String?
+  inspectedById  String
+  inspectedAt    DateTime @default(now())
+  booth          Booth    @relation(fields: [boothId], references: [id], onDelete: Cascade)
+}
+
+model Snag {
+  id             String    @id @default(cuid())
+  organizationId String
+  boothId        String
+  title          String
+  location       String?
+  severity       Severity  @default(MEDIUM)
+  status         String    @default("OPEN") // OPEN | IN_PROGRESS | FIXED | VERIFIED
+  assigneeId     String?
+  createdById    String
+  fixedAt        DateTime?
+  createdAt      DateTime  @default(now())
+  booth          Booth     @relation(fields: [boothId], references: [id], onDelete: Cascade)
+}
+
+// ───────────────────────────── Vendors & Procurement ─────────────────────────────
+
+model Vendor {
+  id             String       @id @default(cuid())
+  organizationId String
+  name           String
+  nameEn         String?
+  category       String // FABRICATION | AV | PRINTING | CATERING | TRANSPORT | FLORAL | SECURITY | STAFFING | VENUE | OTHER
+  crNumber       String?
+  vatNumber      String?
+  email          String?
+  phone          String?
+  city           String?
+  rating         Float?
+  status         String       @default("ACTIVE") // ACTIVE | PREFERRED | ON_HOLD | BLACKLISTED
+  notes          String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  contacts       Contact[]
+
+  @@index([organizationId, category])
+}
+
+model RFQ {
+  id             String    @id @default(cuid())
+  organizationId String
+  projectId      String
+  code           String
+  title          String
+  description    String?
+  category       String?
+  dueAt          DateTime?
+  status         String    @default("OPEN") // OPEN | CLOSED | AWARDED | CANCELLED
+  vendorIds      String[]
+  createdById    String
+  createdAt      DateTime  @default(now())
+  quotes         Quote[]
+
+  @@unique([organizationId, code])
+}
+
+model Quote {
+  id             String      @id @default(cuid())
+  organizationId String
+  projectId      String
+  rfqId          String?
+  vendorId       String
+  reference      String?
+  amount         Decimal     @db.Decimal(14, 2)
+  vatAmount      Decimal     @default(0) @db.Decimal(14, 2)
+  validUntil     DateTime?
+  leadTimeDays   Int?
+  status         QuoteStatus @default(RECEIVED)
+  notes          String?
+  createdAt      DateTime    @default(now())
+  rfq            RFQ?        @relation(fields: [rfqId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, projectId])
+}
+
+model PurchaseOrder {
+  id             String    @id @default(cuid())
+  organizationId String
+  projectId      String
+  vendorId       String
+  quoteId        String?
+  code           String
+  title          String
+  budgetCategory String
+  amount         Decimal   @db.Decimal(14, 2)
+  vatAmount      Decimal   @default(0) @db.Decimal(14, 2)
+  status         POStatus  @default(DRAFT)
+  approvalId     String?
+  issuedAt       DateTime?
+  createdById    String
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@unique([organizationId, code])
+  @@index([organizationId, projectId])
+}
+
+model WorkOrder {
+  id             String    @id @default(cuid())
+  organizationId String
+  projectId      String
+  vendorId       String
+  title          String
+  scope          String?
+  status         String    @default("ISSUED") // ISSUED | ACCEPTED | IN_PROGRESS | DELIVERED | ACCEPTED_BY_AGENCY | CANCELLED
+  dueAt          DateTime?
+  rating         Int? // 1..5 vendor performance on completion
+  onTime         Boolean?
+  createdById    String
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([organizationId, vendorId])
+}
+
+// ───────────────────────────── Finance ─────────────────────────────
+
+model Budget {
+  id             String   @id @default(cuid())
+  organizationId String
+  projectId      String
+  category       String // VENUE | PRODUCTION | LOGISTICS | STAFFING | PRINTING | DELIVERY | HOSPITALITY | AV | CONTINGENCY | OTHER
+  planned        Decimal  @db.Decimal(14, 2)
+  notes          String?
+  updatedAt      DateTime @updatedAt
+
+  @@unique([projectId, category])
+}
+
+model Expense {
+  id               String        @id @default(cuid())
+  organizationId   String
+  projectId        String
+  budgetCategory   String
+  vendorId         String?
+  purchaseOrderId  String?
+  description      String
+  amount           Decimal       @db.Decimal(14, 2)
+  vatAmount        Decimal       @default(0) @db.Decimal(14, 2)
+  incurredAt       DateTime
+  status           ExpenseStatus @default(SUBMITTED)
+  evidenceId       String?
+  submittedById    String
+  approvedById     String?
+  approvedAt       DateTime?
+  createdAt        DateTime      @default(now())
+
+  @@index([organizationId, projectId])
+}
+
+model ChangeOrder {
+  id             String         @id @default(cuid())
+  organizationId String
+  projectId      String
+  code           String
+  title          String
+  description    String?
+  amountDelta    Decimal        @db.Decimal(14, 2) // revenue/contract change
+  costDelta      Decimal        @default(0) @db.Decimal(14, 2)
+  status         ApprovalStatus @default(PENDING)
+  approvalId     String?
+  clientVisible  Boolean        @default(true)
+  createdById    String
+  createdAt      DateTime       @default(now())
+
+  @@unique([organizationId, code])
+}
+
+// ───────────────────────────── Automation ─────────────────────────────
+
+model OutboxEvent {
+  id             String    @id @default(cuid())
+  organizationId String
+  type           String // task.assigned, delivery.failed, approval.rejected, import.completed, ...
+  payload        Json
+  actorId        String?
+  createdAt      DateTime  @default(now())
+  processedAt    DateTime?
+  attempts       Int       @default(0)
+  lastError      String?
+
+  @@index([processedAt, createdAt])
+}
+
+model AutomationRule {
+  id             String   @id @default(cuid())
+  organizationId String
+  key            String
+  name           String
+  nameEn         String?
+  trigger        String
+  conditions     Json     @default("{}")
+  actions        Json // [{type:'notify', to:'owner'|'project_managers'|'actor'}, {type:'create_task', ...}]
+  enabled        Boolean  @default(true)
+  isSystem       Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  executions     AutomationExecution[]
+
+  @@unique([organizationId, key])
+}
+
+model AutomationExecution {
+  id             String          @id @default(cuid())
+  organizationId String
+  ruleId         String
+  eventId        String
+  idempotencyKey String          @unique
+  status         ExecutionStatus @default(PENDING)
+  attempts       Int             @default(0)
+  result         Json?
+  error          String?
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  createdAt      DateTime        @default(now())
+  rule           AutomationRule  @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, createdAt])
+}

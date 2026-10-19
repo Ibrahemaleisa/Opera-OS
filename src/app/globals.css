@@ -1,0 +1,220 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * Operra design tokens.
+ * Jade (primary) on warm stone neutrals, ink text, restrained status colors.
+ * All layout uses logical properties so RTL/LTR mirror automatically.
+ */
+:root {
+  --radius: 0.5rem;
+
+  --background: #f6f5f1;
+  --foreground: #14181f;
+  --card: #ffffff;
+  --card-foreground: #14181f;
+  --popover: #ffffff;
+  --popover-foreground: #14181f;
+  --primary: #0e5a52;
+  --primary-foreground: #ffffff;
+  --secondary: #eeece6;
+  --secondary-foreground: #1d232b;
+  --muted: #efede8;
+  --muted-foreground: #66645e;
+  --accent: #ebe8e1;
+  --accent-foreground: #14181f;
+  --destructive: #b42318;
+  --border: #e2dfd7;
+  --input: #d9d5cc;
+  --ring: #0e5a52;
+
+  --success: #1f7a4d;
+  --success-soft: #e3f2ea;
+  --warning: #a8670f;
+  --warning-soft: #fbf0dc;
+  --danger: #b42318;
+  --danger-soft: #fbe6e3;
+  --info: #1d5fa8;
+  --info-soft: #e2edf9;
+  --violet: #5b3fa6;
+  --violet-soft: #ece7f7;
+  --jade-soft: #e1efec;
+  --sand: #c9a46a;
+
+  --sidebar: #efede7;
+  --sidebar-foreground: #1d232b;
+  --sidebar-muted: #6f6c65;
+  --sidebar-active: #ffffff;
+  --sidebar-border: #e0ddd5;
+
+  --chart-1: #0e5a52;
+  --chart-2: #c9a46a;
+  --chart-3: #1d5fa8;
+  --chart-4: #b42318;
+  --chart-5: #5b3fa6;
+  --chart-6: #6f8f3a;
+}
+
+.dark {
+  --background: #0c0f12;
+  --foreground: #e9e7e2;
+  --card: #13171b;
+  --card-foreground: #e9e7e2;
+  --popover: #171b20;
+  --popover-foreground: #e9e7e2;
+  --primary: #3eb5a2;
+  --primary-foreground: #04201c;
+  --secondary: #1d2228;
+  --secondary-foreground: #e9e7e2;
+  --muted: #1a1f24;
+  --muted-foreground: #9a978f;
+  --accent: #20262c;
+  --accent-foreground: #e9e7e2;
+  --destructive: #f0645a;
+  --border: #252b32;
+  --input: #2d343c;
+  --ring: #3eb5a2;
+
+  --success: #4cc38a;
+  --success-soft: #11291e;
+  --warning: #e0a44a;
+  --warning-soft: #2d2212;
+  --danger: #f0645a;
+  --danger-soft: #331715;
+  --info: #66a3e8;
+  --info-soft: #132235;
+  --violet: #a68ce8;
+  --violet-soft: #221b36;
+  --jade-soft: #10282a;
+  --sand: #d8b57c;
+
+  --sidebar: #101317;
+  --sidebar-foreground: #dedbd5;
+  --sidebar-muted: #8b887f;
+  --sidebar-active: #1b2026;
+  --sidebar-border: #1f252b;
+
+  --chart-1: #3eb5a2;
+  --chart-2: #d8b57c;
+  --chart-3: #66a3e8;
+  --chart-4: #f0645a;
+  --chart-5: #a68ce8;
+  --chart-6: #9cbf5f;
+}
+
+@theme inline {
+  --font-sans: var(--app-font);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-violet: var(--violet);
+  --color-violet-soft: var(--violet-soft);
+  --color-jade-soft: var(--jade-soft);
+  --color-sand: var(--sand);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-muted: var(--sidebar-muted);
+  --color-sidebar-active: var(--sidebar-active);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-chart-6: var(--chart-6);
+  --radius-sm: calc(var(--radius) - 3px);
+  --radius-md: calc(var(--radius) - 1px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+html[lang="ar"] {
+  --app-font: "IBM Plex Sans Arabic", "Instrument Sans Variable", system-ui, sans-serif;
+}
+html[lang="en"] {
+  --app-font: "Instrument Sans Variable", "IBM Plex Sans Arabic", system-ui, sans-serif;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-rendering: optimizeLegibility;
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "ss01", "cv11";
+  }
+  /* Numbers line up in dense tables in both scripts */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+  ::selection {
+    background: color-mix(in srgb, var(--primary) 22%, transparent);
+  }
+  /* Phone numbers, tracking codes, IDs are always LTR even inside RTL text */
+  .ltr-nums {
+    direction: ltr;
+    unicode-bidi: isolate;
+  }
+}
+
+@layer components {
+  .page-title {
+    @apply text-xl font-semibold tracking-tight;
+  }
+  .section-title {
+    @apply text-sm font-semibold text-foreground;
+  }
+  .kbd {
+    @apply inline-flex h-5 min-w-5 items-center justify-center rounded border border-border bg-muted px-1 font-sans text-[10px] font-medium text-muted-foreground;
+  }
+  .field-label {
+    @apply mb-1.5 block text-xs font-medium text-muted-foreground;
+  }
+  .surface {
+    @apply rounded-lg border border-border bg-card;
+  }
+}
+
+/* Thin, quiet scrollbars for dense layouts */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--input) transparent;
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: white;
+  }
+}
