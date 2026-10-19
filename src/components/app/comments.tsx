@@ -7,6 +7,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useAction } from "@/hooks/use-action";
 import { formatRelative } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/client";
+import { TimeAgo } from "@/components/app/time-ago";
 import { cn } from "@/lib/utils";
 import { addCommentAction } from "@/app/o/[org]/projects/actions";
 
@@ -28,7 +29,7 @@ export function CommentsThread({ orgSlug, projectId, entityType, entityId, comme
             <div className="mb-1 flex items-center gap-2 text-xs">
               <span className="font-medium">{(locale === "ar" ? c.author.nameAr : null) ?? c.author.name}</span>
               {c.visibility === "INTERNAL" ? <span className="flex items-center gap-0.5 text-[10px] text-warning"><Lock className="size-2.5" />{m.common.internal}</span> : <span className="text-[10px] text-info">{m.common.clientVisible}</span>}
-              <span className="ms-auto text-[10px] text-muted-foreground">{formatRelative(c.createdAt, fmt)}</span>
+              <span className="ms-auto text-[10px] text-muted-foreground"><TimeAgo date={c.createdAt} /></span>
             </div>
             <p className="text-[13px] leading-relaxed whitespace-pre-wrap">{c.body}</p>
           </li>

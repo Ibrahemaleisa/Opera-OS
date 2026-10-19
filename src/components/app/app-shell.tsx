@@ -10,6 +10,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { useI18n } from "@/lib/i18n/client";
+import { TimeAgo } from "@/components/app/time-ago";
 import { formatRelative } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { logoutAction, setCalendarAction, setLocaleAction } from "@/app/actions/session";
@@ -214,7 +215,7 @@ function NotificationBell({ orgSlug, initialUnread }: { orgSlug: string; initial
                 <span className={cn("mt-1.5 size-1.5 shrink-0 rounded-full", n.readAt ? "bg-transparent" : "bg-primary")} />
                 <span className="min-w-0">
                   <span className="block text-[13px] leading-snug">{tk(n.title, params)}</span>
-                  <span className="text-[11px] text-muted-foreground">{formatRelative(n.createdAt, fmt)}</span>
+                  <span className="text-[11px] text-muted-foreground"><TimeAgo date={n.createdAt} /></span>
                 </span>
               </Link>
             );

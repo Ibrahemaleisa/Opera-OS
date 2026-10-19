@@ -4,7 +4,10 @@ import { RateLimitError } from "@/server/errors";
 const memory = new Map<string, { count: number; resetAt: number }>();
 
 /** Fixed-window limiter. Redis-backed when available, in-memory fallback (single instance). */
-export async function rateLimit(key: string, limit: number, windowSec: number): Promise<{ ok: boolean; remaining: number }> {
+export async function rateLimit(key: string, baseLimit: number, windowSec: number): Promise<{ ok: boolean; remaining: number }> {
+  // RATE_LIMIT_MULTIPLIER relaxes limits for local development / E2E runs only (never set in production).
+  const multiplier = process.env.NODE_ENV === "production" ? 1 : Math.max(1, Number(process.env.RATE_LIMIT_MULTIPLIER ?? 1));
+  const limit = baseLimit * multiplier;
   const redis = getRedis();
   if (redis && redis.status === "ready") {
     try {

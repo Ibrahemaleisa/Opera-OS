@@ -24,7 +24,7 @@ export const loginSchema = z.object({
 
 export const inviteSchema = z.object({
   email: z.email().trim().toLowerCase(),
-  name: z.string().trim().max(120).optional(),
+  name: z.string().trim().max(120).nullish(),
   roleId: z.string().min(1),
   clientId: z.string().optional().nullable(),
   vendorId: z.string().optional().nullable(),

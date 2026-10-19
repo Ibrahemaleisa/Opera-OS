@@ -85,7 +85,7 @@ export function isClientRole(role: OrgRole) {
 /** Where a member lands after login. */
 export function homePathFor(role: OrgRole, slug: string) {
   if (isClientRole(role)) return `/portal/${slug}`;
-  if (role === "FIELD_AGENT") return `/o/${slug}/field`;
-  if (role === "VENDOR") return `/o/${slug}/vendor-portal`;
+  if (role === "FIELD_AGENT") return `/field/${slug}`;
+  if (role === "VENDOR") return `/vendor/${slug}`;
   return `/o/${slug}`;
 }

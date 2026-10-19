@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { formatRelative } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/client";
+import { TimeAgo } from "@/components/app/time-ago";
 import { fileUrlAction } from "@/app/o/[org]/projects/actions";
 
 export interface AttachmentRow { id: string; fileName: string; mimeType: string; size: number; version: number; createdAt: string | Date; clientVisible: boolean; kind?: string }
@@ -43,7 +44,7 @@ export function Attachments({ orgSlug, entityType, entityId, items, canUpload, a
             <button className="min-w-0 flex-1 truncate text-start text-[13px] hover:text-primary" onClick={() => open(a.id)}>{a.fileName}</button>
             {a.version > 1 && <span className="text-[10px] text-muted-foreground">v{a.version}</span>}
             {a.clientVisible && <span className="rounded bg-info-soft px-1 text-[9px] text-info">{m.common.clientVisible}</span>}
-            <span className="tabular text-[11px] text-muted-foreground">{Math.ceil(a.size / 1024)} KB · {formatRelative(a.createdAt, fmt)}</span>
+            <span className="tabular text-[11px] text-muted-foreground">{Math.ceil(a.size / 1024)} KB · <TimeAgo date={a.createdAt} /></span>
           </li>
         ))}
         {items.length === 0 && <li className="px-4 py-4 text-center text-xs text-muted-foreground"><Paperclip className="mx-auto mb-1 size-4" />{m.common.emptyTitle}</li>}

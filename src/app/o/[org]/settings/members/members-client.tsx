@@ -17,6 +17,7 @@ import { useAction } from "@/hooks/use-action";
 import { formObject } from "@/lib/form";
 import { formatDate, formatRelative } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/client";
+import { TimeAgo } from "@/components/app/time-ago";
 import { changeRoleAction, inviteMemberAction, revokeInvitationAction, saveRoleAction, setMemberStatusAction } from "../actions";
 
 interface Member { id: string; userId: string; name: string; nameEn: string; email: string; status: string; roleId: string; baseRole: string; lastLoginAt: string | null; clientId: string | null; vendorId: string | null }
@@ -80,7 +81,7 @@ export function MembersClient(p: Props) {
           ),
       },
       { accessorKey: "status", header: m.common.status, cell: ({ row }) => <StatusBadge status={row.original.status} label={m.enums.memberStatus[row.original.status as keyof typeof m.enums.memberStatus]} /> },
-      { accessorKey: "lastLoginAt", header: m.org.lastLogin, cell: ({ row }) => <span className="text-xs text-muted-foreground">{row.original.lastLoginAt ? formatRelative(row.original.lastLoginAt, fmt) : "—"}</span> },
+      { accessorKey: "lastLoginAt", header: m.org.lastLogin, cell: ({ row }) => <span className="text-xs text-muted-foreground"><TimeAgo date={row.original.lastLoginAt} /></span> },
       {
         id: "actions",
         header: "",

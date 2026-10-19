@@ -250,7 +250,7 @@ export async function bulkAssign(ctx: ServiceContext, input: z.output<typeof ass
       changed++;
     }
     await audit(tx, ctx, { action: input.agentId ? "delivery.assign" : "delivery.unassign", entityType: "DELIVERY", projectId: input.projectId, summary: `${changed} deliveries${agentName ? ` → ${agentName}` : ""}`, meta: { agentId: input.agentId, batchId: input.batchId, skipped: skipped.length } });
-    if (input.agentId && changed) await emit(tx, ctx, "delivery.assigned", { projectId: input.projectId, agentId: input.agentId, count: changed, link: `/field` });
+    if (input.agentId && changed) await emit(tx, ctx, "delivery.assigned", { projectId: input.projectId, agentId: input.agentId, count: changed, link: `/field` , entityType: "DELIVERY" });
     return { changed, skipped };
   });
 }
@@ -495,13 +495,13 @@ export async function updateRecipient(ctx: ServiceContext, input: z.output<typeo
       if (mobile !== undefined) {
         const { normalizeSaudiPhone } = await import("@/lib/phone");
         const p = normalizeSaudiPhone(mobile);
-        if (mobile && !p.valid) throw new ValidationError("errors.validation", { mobile: ["delivery.importErrors.MOBILE_INVALID"] });
+        if (mobile && !p.valid) throw new ValidationError("errors.validation", { mobile: ["importErrors.MOBILE_INVALID"] });
         data.mobile = p.e164;
         data.mobileRaw = mobile;
       }
       if (mapsUrl !== undefined) {
         const { isSafeMapsUrl, coordsFromMapsUrl } = await import("./imports/normalize");
-        if (mapsUrl && !isSafeMapsUrl(mapsUrl)) throw new ValidationError("errors.validation", { mapsUrl: ["delivery.importErrors.MAPS_URL_INVALID"] });
+        if (mapsUrl && !isSafeMapsUrl(mapsUrl)) throw new ValidationError("errors.validation", { mapsUrl: ["importErrors.MAPS_URL_INVALID"] });
         data.mapsUrl = mapsUrl || null;
         const c = mapsUrl ? coordsFromMapsUrl(mapsUrl) : null;
         if (c) { data.lat = c.lat; data.lng = c.lng; }

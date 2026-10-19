@@ -16,6 +16,7 @@ import { StatusBadge } from "@/components/app/status-badge";
 import { useAction } from "@/hooks/use-action";
 import { formatDateTime, formatRelative, parseRiyadhDate, toDateInput } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/client";
+import { TimeAgo } from "@/components/app/time-ago";
 import type { getTaskDetail } from "@/server/modules/tasks/service";
 import {
   addChecklistItemAction, addDependencyAction, changeTaskStatusAction, createTaskAction, decideApprovalAction,
@@ -194,7 +195,7 @@ export function TaskDetail({ orgSlug, data }: { orgSlug: string; data: Detail })
             <Section title={m.common.history}>
               <ul className="max-h-80 divide-y overflow-y-auto">
                 {data.history.map((h) => (
-                  <li key={h.id} className="px-4 py-2 text-xs"><span className="text-muted-foreground">{m.tasks.reassignHistory}:</span> {nameOf(h.fromUserId)} → {nameOf(h.toUserId)} <span className="block text-[10px] text-muted-foreground">{formatRelative(h.createdAt, fmt)}</span></li>
+                  <li key={h.id} className="px-4 py-2 text-xs"><span className="text-muted-foreground">{m.tasks.reassignHistory}:</span> {nameOf(h.fromUserId)} → {nameOf(h.toUserId)} <span className="block text-[10px] text-muted-foreground"><TimeAgo date={h.createdAt} /></span></li>
                 ))}
                 {data.auditTrail.map((a) => (
                   <li key={a.id} className="px-4 py-2 text-xs"><span className="font-medium">{a.actorName}</span> <span className="ltr-nums font-mono text-muted-foreground">{a.action}</span>{a.summary && <span className="block truncate text-muted-foreground">{a.summary}</span>}<span className="block text-[10px] text-muted-foreground">{formatDateTime(a.createdAt, fmt)}</span></li>
@@ -225,7 +226,7 @@ export function ApprovalsBox({ orgSlug, approvals, canDecide, nameOf }: { orgSlu
             </div>
             <ol className="grid gap-1 border-s ps-3 text-[11px] text-muted-foreground">
               {a.decisions.map((d) => (
-                <li key={d.id}><span className="text-foreground">{nameOf(d.actorId)}</span> · {m.enums.approvalStatus[d.decision]}{d.comment && <span> — “{d.comment}”</span>} · {formatRelative(d.createdAt, fmt)}</li>
+                <li key={d.id}><span className="text-foreground">{nameOf(d.actorId)}</span> · {m.enums.approvalStatus[d.decision]}{d.comment && <span> — “{d.comment}”</span>} · <TimeAgo date={d.createdAt} /></li>
               ))}
             </ol>
             {a.status === "PENDING" && canDecide && (
