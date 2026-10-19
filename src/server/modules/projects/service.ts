@@ -224,7 +224,7 @@ export async function getProjectHeader(ctx: ServiceContext, projectId: string) {
     const scope = await projectScope(tx, ctx, projectId);
     const p = scope.project;
     const workstreams = await tx.workstream.findMany({ where: { projectId }, select: { kind: true } });
-    return { id: p.id, code: p.code, name: (ctx.locale === "en" && p.nameEn) || p.name, status: p.status, type: p.type, kinds: [...new Set(workstreams.map((w) => w.kind))], scope: scopeSummary(scope) };
+    return { id: p.id, code: p.code, name: (ctx.locale === "en" && p.nameEn) || p.name, status: p.status, type: p.type, currency: p.currency, kinds: [...new Set(workstreams.map((w) => w.kind))], scope: scopeSummary(scope) };
   });
 }
 

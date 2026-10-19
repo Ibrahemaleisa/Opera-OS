@@ -88,7 +88,7 @@ export async function getProjectFinance(ctx: ServiceContext, projectId: string) 
       tx.approval.findMany({ where: { projectId, entityType: { in: ["PURCHASE_ORDER", "EXPENSE", "CHANGE_ORDER"] } }, orderBy: { createdAt: "desc" } }),
       threshold(tx, ctx.orgId),
     ]);
-    const evidence = await tx.attachment.groupBy({ by: ["entityId"], where: { entityType: "EXPENSE", entityId: { in: expenses.map((e) => e.id) }, deletedAt: null }, _count: true });
+    const evidence = await tx.attachment.findMany({ where: { entityType: "EXPENSE", entityId: { in: expenses.map((e) => e.id) }, deletedAt: null }, orderBy: { createdAt: "desc" } });
     const approvalOf = (type: string, id: string) => approvals.find((a) => a.entityType === type && a.entityId === id) ?? null;
     const vname = (id: string | null) => vendors.find((v) => v.id === id)?.name ?? null;
     return {
@@ -98,7 +98,7 @@ export async function getProjectFinance(ctx: ServiceContext, projectId: string) 
       threshold: limit,
       summary,
       purchaseOrders: pos.map((p) => ({ ...p, amount: n(p.amount), vatAmount: n(p.vatAmount), vendorName: vname(p.vendorId), approval: approvalOf("PURCHASE_ORDER", p.id), needsApproval: n(p.amount) + n(p.vatAmount) >= limit })),
-      expenses: expenses.map((e) => ({ ...e, amount: n(e.amount), vatAmount: n(e.vatAmount), vendorName: vname(e.vendorId), evidenceCount: evidence.find((x) => x.entityId === e.id)?._count ?? 0, approval: approvalOf("EXPENSE", e.id) })),
+      expenses: expenses.map((e) => ({ ...e, amount: n(e.amount), vatAmount: n(e.vatAmount), vendorName: vname(e.vendorId), evidence: evidence.filter((x) => x.entityId === e.id), evidenceCount: evidence.filter((x) => x.entityId === e.id).length, approval: approvalOf("EXPENSE", e.id) })),
       changeOrders: changeOrders.map((c) => ({ ...c, amountDelta: n(c.amountDelta), costDelta: n(c.costDelta), approval: approvalOf("CHANGE_ORDER", c.id) })),
       vendors: vendors.filter((v) => v.status !== "BLACKLISTED"),
     };

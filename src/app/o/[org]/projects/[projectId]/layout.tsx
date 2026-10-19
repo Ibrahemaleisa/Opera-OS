@@ -7,6 +7,7 @@ import { getI18n } from "@/lib/i18n/server";
 import { NotFoundError } from "@/server/errors";
 import { getProjectHeader } from "@/server/modules/projects/service";
 import { requirePageContext } from "@/server/request";
+import { can } from "@/server/authz/policy";
 
 export default async function ProjectLayout({ children, params }: { children: React.ReactNode; params: Promise<{ org: string; projectId: string }> }) {
   const { org, projectId } = await params;
@@ -28,6 +29,7 @@ export default async function ProjectLayout({ children, params }: { children: Re
     ...(has("EVENT_OPS") || has("CONFERENCE") ? [{ href: `${b}/events`, label: m.nav.events }] : []),
     ...(has("PROTOCOL") ? [{ href: `${b}/protocol`, label: m.nav.protocol }] : []),
     ...(has("BOOTH") || has("PAVILION") ? [{ href: `${b}/production`, label: m.nav.booths }] : []),
+    ...(can(ctx, "vendor.view") && !header.scope.clientView && !header.scope.fieldOnly ? [{ href: `${b}/procurement`, label: m.vendors.procurement }] : []),
     ...(header.scope.finance ? [{ href: `${b}/finance`, label: m.nav.finance }] : []),
     { href: `${b}/approvals`, label: p.approvals },
     { href: `${b}/team`, label: p.members },
