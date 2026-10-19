@@ -28,7 +28,7 @@
     "test:e2e": "playwright test",
     "postinstall": "prisma generate",
     "db:reset-demo": "tsx scripts/reset-demo.ts",
-    "vercel-build": "prisma migrate deploy && tsx scripts/apply-rls.ts && next build"
+    "vercel-build": "prisma migrate deploy && tsx scripts/apply-rls.ts && if [ \"$SEED_DEMO\" = \"true\" ]; then tsx prisma/seed.ts; fi && next build"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1152.0",
