@@ -117,7 +117,9 @@ The app runs on Vercel with Neon Postgres and a **private** Vercel Blob store:
    NOBYPASSRLS role `operra_app` with it and the app connects as that role — it refuses to serve
    on a role that bypasses RLS), `CRON_SECRET`, `JOBS_MODE=inline`, `STORAGE_DRIVER=vercel-blob`,
    `COOKIE_SECURE=true`, `MAX_UPLOAD_MB=4`; optionally `SEED_DEMO=true` + `SEED_PASSWORD`.
-4. Pick a function region next to the database (this deployment uses `fra1`).
+4. Run functions in the database's region (`regions` in `vercel.json`; this deployment's Neon
+   database is in `iad1`). Each tenant transaction is several round trips, so a cross-region
+   database makes every page seconds slower — `/api/health` reports `dbRoundTripMs`.
 
 Differences from the Docker setup: there is no long-running worker — jobs run inside the
 request, and a daily Vercel Cron (`/api/cron/scheduler`, Hobby plan limit) sends due-soon/overdue

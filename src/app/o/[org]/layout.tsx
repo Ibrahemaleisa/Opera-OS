@@ -16,10 +16,14 @@ export default async function OrgLayout({ children, params }: { children: React.
   if (ctx.role === "VENDOR") redirect(`/vendor/${slug}`);
 
   const { m, locale } = await getI18n();
-  const [org, orgs, unread] = await Promise.all([
-    withTenant({ orgId: ctx.orgId, userId: ctx.userId }, (tx) => tx.organization.findUniqueOrThrow({ where: { id: ctx.orgId }, select: { slug: true, name: true, nameEn: true, brandColor: true } })),
+  // One tenant transaction for the shell: each transaction costs several database round trips.
+  const [{ org, unread }, orgs] = await Promise.all([
+    withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
+      const org = await tx.organization.findUniqueOrThrow({ where: { id: ctx.orgId }, select: { slug: true, name: true, nameEn: true, brandColor: true } });
+      const unread = await tx.notification.count({ where: { userId: ctx.userId, readAt: null } });
+      return { org, unread };
+    }),
     listUserOrganizations(ctx.userId),
-    withTenant({ orgId: ctx.orgId, userId: ctx.userId }, (tx) => tx.notification.count({ where: { userId: ctx.userId, readAt: null } })),
   ]);
   const orgName = (locale === "en" && org.nameEn) || org.name;
   return (
