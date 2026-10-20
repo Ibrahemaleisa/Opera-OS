@@ -10,7 +10,7 @@ import { matchesConditions } from "@/server/modules/automation/rules";
 import { computeProjectScope } from "@/server/authz/policy";
 import { SYSTEM_ROLES } from "@/server/authz/roles";
 import type { ServiceContext } from "@/server/authz/context";
-import { formatDate, formatMoney, parseRiyadhDate, toDateInput } from "@/lib/format";
+import { formatDate, formatMoney, formatNumber, formatPercent, parseRiyadhDate, toDateInput } from "@/lib/format";
 
 describe("CSV formula injection", () => {
   it("neutralizes dangerous leading characters", () => {
@@ -116,5 +116,13 @@ describe("Saudi formatting", () => {
     expect(toDateInput(parseRiyadhDate("2026-12-15"))).toBe("2026-12-15");
     expect(formatDate("2026-12-15T22:30:00Z", { locale: "en" })).toBe("16 Dec 2026"); // Riyadh is UTC+3
     expect(formatDate("2026-12-15T09:00:00Z", { locale: "en", calendar: "islamic-umalqura" })).toMatch(/1448/);
+  });
+
+  it("emits no bidi marks, so server and browser render identical text", () => {
+    const marks = /[\u200e\u200f\u061c]/;
+    for (const s of [formatMoney(102800, { locale: "ar", compact: true }), formatMoney(1500, { locale: "ar" }), formatNumber(-12, { locale: "ar" }), formatPercent(0.5, { locale: "ar" })]) {
+      expect(s).not.toMatch(marks);
+    }
+    expect(formatMoney(102800, { locale: "ar", compact: true })).toContain("102.8");
   });
 });

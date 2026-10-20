@@ -55,27 +55,33 @@ export function formatDual(d: DateInput, o: FormatOpts): string {
   return `${formatDate(date, { ...o, calendar: "gregory" })} · ${formatDate(date, { ...o, calendar: "islamic-umalqura" })}`;
 }
 
+// ICU builds disagree on bidi marks around Arabic numbers (Node on the server adds a leading
+// U+200F to compact currency, browsers don't), which breaks hydration. Numbers render inside
+// isolated runs anyway, so the marks are dropped.
+const BIDI_MARKS = /[\u200e\u200f\u061c]/g;
+const clean = (s: string) => s.replace(BIDI_MARKS, "");
+
 export function formatMoney(amount: number | string | { toString(): string } | null | undefined, o: FormatOpts & { currency?: string; compact?: boolean }): string {
   if (amount === null || amount === undefined || amount === "") return "—";
   const n = typeof amount === "number" ? amount : Number(amount.toString());
   if (!Number.isFinite(n)) return "—";
-  return new Intl.NumberFormat(tag(o.locale), {
+  return clean(new Intl.NumberFormat(tag(o.locale), {
     style: "currency",
     currency: o.currency ?? "SAR",
     maximumFractionDigits: o.compact ? 1 : 2,
     minimumFractionDigits: o.compact ? 0 : 2,
     notation: o.compact ? "compact" : "standard",
-  }).format(n);
+  }).format(n));
 }
 
 export function formatNumber(n: number | null | undefined, o: FormatOpts & { maximumFractionDigits?: number } = { locale: "ar" }): string {
   if (n === null || n === undefined || !Number.isFinite(n)) return "—";
-  return new Intl.NumberFormat(tag(o.locale), { maximumFractionDigits: o.maximumFractionDigits ?? 0 }).format(n);
+  return clean(new Intl.NumberFormat(tag(o.locale), { maximumFractionDigits: o.maximumFractionDigits ?? 0 }).format(n));
 }
 
 export function formatPercent(ratio: number | null | undefined, o: FormatOpts): string {
   if (ratio === null || ratio === undefined || !Number.isFinite(ratio)) return "—";
-  return new Intl.NumberFormat(tag(o.locale), { style: "percent", maximumFractionDigits: 1 }).format(ratio);
+  return clean(new Intl.NumberFormat(tag(o.locale), { style: "percent", maximumFractionDigits: 1 }).format(ratio));
 }
 
 export function formatRelative(d: DateInput, o: FormatOpts, now = new Date()): string {
