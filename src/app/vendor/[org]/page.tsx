@@ -13,7 +13,7 @@ async function VendorHome({ params }: { params: Promise<{ org: string }> }) {
   const data = await vendorPortal(ctx);
   return (
     <div className="grid gap-4">
-      <div><h1 className="text-xl font-semibold">{data.vendor.name}</h1><p className="text-sm text-muted-foreground">{m.vendors.portalDesc}</p></div>
+      <div><h1 className="text-xl font-medium">{data.vendor.name}</h1><p className="text-sm text-muted-foreground">{m.vendors.portalDesc}</p></div>
       <VendorWork orgSlug={org} workOrders={data.workOrders} />
     </div>
   );

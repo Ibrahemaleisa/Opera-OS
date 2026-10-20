@@ -13,6 +13,7 @@ import { useI18n } from "@/lib/i18n/client";
 import { TimeAgo } from "@/components/app/time-ago";
 import { formatRelative } from "@/lib/format";
 import { cn } from "@/lib/utils";
+import { OperaWordmark } from "@/components/brand/logo";
 import { logoutAction, setCalendarAction, setLocaleAction } from "@/app/actions/session";
 import { markReadAction, notificationsAction } from "@/app/actions/shell";
 import { CommandPalette } from "./command-palette";
@@ -29,7 +30,7 @@ export interface ShellProps {
 
 function OrgMark({ name, color, className }: { name: string; color: string; className?: string }) {
   return (
-    <span className={cn("flex size-7 shrink-0 items-center justify-center rounded-md text-[13px] font-bold text-white", className)} style={{ backgroundColor: color }}>
+    <span className={cn("flex size-7 shrink-0 items-center justify-center rounded-md text-[13px] font-medium text-white", className)} style={{ backgroundColor: color }}>
       {name.trim().charAt(0)}
     </span>
   );
@@ -44,13 +45,18 @@ export function AppShell({ org, user, orgs, nav, unread, children }: ShellProps)
 
   const sidebar = (
     <div className="flex h-full flex-col">
-      <div className="flex h-14 items-center border-b border-sidebar-border px-3">
+      <div className="flex h-14 items-center px-4">
+        <Link href={`/o/${org.slug}`} aria-label={m.common.appName} onClick={() => setMobileOpen(false)}>
+          <OperaWordmark tone="light" className="h-5" />
+        </Link>
+      </div>
+      <div className="px-2 pb-2">
         <DropdownMenu>
-          <DropdownMenuTrigger className="flex w-full min-w-0 items-center gap-2 rounded-md px-1.5 py-1 text-start hover:bg-sidebar-active/70">
+          <DropdownMenuTrigger className="flex w-full min-w-0 items-center gap-2 rounded-md border border-sidebar-border px-2 py-1.5 text-start transition-colors hover:bg-sidebar-active">
             <OrgMark name={org.name} color={org.brandColor} />
             <span className="min-w-0 flex-1">
-              <span className="block truncate text-[13px] font-semibold">{org.name}</span>
-              <span className="block truncate text-[11px] text-sidebar-muted">{m.common.appName} · {m.common.appTagline}</span>
+              <span className="block truncate text-[13px] font-medium">{org.name}</span>
+              <span className="block truncate text-[11px] text-sidebar-muted">{m.common.appTagline}</span>
             </span>
             <ChevronsUpDown className="size-3.5 shrink-0 text-sidebar-muted" />
           </DropdownMenuTrigger>
@@ -76,9 +82,9 @@ export function AppShell({ org, user, orgs, nav, unread, children }: ShellProps)
 
   return (
     <div className="flex min-h-dvh">
-      <aside className="no-print sticky top-0 hidden h-dvh w-60 shrink-0 border-e border-sidebar-border bg-sidebar text-sidebar-foreground lg:block">{sidebar}</aside>
+      <aside className="no-print sticky top-0 hidden h-dvh w-60 shrink-0 bg-sidebar text-sidebar-foreground lg:block">{sidebar}</aside>
       <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
-        <SheetContent side={locale === "ar" ? "right" : "left"} className="w-72 bg-sidebar p-0 text-sidebar-foreground">
+        <SheetContent side={locale === "ar" ? "right" : "left"} className="w-72 border-sidebar-border bg-sidebar p-0 text-sidebar-foreground [&>button]:text-sidebar-foreground">
           <SheetTitle className="sr-only">{m.shell.menu}</SheetTitle>
           {sidebar}
         </SheetContent>
@@ -90,7 +96,7 @@ export function AppShell({ org, user, orgs, nav, unread, children }: ShellProps)
           </Button>
           <button
             onClick={() => setPaletteOpen(true)}
-            className="flex h-8 w-full max-w-md items-center gap-2 rounded-md border bg-card px-2.5 text-start text-sm text-muted-foreground shadow-xs transition-colors hover:border-input"
+            className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-md border border-input bg-card px-3 text-start text-sm text-muted-foreground transition-colors hover:border-lilac sm:max-w-md"
           >
             <Search className="size-3.5" />
             <span className="flex-1 truncate">{m.shell.searchAnything}</span>
@@ -195,12 +201,12 @@ function NotificationBell({ orgSlug, initialUnread }: { orgSlug: string; initial
       <PopoverTrigger asChild>
         <Button variant="ghost" size="icon-sm" className="relative" aria-label={m.shell.openNotifications}>
           <Bell />
-          {unread > 0 && <span className="tabular absolute -top-0.5 -end-0.5 min-w-4 rounded-full bg-danger px-1 text-[9px] leading-4 font-bold text-white">{unread > 99 ? "99+" : unread}</span>}
+          {unread > 0 && <span className="tabular absolute -top-0.5 -end-0.5 min-w-4 rounded-full bg-danger px-1 text-[9px] leading-4 font-medium text-white">{unread > 99 ? "99+" : unread}</span>}
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" className="w-[360px] p-0">
         <div className="flex items-center justify-between border-b px-3 py-2">
-          <span className="text-sm font-semibold">{m.notif.title}</span>
+          <span className="text-sm font-medium">{m.notif.title}</span>
           {unread > 0 && (
             <button className="text-xs text-primary hover:underline" onClick={markAll}>
               {m.shell.markAllRead}
@@ -216,7 +222,7 @@ function NotificationBell({ orgSlug, initialUnread }: { orgSlug: string; initial
                 key={n.id}
                 href={n.link ? `/o/${orgSlug}${n.link}` : `/o/${orgSlug}/notifications`}
                 onClick={() => { setOpen(false); if (!n.readAt) markReadAction(orgSlug, { ids: [n.id] }); }}
-                className={cn("flex gap-2 border-b px-3 py-2.5 last:border-0 hover:bg-muted/50", !n.readAt && "bg-jade-soft/40")}
+                className={cn("flex gap-2 border-b px-3 py-2.5 last:border-0 hover:bg-muted/50", !n.readAt && "bg-brand-soft/40")}
               >
                 <span className={cn("mt-1.5 size-1.5 shrink-0 rounded-full", n.readAt ? "bg-transparent" : "bg-primary")} />
                 <span className="min-w-0">
@@ -240,14 +246,14 @@ function UserMenu({ user }: { user: { name: string; email: string; roleLabel: st
   const initials = user.name.split(/\s+/).map((p) => p[0]).slice(0, 2).join("");
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger className="ms-1 flex size-8 items-center justify-center rounded-full bg-primary text-xs font-semibold text-primary-foreground" aria-label={m.common.profile}>
+      <DropdownMenuTrigger className="ms-1 flex size-8 items-center justify-center rounded-full bg-aubergine text-xs font-medium text-mist outline-none focus-visible:ring-2 focus-visible:ring-lilac focus-visible:ring-offset-2 focus-visible:ring-offset-background" aria-label={m.common.profile}>
         {initials}
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-60">
         <DropdownMenuLabel>
           <div className="text-[13px] font-medium">{user.name}</div>
           <div className="text-xs font-normal text-muted-foreground">{user.email}</div>
-          <div className="mt-1 text-[11px] font-normal text-primary">{user.roleLabel}</div>
+          <div className="mt-1 text-[11px] font-normal text-muted-foreground">{user.roleLabel}</div>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
         <DropdownMenuItem asChild>

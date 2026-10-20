@@ -49,7 +49,7 @@ export function TemplateBuilder({ orgSlug, templateId, versions, usage }: { orgS
     return def.workstreams.flatMap((w) =>
       w.tasks.map((tk) => {
         const s = anchors[tk.anchor] + tk.offsetDays * 86400_000;
-        return { id: `${w.key}:${tk.key}`, label: t(tk.title), sub: t(w.name), start: new Date(s), end: new Date(s + Math.max(tk.durationDays, 0.3) * 86400_000), tone: tk.requiresApproval ? ("warning" as const) : ("jade" as const) };
+        return { id: `${w.key}:${tk.key}`, label: t(tk.title), sub: t(w.name), start: new Date(s), end: new Date(s + Math.max(tk.durationDays, 0.3) * 86400_000), tone: tk.requiresApproval ? ("warning" as const) : ("brand" as const) };
       }),
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -88,7 +88,7 @@ export function TemplateBuilder({ orgSlug, templateId, versions, usage }: { orgS
             <ul className="p-1">
               {def.workstreams.map((w, i) => (
                 <li key={w.key + i}>
-                  <button onClick={() => setWsIndex(i)} className={cn("w-full rounded-md px-2 py-1.5 text-start text-[13px]", i === wsIndex ? "bg-jade-soft text-primary" : "hover:bg-muted")}>
+                  <button onClick={() => setWsIndex(i)} className={cn("w-full rounded-md px-2 py-1.5 text-start text-[13px]", i === wsIndex ? "bg-brand-soft text-primary" : "hover:bg-muted")}>
                     {t(w.name)} <span className="text-[11px] text-muted-foreground">({w.tasks.length})</span>
                   </button>
                 </li>

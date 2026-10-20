@@ -1,7 +1,7 @@
-/* Operra field service worker.
+/* Opera field service worker.
  * Caches the field app shell and static assets so the driver workspace opens offline.
  * Never caches API responses (they contain recipient data) or file downloads. */
-const CACHE = "operra-field-v1";
+const CACHE = "operra-field-v2";
 
 self.addEventListener("install", () => self.skipWaiting());
 self.addEventListener("activate", (e) => {

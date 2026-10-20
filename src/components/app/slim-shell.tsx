@@ -12,8 +12,8 @@ export function SlimShell({ orgName, brandColor, homeHref, title, unread, notifi
         <div className="h-1" style={{ background: brand ?? "var(--primary)" }} />
         <div className="mx-auto flex h-14 max-w-6xl items-center gap-3 px-4">
           <Link href={homeHref} className="flex items-center gap-2">
-            <span className="flex size-8 items-center justify-center rounded-md text-sm font-bold text-white" style={{ background: brand ?? "var(--primary)" }}>{orgName.slice(0, 1)}</span>
-            <span className="grid leading-tight"><span className="text-sm font-semibold">{orgName}</span><span className="text-[11px] text-muted-foreground">{title}</span></span>
+            <span className="flex size-8 items-center justify-center rounded-md text-sm font-medium text-white" style={{ background: brand ?? "var(--primary)" }}>{orgName.slice(0, 1)}</span>
+            <span className="grid leading-tight"><span className="text-sm font-medium">{orgName}</span><span className="text-[11px] text-muted-foreground">{title}</span></span>
           </Link>
           <div className="ms-auto flex items-center gap-1">
             <Link href={notificationsHref} className="relative rounded-md p-2 hover:bg-muted" aria-label="notifications">

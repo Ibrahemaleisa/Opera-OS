@@ -12,13 +12,13 @@ export default async function InvitePage({ params }: { params: Promise<{ token: 
   if (!inv) {
     return (
       <div>
-        <h1 className="text-xl font-semibold">{m.errors.tokenInvalid}</h1>
+        <h1 className="text-xl font-medium">{m.errors.tokenInvalid}</h1>
       </div>
     );
   }
   return (
     <div>
-      <h1 className="text-2xl font-semibold tracking-tight">{interpolate(m.auth.inviteTitle, { org: inv.org.name })}</h1>
+      <h1 className="text-2xl font-medium">{interpolate(m.auth.inviteTitle, { org: inv.org.name })}</h1>
       <p className="mt-1 text-sm text-muted-foreground">{interpolate(m.auth.inviteSubtitle, { role: locale === "ar" ? inv.role.nameAr : inv.role.nameEn })}</p>
       <p className="ltr-nums mt-3 text-sm">{inv.invitation.email}</p>
       <AcceptForm token={token} existing={inv.existingUser} defaultName={inv.invitation.name ?? ""} />

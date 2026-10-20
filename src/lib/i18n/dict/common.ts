@@ -4,6 +4,7 @@ export const common = defineMessages(
   {
     appName: "أوبيرا",
     appTagline: "نظام تشغيل الفعاليات",
+    brandPromise: "كل عمل في حلقته، وكل لحظة في مكانها.",
     save: "حفظ",
     saving: "جارٍ الحفظ…",
     cancel: "إلغاء",
@@ -127,8 +128,9 @@ export const common = defineMessages(
     reveal: "إظهار",
   },
   {
-    appName: "Operra",
+    appName: "Opera",
     appTagline: "Events Operating System",
+    brandPromise: "Every task in its loop. Every moment in its place.",
     save: "Save",
     saving: "Saving…",
     cancel: "Cancel",

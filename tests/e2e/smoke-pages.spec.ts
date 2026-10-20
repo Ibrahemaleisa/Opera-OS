@@ -22,7 +22,7 @@ test("org pages render and report export downloads", async ({ page }) => {
     const res = await page.goto(`/o/${slug}${path}`);
     expect(res?.status(), path).toBe(200);
     await expect(page.locator("main, body").getByText(heading).first(), path).toBeVisible();
-    await expect(page.getByText("حدث خطأ غير متوقع")).toHaveCount(0);
+    await expect(page.getByText("لم نتمكن من تحميل هذه الصفحة")).toHaveCount(0);
   }
   await page.goto(`/o/${slug}/settings/automation`);
   await expect(page.getByTestId("automation-rule").first()).toBeVisible();

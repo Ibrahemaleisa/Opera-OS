@@ -7,9 +7,10 @@ import type { ColumnDef } from "@tanstack/react-table";
 import { CalendarDays, ChevronLeft, ChevronRight, FolderKanban, GanttChart, Kanban, List } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { DataTable } from "@/components/app/data-table";
-import { EmptyState, ProgressBar, Section } from "@/components/app/page";
+import { EmptyState, Section } from "@/components/app/page";
 import { PriorityMark, StatusBadge } from "@/components/app/status-badge";
 import { HealthPill } from "@/components/app/health";
+import { StatusRing, type RingState } from "@/components/brand/status-ring";
 import { formatDate, formatMoney, TIMEZONE } from "@/lib/format";
 import { interpolate } from "@/lib/i18n";
 import { useI18n } from "@/lib/i18n/client";
@@ -17,6 +18,13 @@ import { cn } from "@/lib/utils";
 import type { PortfolioProject } from "@/server/modules/projects/service";
 
 type P = PortfolioProject;
+
+function projectRingState(p: P): RingState {
+  if (p.status === "COMPLETED" || p.progress >= 1) return "complete";
+  if (p.status === "ON_HOLD") return "paused";
+  if (p.tasks.overdue > 0 || p.status === "AT_RISK") return "late";
+  return p.progress > 0 ? "inProgress" : "notStarted";
+}
 
 export function ViewSwitch({ views, current }: { views: { key: string; label: string; icon: React.ReactNode }[]; current: string }) {
   const router = useRouter();
@@ -59,7 +67,7 @@ export function PortfolioViews({ orgSlug, projects, view, canCreate }: { orgSlug
       </Section>
     );
   return (
-    <div className="grid gap-3">
+    <div className="grid grid-cols-1 gap-3">
       <div className="flex items-center justify-between gap-2">
         <ViewSwitch views={views} current={view} />
         <span className="tabular text-xs text-muted-foreground">{projects.length}</span>
@@ -89,7 +97,7 @@ function ListView({ orgSlug, projects }: { orgSlug: string; projects: P[] }) {
           </div>
         ),
       },
-      { id: "client", accessorFn: (r) => r.client?.name ?? "", header: m.projects.client },
+      { id: "client", accessorFn: (r) => r.client?.name ?? "", header: m.projects.client, cell: ({ getValue }) => <span className="block min-w-28 text-[13px]">{getValue() as string}</span> },
       { accessorKey: "status", header: m.common.status, cell: ({ row }) => <StatusBadge status={row.original.status} label={m.enums.projectStatus[row.original.status]} /> },
       { accessorKey: "priority", header: m.common.priority, cell: ({ row }) => <PriorityMark priority={row.original.priority} label={m.enums.priority[row.original.priority]} /> },
       { id: "health", accessorFn: (r) => r.health.score, header: m.projects.health, cell: ({ row }) => <HealthPill health={row.original.health} /> },
@@ -98,9 +106,12 @@ function ListView({ orgSlug, projects }: { orgSlug: string; projects: P[] }) {
         accessorFn: (r) => r.progress,
         header: m.projects.progress,
         cell: ({ row }) => (
-          <div className="w-32">
-            <ProgressBar value={row.original.progress * 100} />
-            <div className="tabular mt-1 text-[11px] text-muted-foreground">{interpolate(m.projects.tasksDone, { done: row.original.tasks.done, total: row.original.tasks.total })}{row.original.tasks.overdue > 0 && <span className="ms-1 text-danger">· {row.original.tasks.overdue} {m.common.overdue}</span>}</div>
+          <div className="flex items-center gap-2.5 whitespace-nowrap">
+            <StatusRing state={projectRingState(row.original)} value={row.original.progress} size={22} />
+            <div className="min-w-0">
+              <div className="tabular text-xs font-medium">{Math.round(row.original.progress * 100)}%</div>
+              <div className="tabular text-[11px] text-muted-foreground">{interpolate(m.projects.tasksDone, { done: row.original.tasks.done, total: row.original.tasks.total })}{row.original.tasks.overdue > 0 && <span className="ms-1 text-danger">· {row.original.tasks.overdue} {m.common.overdue}</span>}</div>
+            </div>
           </div>
         ),
       },
@@ -129,7 +140,10 @@ function ProjectCard({ orgSlug, p }: { orgSlug: string; p: P }) {
       </div>
       <div className="mt-1 text-[13px] leading-snug font-medium">{p.name}</div>
       {p.client && <div className="mt-0.5 text-xs text-muted-foreground">{p.client.name}</div>}
-      <ProgressBar value={p.progress * 100} className="mt-3" />
+      <div className="mt-3 flex items-center gap-2">
+        <StatusRing state={projectRingState(p)} value={p.progress} size={18} />
+        <span className="tabular text-[11px] text-muted-foreground">{Math.round(p.progress * 100)}%</span>
+      </div>
       <div className="mt-2 flex items-center justify-between text-[11px] text-muted-foreground">
         <span className="tabular">{formatDate(p.eventStartAt ?? p.deadline, fmt)}</span>
         <PriorityMark priority={p.priority} label={m.enums.priority[p.priority]} />
@@ -174,7 +188,7 @@ export function MonthCalendar<T extends { id: string; name: string; start: strin
   const days = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
   const cells: (Date | null)[] = [...Array(startWeekday).fill(null), ...Array.from({ length: days }, (_, i) => new Date(Date.UTC(year, month, i + 1, 9)))];
   while (cells.length % 7) cells.push(null);
-  const weekdayFmt = new Intl.DateTimeFormat(locale === "ar" ? "ar-SA" : "en-GB", { weekday: "short", timeZone: "UTC" });
+  const weekdayFmt = new Intl.DateTimeFormat(locale === "ar" ? "ar-SA-u-nu-latn-ca-gregory" : "en-GB", { weekday: "short", timeZone: "UTC" });
   const weekdays = Array.from({ length: 7 }, (_, i) => weekdayFmt.format(new Date(Date.UTC(2026, 0, 3 + i))));
   const byDay = new Map<string, T[]>();
   for (const it of items) {
@@ -190,7 +204,7 @@ export function MonthCalendar<T extends { id: string; name: string; start: strin
   const Next = locale === "ar" ? ChevronLeft : ChevronRight;
   return (
     <Section
-      title={new Intl.DateTimeFormat(locale === "ar" ? "ar-SA-u-nu-latn" : "en-GB", { month: "long", year: "numeric", timeZone: "UTC" }).format(cursor)}
+      title={new Intl.DateTimeFormat(locale === "ar" ? "ar-SA-u-nu-latn-ca-gregory" : "en-GB", { month: "long", year: "numeric", timeZone: "UTC" }).format(cursor)}
       actions={
         <>
           <Button variant="ghost" size="icon-sm" onClick={() => setCursor(new Date(Date.UTC(year, month - 1, 1)))} aria-label="previous"><Prev /></Button>
@@ -207,10 +221,10 @@ export function MonthCalendar<T extends { id: string; name: string; start: strin
           const today = d && ymd(d) === ymd(new Date());
           return (
             <div key={i} className={cn("min-h-24 border-e border-b p-1 last:border-e-0", !d && "bg-muted/30")}>
-              {d && <div className={cn("tabular mb-1 text-end text-[11px] text-muted-foreground", today && "font-bold text-primary")}>{d.getUTCDate()}</div>}
+              {d && <div className={cn("tabular mb-1 text-end text-[11px] text-muted-foreground", today && "font-medium text-primary")}>{d.getUTCDate()}</div>}
               <div className="grid gap-0.5">
                 {list.slice(0, 3).map((it) => (
-                  <Link key={it.id} href={it.href} className={cn("truncate rounded px-1 py-0.5 text-[10.5px] leading-tight", it.tone === "danger" ? "bg-danger-soft text-danger" : "bg-jade-soft text-primary")}>{it.name}</Link>
+                  <Link key={it.id} href={it.href} className={cn("truncate rounded px-1 py-0.5 text-[10.5px] leading-tight", it.tone === "danger" ? "bg-danger-soft text-danger" : "bg-brand-soft text-primary")}>{it.name}</Link>
                 ))}
                 {list.length > 3 && <span className="px-1 text-[10px] text-muted-foreground">+{list.length - 3}</span>}
               </div>
@@ -227,7 +241,7 @@ function MonthCalendarProjects({ orgSlug, projects }: { orgSlug: string; project
   return <MonthCalendar locale={locale} items={projects.map((p) => ({ id: p.id, name: p.name, start: p.eventStartAt ?? p.deadline, end: p.eventEndAt, href: `/o/${orgSlug}/projects/${p.id}`, tone: p.health.level === "critical" ? "danger" : undefined }))} />;
 }
 
-export function GanttRows({ rows, locale }: { rows: { id: string; label: React.ReactNode; sub?: React.ReactNode; start: Date | null; end: Date | null; href?: string; tone?: "jade" | "danger" | "warning" | "muted"; progress?: number }[]; locale: "ar" | "en" }) {
+export function GanttRows({ rows, locale }: { rows: { id: string; label: React.ReactNode; sub?: React.ReactNode; start: Date | null; end: Date | null; href?: string; tone?: "brand" | "danger" | "warning" | "muted"; progress?: number }[]; locale: "ar" | "en" }) {
   const [now] = useState(() => Date.now());
   const dated = rows.filter((r) => r.start || r.end);
   const min = Math.min(...dated.map((r) => (r.start ?? r.end)!.getTime()), now);
@@ -238,10 +252,10 @@ export function GanttRows({ rows, locale }: { rows: { id: string; label: React.R
   const d = new Date(min);
   d.setUTCDate(1);
   while (d.getTime() <= max) {
-    if (d.getTime() >= min) months.push({ label: new Intl.DateTimeFormat(locale === "ar" ? "ar-SA-u-nu-latn" : "en-GB", { month: "short", year: "2-digit", timeZone: "UTC" }).format(d), left: pct(d.getTime()) });
+    if (d.getTime() >= min) months.push({ label: new Intl.DateTimeFormat(locale === "ar" ? "ar-SA-u-nu-latn-ca-gregory" : "en-GB", { month: "short", year: "2-digit", timeZone: "UTC" }).format(d), left: pct(d.getTime()) });
     d.setUTCMonth(d.getUTCMonth() + 1);
   }
-  const tones = { jade: "bg-primary", danger: "bg-danger", warning: "bg-warning", muted: "bg-muted-foreground/40" };
+  const tones = { brand: "bg-primary", danger: "bg-danger", warning: "bg-warning", muted: "bg-muted-foreground/40" };
   return (
     <div className="overflow-x-auto">
       <div className="min-w-[760px]">
@@ -260,7 +274,7 @@ export function GanttRows({ rows, locale }: { rows: { id: string; label: React.R
               <div className="relative h-full flex-1">
                 <div className="absolute inset-y-0 w-px bg-danger/50" style={{ insetInlineStart: `${pct(now)}%` }} />
                 {s !== undefined && e !== undefined && (
-                  <div className={cn("absolute top-1/2 h-3.5 -translate-y-1/2 overflow-hidden rounded-sm opacity-80", tones[r.tone ?? "jade"])} style={{ insetInlineStart: `${pct(s)}%`, width: `${Math.max(0.6, pct(e) - pct(s))}%` }}>
+                  <div className={cn("absolute top-1/2 h-3.5 -translate-y-1/2 overflow-hidden rounded-sm opacity-80", tones[r.tone ?? "brand"])} style={{ insetInlineStart: `${pct(s)}%`, width: `${Math.max(0.6, pct(e) - pct(s))}%` }}>
                     {r.progress !== undefined && <div className="h-full bg-black/20" style={{ width: `${r.progress * 100}%` }} />}
                   </div>
                 )}
@@ -286,7 +300,7 @@ function Timeline({ orgSlug, projects }: { orgSlug: string; projects: P[] }) {
           start: p.startDate ? new Date(p.startDate) : null,
           end: p.deadline ? new Date(p.deadline) : p.eventStartAt ? new Date(p.eventStartAt) : null,
           href: `/o/${orgSlug}/projects/${p.id}`,
-          tone: p.health.level === "critical" ? "danger" : p.health.level === "watch" ? "warning" : "jade",
+          tone: p.health.level === "critical" ? "danger" : p.health.level === "watch" ? "warning" : "brand",
           progress: p.progress,
         }))}
       />

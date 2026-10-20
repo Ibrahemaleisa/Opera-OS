@@ -21,7 +21,7 @@ async function TemplatesPage({ params }: { params: Promise<{ org: string }> }) {
       <div className="grid gap-6">
         {cats.map((c) => (
           <div key={c}>
-            <h2 className="mb-2 text-xs font-semibold text-muted-foreground uppercase">{m.templates.categories[c as keyof typeof m.templates.categories] ?? c}</h2>
+            <h2 className="mb-2 text-xs font-medium text-muted-foreground uppercase">{m.templates.categories[c as keyof typeof m.templates.categories] ?? c}</h2>
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
               {templates.filter((t) => t.category === c).map((t) => (
                 <Link key={t.id} href={`/o/${org}/templates/${t.id}`} className="surface flex flex-col gap-1 p-4 transition-colors hover:border-primary/50">

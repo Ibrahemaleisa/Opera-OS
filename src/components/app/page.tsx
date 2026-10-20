@@ -78,13 +78,13 @@ export function EmptyState({ icon, title, body, action, className }: { icon?: Re
 export function Stat({ label, value, hint, tone, icon, href }: { label: React.ReactNode; value: React.ReactNode; hint?: React.ReactNode; tone?: "default" | "success" | "warning" | "danger"; icon?: React.ReactNode; href?: string }) {
   const body = (
     <div className="surface flex h-full flex-col gap-1 px-4 py-3 transition-colors hover:border-input">
-      <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
-        <span className="truncate">{label}</span>
-        {icon && <span className="[&_svg]:size-4 opacity-70">{icon}</span>}
+      <div className="flex items-start justify-between gap-2 text-xs text-muted-foreground">
+        <span className="line-clamp-2 leading-snug">{label}</span>
+        {icon && <span className="shrink-0 opacity-70 [&_svg]:size-4">{icon}</span>}
       </div>
       <div
         className={cn(
-          "tabular text-2xl font-semibold tracking-tight",
+          "tabular mt-auto text-xl font-medium [overflow-wrap:anywhere] sm:text-2xl",
           tone === "success" && "text-success",
           tone === "warning" && "text-warning",
           tone === "danger" && "text-danger",
@@ -107,11 +107,11 @@ export function KV({ label, children }: { label: React.ReactNode; children: Reac
   );
 }
 
-export function ProgressBar({ value, className, tone = "jade" }: { value: number; className?: string; tone?: "jade" | "success" | "warning" | "danger" }) {
+export function ProgressBar({ value, className, tone = "brand" }: { value: number; className?: string; tone?: "brand" | "success" | "warning" | "danger" }) {
   const pct = Math.max(0, Math.min(100, Math.round(value)));
-  const color = { jade: "bg-primary", success: "bg-success", warning: "bg-warning", danger: "bg-danger" }[tone];
+  const color = { brand: "bg-primary", success: "bg-success", warning: "bg-warning", danger: "bg-danger" }[tone];
   return (
-    <div className={cn("h-1.5 w-full overflow-hidden rounded-full bg-muted", className)} role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
+    <div className={cn("h-1.5 w-full overflow-hidden rounded-full bg-chart-track", className)} role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
       <div className={cn("h-full rounded-full transition-[width]", color)} style={{ width: `${pct}%` }} />
     </div>
   );

@@ -4,108 +4,140 @@
 @custom-variant dark (&:is(.dark *));
 
 /*
- * Operra design tokens.
- * Jade (primary) on warm stone neutrals, ink text, restrained status colors.
+ * Opera design tokens — Brand Guidelines v1.2 (2026).
+ * Primary: Plum #1E0D33 · Night #08050E · Violet #64228A · Mist #F5F2F8.
+ * Secondary: Aubergine #3C1862 · Lilac #C9B3E6 · Ink #170B26 · Slate #5E5470.
+ * Functional (product only): Success #1F7A52 · Warning #9A5B00 · Error #B3261E.
+ * Proportion: Plum/Night ground 60%, Mist 25%, Lilac/Aubergine 12%, Violet 3% —
+ * violet is reserved for the one primary action, the current state and the dot.
+ * Every text pair below meets WCAG AA (4.5:1); violet on plum (1.8:1) is decoration only.
  * All layout uses logical properties so RTL/LTR mirror automatically.
  */
 :root {
   --radius: 0.5rem;
 
-  --background: #f6f5f1;
-  --foreground: #14181f;
+  /* brand palette (fixed, theme-independent) */
+  --plum: #1e0d33;
+  --night: #08050e;
+  --brand-violet: #64228a;
+  --mist: #f5f2f8;
+  --aubergine: #3c1862;
+  --lilac: #c9b3e6;
+  --ink: #170b26;
+  --slate: #5e5470;
+  --error-on-dark: #f08a80; /* error text/icons on Plum or Night grounds (8:1) */
+  --success-on-dark: #5cc497; /* success marks on Plum or Night grounds (9:1) */
+  /* the night gradient: the brand's approved dark ground */
+  --night-gradient: radial-gradient(130% 130% at 0% 0%, #3c1862 0%, #1e0d33 42%, #08050e 100%);
+
+  --background: #f5f2f8;
+  --foreground: #170b26;
   --card: #ffffff;
-  --card-foreground: #14181f;
+  --card-foreground: #170b26;
   --popover: #ffffff;
-  --popover-foreground: #14181f;
-  --primary: #0e5a52;
-  --primary-foreground: #ffffff;
-  --secondary: #eeece6;
-  --secondary-foreground: #1d232b;
-  --muted: #efede8;
-  --muted-foreground: #66645e;
-  --accent: #ebe8e1;
-  --accent-foreground: #14181f;
-  --destructive: #b42318;
-  --border: #e2dfd7;
-  --input: #d9d5cc;
-  --ring: #0e5a52;
+  --popover-foreground: #170b26;
+  --primary: #64228a;
+  --primary-foreground: #f5f2f8;
+  --primary-hover: #3c1862;
+  --secondary: #ede6f4;
+  --secondary-foreground: #1e0d33;
+  --muted: #efeaf5;
+  --muted-foreground: #5e5470;
+  --accent: #ede6f4;
+  --accent-foreground: #1e0d33;
+  --destructive: #b3261e;
+  --border: #e3dbec;
+  --input: #d3c5e5;
+  --ring: #64228a;
 
-  --success: #1f7a4d;
-  --success-soft: #e3f2ea;
-  --warning: #a8670f;
-  --warning-soft: #fbf0dc;
-  --danger: #b42318;
-  --danger-soft: #fbe6e3;
-  --info: #1d5fa8;
-  --info-soft: #e2edf9;
-  --violet: #5b3fa6;
-  --violet-soft: #ece7f7;
-  --jade-soft: #e1efec;
-  --sand: #c9a46a;
+  --success: #1f7a52;
+  --success-soft: #e6f3ec;
+  --warning: #9a5b00;
+  --warning-soft: #f8efe0;
+  --danger: #b3261e;
+  --danger-soft: #f9e7e5;
+  --info: #2f6f8f;
+  --info-soft: #e4eff4;
+  --violet: #3c1862;
+  --violet-soft: #e9e0f3;
+  --brand-soft: #ede6f4;
+  --ochre: #b98a2e;
 
-  --sidebar: #efede7;
-  --sidebar-foreground: #1d232b;
-  --sidebar-muted: #6f6c65;
-  --sidebar-active: #ffffff;
-  --sidebar-border: #e0ddd5;
+  --sidebar: #1e0d33;
+  --sidebar-foreground: #f5f2f8;
+  --sidebar-muted: #b9abcf;
+  --sidebar-active: #2e1b4a;
+  --sidebar-border: #2b1a44;
+  --sidebar-dot: #c9b3e6;
 
-  --chart-1: #0e5a52;
-  --chart-2: #c9a46a;
-  --chart-3: #1d5fa8;
-  --chart-4: #b42318;
-  --chart-5: #5b3fa6;
-  --chart-6: #6f8f3a;
+  /* categories: four at most, told apart by lightness as well as hue */
+  --chart-1: #64228a;
+  --chart-2: #b98a2e;
+  --chart-3: #2f6f8f;
+  --chart-4: #5e5470;
+  --chart-5: #9a6bc4;
+  --chart-6: #c9b3e6;
+  /* neutral data bars stay on the ground colour; violet is kept for the "now" mark */
+  --chart-bar: #1e0d33;
+  --chart-track: #ede6f4;
 }
 
 .dark {
-  --background: #0c0f12;
-  --foreground: #e9e7e2;
-  --card: #13171b;
-  --card-foreground: #e9e7e2;
-  --popover: #171b20;
-  --popover-foreground: #e9e7e2;
-  --primary: #3eb5a2;
-  --primary-foreground: #04201c;
-  --secondary: #1d2228;
-  --secondary-foreground: #e9e7e2;
-  --muted: #1a1f24;
-  --muted-foreground: #9a978f;
-  --accent: #20262c;
-  --accent-foreground: #e9e7e2;
-  --destructive: #f0645a;
-  --border: #252b32;
-  --input: #2d343c;
-  --ring: #3eb5a2;
+  --background: #0e0918;
+  --foreground: #f5f2f8;
+  --card: #170b26;
+  --card-foreground: #f5f2f8;
+  --popover: #1e0d33;
+  --popover-foreground: #f5f2f8;
+  /* violet text on a dark ground fails contrast, so the dark theme leads with lilac-violet */
+  --primary: #b794e0;
+  --primary-foreground: #0e0918;
+  --primary-hover: #c9b3e6;
+  --secondary: #24153a;
+  --secondary-foreground: #f5f2f8;
+  --muted: #1c1030;
+  --muted-foreground: #a99cbf;
+  --accent: #26173c;
+  --accent-foreground: #f5f2f8;
+  --destructive: #f08a80;
+  --border: #2a1c40;
+  --input: #3a2a55;
+  --ring: #b794e0;
 
-  --success: #4cc38a;
-  --success-soft: #11291e;
-  --warning: #e0a44a;
-  --warning-soft: #2d2212;
-  --danger: #f0645a;
-  --danger-soft: #331715;
-  --info: #66a3e8;
-  --info-soft: #132235;
-  --violet: #a68ce8;
-  --violet-soft: #221b36;
-  --jade-soft: #10282a;
-  --sand: #d8b57c;
+  --success: #5cc497;
+  --success-soft: #13261e;
+  --warning: #e0a848;
+  --warning-soft: #2a1f10;
+  --danger: #f08a80;
+  --danger-soft: #33171a;
+  --info: #7db6d3;
+  --info-soft: #10222c;
+  --violet: #c9b3e6;
+  --violet-soft: #2a1a40;
+  --brand-soft: #2a1a40;
+  --ochre: #d2a85a;
 
-  --sidebar: #101317;
-  --sidebar-foreground: #dedbd5;
-  --sidebar-muted: #8b887f;
-  --sidebar-active: #1b2026;
-  --sidebar-border: #1f252b;
+  --sidebar: #08050e;
+  --sidebar-foreground: #f5f2f8;
+  --sidebar-muted: #a99cbf;
+  --sidebar-active: #1e0d33;
+  --sidebar-border: #1e1330;
+  --sidebar-dot: #c9b3e6;
 
-  --chart-1: #3eb5a2;
-  --chart-2: #d8b57c;
-  --chart-3: #66a3e8;
-  --chart-4: #f0645a;
-  --chart-5: #a68ce8;
-  --chart-6: #9cbf5f;
+  --chart-1: #b794e0;
+  --chart-2: #d2a85a;
+  --chart-3: #7db6d3;
+  --chart-4: #a99cbf;
+  --chart-5: #8a5bb8;
+  --chart-6: #5e4a80;
+  --chart-bar: #c9b3e6;
+  --chart-track: #24153a;
 }
 
 @theme inline {
   --font-sans: var(--app-font);
+  /* codes, IDs and figures set in Jost too (the brand has no monospace face) */
+  --font-mono: var(--font-jost), ui-monospace, monospace;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -134,30 +166,80 @@
   --color-info-soft: var(--info-soft);
   --color-violet: var(--violet);
   --color-violet-soft: var(--violet-soft);
-  --color-jade-soft: var(--jade-soft);
-  --color-sand: var(--sand);
+  --color-brand-soft: var(--brand-soft);
+  --color-ochre: var(--ochre);
+  --color-primary-hover: var(--primary-hover);
+  --color-plum: var(--plum);
+  --color-night: var(--night);
+  --color-brand-violet: var(--brand-violet);
+  --color-mist: var(--mist);
+  --color-aubergine: var(--aubergine);
+  --color-lilac: var(--lilac);
+  --color-ink: var(--ink);
+  --color-slate: var(--slate);
+  --color-error-on-dark: var(--error-on-dark);
+  --color-success-on-dark: var(--success-on-dark);
   --color-sidebar: var(--sidebar);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar-muted: var(--sidebar-muted);
   --color-sidebar-active: var(--sidebar-active);
   --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-dot: var(--sidebar-dot);
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);
   --color-chart-4: var(--chart-4);
   --color-chart-5: var(--chart-5);
   --color-chart-6: var(--chart-6);
-  --radius-sm: calc(var(--radius) - 3px);
-  --radius-md: calc(var(--radius) - 1px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
+  --color-chart-bar: var(--chart-bar);
+  --color-chart-track: var(--chart-track);
+  /* 8px for elements, 12px for containers, full for badges and chips */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 12px;
+  --radius-2xl: 16px;
 }
 
+/* Motion: 150–250ms for elements, 300ms max for windows; strong ease-out, never ease-in */
+@theme {
+  /* Flat surfaces: borders separate, shadows only lift floating layers (menus, dialogs) */
+  --shadow-xs: 0 0 #0000;
+  --shadow-sm: 0 0 #0000;
+  --shadow-md: 0 8px 24px -8px rgb(30 13 51 / 0.16), 0 1px 3px rgb(30 13 51 / 0.06);
+  --shadow-lg: 0 16px 40px -12px rgb(30 13 51 / 0.24), 0 2px 6px rgb(30 13 51 / 0.06);
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --default-transition-duration: 180ms;
+  --default-transition-timing-function: cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+/*
+ * Type: Jost (Latin) + Thmanyah Sans (Arabic). Jost leads the stack in both locales, so Latin
+ * words and Western digits always set in Jost and Arabic falls through to the Arabic face.
+ * Thmanyah Sans can't be bundled (its licence forbids redistribution); it is used when installed
+ * or self-hosted (see public/fonts/thmanyah/README.md), otherwise IBM Plex Sans Arabic stands in.
+ * The Arabic faces are scaled to 115% so both scripts read at the same visual size.
+ */
+:root {
+  --app-font: var(--font-jost), "Thmanyah Sans", var(--font-arabic), system-ui, sans-serif;
+}
+
+/* Arabic needs more air: 1.6 for text, 1.25 for headings (Latin: 1.5 / 1.15) */
 html[lang="ar"] {
-  --app-font: "IBM Plex Sans Arabic", "Instrument Sans Variable", system-ui, sans-serif;
+  --text-xs--line-height: 1.6;
+  --text-sm--line-height: 1.6;
+  --text-base--line-height: 1.6;
+  --text-lg--line-height: 1.5;
+  --text-xl--line-height: 1.35;
+  --text-2xl--line-height: 1.25;
+  --text-3xl--line-height: 1.25;
+  --text-4xl--line-height: 1.25;
 }
 html[lang="en"] {
-  --app-font: "Instrument Sans Variable", "IBM Plex Sans Arabic", system-ui, sans-serif;
+  --text-xl--line-height: 1.25;
+  --text-2xl--line-height: 1.15;
+  --text-3xl--line-height: 1.15;
+  --text-4xl--line-height: 1.15;
 }
 
 @layer base {
@@ -170,7 +252,21 @@ html[lang="en"] {
   }
   body {
     @apply bg-background text-foreground antialiased;
-    font-feature-settings: "ss01", "cv11";
+    font-family: var(--app-font);
+  }
+  html[lang="ar"] body {
+    line-height: 1.6;
+  }
+  /* Icons: 24px grid, 1.75 stroke, round caps and joins */
+  svg.lucide {
+    stroke-width: 1.75;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  /* Grid items may shrink below their content (wide tables scroll inside their own box
+     instead of widening the page). Utilities still override this. */
+  .grid > * {
+    min-width: 0;
   }
   /* Numbers line up in dense tables in both scripts */
   .tabular {
@@ -183,15 +279,32 @@ html[lang="en"] {
   .ltr-nums {
     direction: ltr;
     unicode-bidi: isolate;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
   }
 }
 
 @layer components {
+  /* Headings are Medium (500) in both scripts; Latin headings track -1%, Arabic never tracks */
   .page-title {
-    @apply text-xl font-semibold tracking-tight;
+    @apply text-[22px] font-medium;
+  }
+  html[lang="en"] :is(h1, h2, h3, .page-title) {
+    letter-spacing: -0.01em;
   }
   .section-title {
-    @apply text-sm font-semibold text-foreground;
+    @apply text-sm font-medium text-foreground;
+  }
+  /* Latin labels: Jost Medium, uppercase, +8% tracking. Arabic labels stay as written. */
+  .eyebrow {
+    @apply text-[11px] font-medium text-muted-foreground;
+  }
+  html[lang="en"] .eyebrow {
+    @apply uppercase;
+    letter-spacing: 0.08em;
+  }
+  .bg-night-gradient {
+    background: var(--night-gradient);
   }
   .kbd {
     @apply inline-flex h-5 min-w-5 items-center justify-center rounded border border-border bg-muted px-1 font-sans text-[10px] font-medium text-muted-foreground;
@@ -208,6 +321,18 @@ html[lang="en"] {
 * {
   scrollbar-width: thin;
   scrollbar-color: var(--input) transparent;
+}
+
+/* Reduced motion: no movement, only instant or very short fades */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 @media print {

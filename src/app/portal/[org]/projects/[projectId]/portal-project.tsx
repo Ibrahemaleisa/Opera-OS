@@ -30,7 +30,7 @@ export function PortalProject({ orgSlug, data }: { orgSlug: string; data: D }) {
     <div className="grid gap-5">
       <Breadcrumbs dir={dir} items={[{ label: t.projects, href: `/portal/${orgSlug}` }, { label: p.code }]} />
       <div className="flex flex-wrap items-center gap-2">
-        <h1 className="text-xl font-semibold">{p.name}</h1>
+        <h1 className="text-xl font-medium">{p.name}</h1>
         <StatusBadge status={p.status} label={m.enums.projectStatus[p.status]} />
         <Button size="sm" variant="outline" className="ms-auto" onClick={() => setOpen(true)} data-testid="new-change-request"><MessageSquarePlus /> {t.newRequest}</Button>
       </div>
@@ -91,14 +91,14 @@ export function PortalProject({ orgSlug, data }: { orgSlug: string; data: D }) {
             <Section title={t.delivery}>
               <div className="grid gap-3 p-4">
                 <ProgressBar value={(data.delivery.delivered / data.delivery.total) * 100} tone="success" />
-                <div className="grid grid-cols-3 gap-2 text-center text-xs"><div><div className="tabular text-lg font-semibold">{data.delivery.delivered}/{data.delivery.total}</div>{t.delivered}</div><div><div className="tabular text-lg font-semibold">{data.delivery.inProgress}</div>{t.inProgress}</div><div><div className="tabular text-lg font-semibold">{data.delivery.issues}</div>{t.issues}</div></div>
+                <div className="grid grid-cols-3 gap-2 text-center text-xs"><div><div className="tabular text-lg font-medium">{data.delivery.delivered}/{data.delivery.total}</div>{t.delivered}</div><div><div className="tabular text-lg font-medium">{data.delivery.inProgress}</div>{t.inProgress}</div><div><div className="tabular text-lg font-medium">{data.delivery.issues}</div>{t.issues}</div></div>
               </div>
             </Section>
           )}
           {data.rsvp && (
             <Section title={t.rsvp}>
               <div className="grid grid-cols-4 gap-2 p-4 text-center text-xs">
-                {([["attending", data.rsvp.attending], ["declined", data.rsvp.declined], ["maybe", data.rsvp.maybe], ["awaiting", data.rsvp.pending]] as const).map(([k, v]) => <div key={k}><div className="tabular text-lg font-semibold">{v}</div>{t[k]}</div>)}
+                {([["attending", data.rsvp.attending], ["declined", data.rsvp.declined], ["maybe", data.rsvp.maybe], ["awaiting", data.rsvp.pending]] as const).map(([k, v]) => <div key={k}><div className="tabular text-lg font-medium">{v}</div>{t[k]}</div>)}
               </div>
             </Section>
           )}

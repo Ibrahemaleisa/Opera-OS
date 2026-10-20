@@ -44,7 +44,7 @@ const vipDelivery: TemplateDefinition = {
       key: "vip-delivery",
       name: { ar: "توصيل الدعوات الورقية لكبار الشخصيات", en: "VIP physical invitation delivery" },
       kind: "VIP_DELIVERY",
-      color: "#0e5a52",
+      color: "#64228A",
       tasks: [
         t("collect-list", "استلام قائمة المدعوين من العميل", "Receive guest list from client", { anchor: "event", offsetDays: -21, priority: "HIGH", clientVisible: true, defaultRole: "MANAGER", checklist: [["التحقق من اكتمال الأعمدة المطلوبة", "Check required columns are present"], ["تأكيد فئات كبار الشخصيات", "Confirm VIP tiers"]] }),
         t("import-validate", "استيراد القائمة والتحقق منها", "Import and validate list", { anchor: "event", offsetDays: -20, priority: "HIGH", dependsOn: ["collect-list"], estimateHours: 4, checklist: [["توحيد أرقام الجوال", "Normalize mobile numbers"], ["معالجة السجلات المكررة", "Resolve duplicates"], ["مراجعة العناوين الناقصة", "Review incomplete addresses"]] }),
@@ -79,7 +79,7 @@ const digital: TemplateDefinition = {
       key: "digital-invites",
       name: { ar: "الدعوات الرقمية", en: "Digital invitations" },
       kind: "DIGITAL_INVITES",
-      color: "#1d5fa8",
+      color: "#2F6F8F",
       tasks: [
         t("guest-list", "تجهيز قائمة المستلمين", "Prepare recipient list", { anchor: "event", offsetDays: -21, priority: "HIGH" }),
         t("design", "تصميم الدعوة الرقمية", "Design digital invitation", { anchor: "event", offsetDays: -20, durationDays: 4, estimateHours: 12 }),
@@ -117,7 +117,7 @@ const eventOpsTasks = (prefix: string) => [
 ];
 
 const corporateEvent: TemplateDefinition = {
-  workstreams: [{ key: "event-ops", name: { ar: "تشغيل الفعالية", en: "Event operations" }, kind: "EVENT_OPS", color: "#c9a46a", tasks: eventOpsTasks("") }],
+  workstreams: [{ key: "event-ops", name: { ar: "تشغيل الفعالية", en: "Event operations" }, kind: "EVENT_OPS", color: "#B98A2E", tasks: eventOpsTasks("") }],
   milestones: [
     { key: "brief-approved", title: { ar: "اعتماد الموجز", en: "Brief approved" }, anchor: "event", offsetDays: -45, clientVisible: true },
     { key: "event-day", title: { ar: "يوم الفعالية", en: "Event day" }, anchor: "event", offsetDays: 0, clientVisible: true },
@@ -137,7 +137,7 @@ const conference: TemplateDefinition = {
       key: "conference-ops",
       name: { ar: "عمليات المؤتمر", en: "Conference operations" },
       kind: "CONFERENCE",
-      color: "#5b3fa6",
+      color: "#3C1862",
       tasks: [
         t("agenda", "إعداد الأجندة والجلسات", "Build agenda & sessions", { anchor: "event", offsetDays: -50, clientVisible: true, requiresApproval: true, priority: "HIGH" }),
         t("speakers", "دعوة المتحدثين وتأكيدهم", "Invite and confirm speakers", { anchor: "event", offsetDays: -45, durationDays: 14, dependsOn: ["agenda"] }),
@@ -148,7 +148,7 @@ const conference: TemplateDefinition = {
         t("speaker-brief", "إحاطة المتحدثين ومديري الجلسات", "Brief speakers & moderators", { anchor: "event", offsetDays: -1, dependsOn: ["speaker-materials"] }),
       ],
     },
-    { key: "event-ops", name: { ar: "تشغيل الفعالية", en: "Event operations" }, kind: "EVENT_OPS", color: "#c9a46a", tasks: eventOpsTasks("ops-") },
+    { key: "event-ops", name: { ar: "تشغيل الفعالية", en: "Event operations" }, kind: "EVENT_OPS", color: "#B98A2E", tasks: eventOpsTasks("ops-") },
   ],
   milestones: [
     { key: "agenda-final", title: { ar: "اعتماد الأجندة النهائية", en: "Final agenda approved" }, anchor: "event", offsetDays: -20, clientVisible: true, workstream: "conference-ops" },
@@ -172,7 +172,7 @@ const protocol: TemplateDefinition = {
       key: "protocol",
       name: { ar: "المراسم واستقبال كبار الشخصيات", en: "VIP protocol" },
       kind: "PROTOCOL",
-      color: "#8a3b2e",
+      color: "#9A6BC4",
       tasks: [
         t("vip-list", "اعتماد قائمة كبار الشخصيات وتصنيفهم", "Approve VIP list & classifications", { anchor: "event", offsetDays: -21, requiresApproval: true, priority: "HIGH" }),
         t("seating", "إعداد مخطط الجلوس حسب الأسبقية", "Seating plan by precedence", { anchor: "event", offsetDays: -10, dependsOn: ["vip-list"], requiresApproval: true, clientVisible: true }),
@@ -221,7 +221,7 @@ const boothStatuses = [
 ];
 
 const booth: TemplateDefinition = {
-  workstreams: [{ key: "booth", name: { ar: "إنتاج الجناح", en: "Booth production" }, kind: "BOOTH", color: "#6f8f3a", statuses: boothStatuses, tasks: boothTasks("") }],
+  workstreams: [{ key: "booth", name: { ar: "إنتاج الجناح", en: "Booth production" }, kind: "BOOTH", color: "#5E5470", statuses: boothStatuses, tasks: boothTasks("") }],
   milestones: [
     { key: "design-approved", title: { ar: "اعتماد التصميم", en: "Design approved" }, anchor: "start", offsetDays: 10, clientVisible: true, workstream: "booth" },
     { key: "build-start", title: { ar: "بدء التركيب", en: "Build starts" }, anchor: "event", offsetDays: -4, clientVisible: true, workstream: "booth" },
@@ -240,7 +240,7 @@ const booth: TemplateDefinition = {
 };
 
 const pavilion: TemplateDefinition = {
-  workstreams: [{ key: "pavilion", name: { ar: "إنتاج البافيليون", en: "Pavilion production" }, kind: "PAVILION", color: "#6f8f3a", statuses: boothStatuses, tasks: boothTasks("pv-", true) }],
+  workstreams: [{ key: "pavilion", name: { ar: "إنتاج البافيليون", en: "Pavilion production" }, kind: "PAVILION", color: "#5E5470", statuses: boothStatuses, tasks: boothTasks("pv-", true) }],
   milestones: booth.milestones.map((m) => ({ ...m, workstream: "pavilion" })),
   deliverables: booth.deliverables.map((d) => ({ ...d, workstream: "pavilion" })),
   customFields: [],
@@ -257,7 +257,7 @@ const exhibition: TemplateDefinition = {
       key: "exhibition",
       name: { ar: "تنظيم المعرض", en: "Exhibition management" },
       kind: "EVENT_OPS",
-      color: "#c9a46a",
+      color: "#B98A2E",
       tasks: [
         t("floorplan", "اعتماد مخطط أرض المعرض", "Approve exhibition floorplan", { anchor: "event", offsetDays: -60, requiresApproval: true, clientVisible: true }),
         t("exhibitor-sales", "بيع المساحات للعارضين", "Exhibitor space sales", { anchor: "event", offsetDays: -55, durationDays: 30, dependsOn: ["floorplan"] }),

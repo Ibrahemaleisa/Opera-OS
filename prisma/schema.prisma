@@ -371,7 +371,7 @@ model Organization {
   phone        String?
   city         String?
   logoKey      String?
-  brandColor   String   @default("#0F5E57")
+  brandColor   String   @default("#64228A")
   defaultLocale String  @default("ar")
   calendar     String   @default("gregory")
   timezone     String   @default("Asia/Riyadh")

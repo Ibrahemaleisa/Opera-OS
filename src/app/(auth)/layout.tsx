@@ -1,3 +1,4 @@
+import { OperaWordmark } from "@/components/brand/logo";
 import { getI18n } from "@/lib/i18n/server";
 import { LocaleSwitch } from "./locale-switch";
 
@@ -7,28 +8,21 @@ export default async function AuthLayout({ children }: { children: React.ReactNo
     <div className="grid min-h-dvh lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
       <div className="flex flex-col px-5 py-6 sm:px-10">
         <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span className="flex size-8 items-center justify-center rounded-md bg-primary text-sm font-bold text-primary-foreground">O</span>
-            <span className="text-sm font-semibold">{m.common.appName}</span>
-          </div>
+          <OperaWordmark className="h-6" />
           <LocaleSwitch />
         </div>
         <div className="mx-auto flex w-full max-w-sm flex-1 flex-col justify-center py-10">{children}</div>
         <p className="text-center text-[11px] text-muted-foreground">{m.auth.privacyNote}</p>
       </div>
-      <aside className="relative hidden overflow-hidden bg-[#0f1a1c] text-white lg:block">
-        <svg className="absolute inset-0 h-full w-full opacity-[0.07]" aria-hidden>
-          <defs>
-            <pattern id="geo" width="56" height="56" patternUnits="userSpaceOnUse">
-              <path d="M28 0 L56 28 L28 56 L0 28 Z M28 10 L46 28 L28 46 L10 28 Z" fill="none" stroke="#fff" strokeWidth="1" />
-            </pattern>
-          </defs>
-          <rect width="100%" height="100%" fill="url(#geo)" />
+      <aside className="bg-night-gradient relative hidden overflow-hidden text-mist lg:block">
+        {/* the orbit: one cropped arc leaving the frame — the only arc in this composition */}
+        <svg className="pointer-events-none absolute -end-[34%] -top-[30%] aspect-square w-[95%]" viewBox="0 0 100 100" aria-hidden>
+          <circle cx="50" cy="50" r="48" fill="none" stroke="var(--mist)" strokeOpacity="0.8" strokeWidth="1.2" />
         </svg>
         <div className="relative flex h-full flex-col justify-end p-12">
-          <div className="mb-6 h-1 w-14 rounded-full bg-[#c9a46a]" />
-          <h2 className="max-w-md text-3xl leading-snug font-semibold">{m.auth.registerSubtitle}</h2>
-          <ul className="mt-8 grid max-w-md grid-cols-2 gap-x-6 gap-y-3 text-sm text-white/75">
+          <p className="max-w-md text-4xl leading-[1.25] font-medium">{m.common.brandPromise}</p>
+          <p className="mt-4 max-w-md text-base text-lilac">{m.auth.registerSubtitle}</p>
+          <ul className="mt-10 grid max-w-md grid-cols-2 gap-x-6 gap-y-2 border-t border-mist/15 pt-6 text-sm text-mist/70">
             <li>{m.nav.delivery}</li>
             <li>{m.nav.digital}</li>
             <li>{m.nav.protocol}</li>

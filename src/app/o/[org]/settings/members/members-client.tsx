@@ -243,7 +243,7 @@ function RoleDialog({ orgSlug, role, catalog, onClose }: { orgSlug: string; role
           <div className="max-h-[50vh] overflow-y-auto rounded-md border p-3">
             {Object.entries(groups).map(([g, keys]) => (
               <div key={g} className="mb-3">
-                <div className="mb-1 text-xs font-semibold text-muted-foreground uppercase">{g}</div>
+                <div className="mb-1 text-xs font-medium text-muted-foreground uppercase">{g}</div>
                 <div className="grid gap-1 sm:grid-cols-2">
                   {keys.map((k) => (
                     <label key={k} className="ltr-nums flex items-center gap-2 text-xs">

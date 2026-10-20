@@ -50,7 +50,7 @@ async function DeliveryOverview({ params, searchParams }: { params: Promise<{ or
         <div className="flex items-center gap-3 px-4 py-3">
           <span className="text-sm font-medium">{d.completion}</span>
           <ProgressBar value={(k.completion ?? 0) * 100} tone="success" className="h-2.5 flex-1" />
-          <span className="tabular text-sm font-semibold">{formatPercent(k.completion, fmt)}</span>
+          <span className="tabular text-sm font-medium">{formatPercent(k.completion, fmt)}</span>
         </div>
       </Section>
       <div className="grid gap-4 lg:grid-cols-3">

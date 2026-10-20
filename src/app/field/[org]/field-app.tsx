@@ -175,23 +175,23 @@ export function FieldApp({ orgSlug, orgName, agentName }: { orgSlug: string; org
 
   return (
     <div className="mx-auto max-w-lg">
-      <header className="sticky top-0 z-20 border-b bg-primary px-4 pt-[max(env(safe-area-inset-top),12px)] pb-3 text-primary-foreground">
+      <header className="sticky top-0 z-20 bg-plum px-4 pt-[max(env(safe-area-inset-top),12px)] pb-3 text-mist">
         <div className="flex items-center justify-between gap-2">
           <div className="min-w-0">
-            <div className="truncate text-xs opacity-80">{orgName}</div>
-            <h1 className="truncate text-lg font-semibold">{f.title}</h1>
+            <div className="truncate text-xs text-lilac">{orgName}</div>
+            <h1 className="truncate text-lg font-medium">{f.title}</h1>
           </div>
           <div className="flex items-center gap-1">
-            <Button size="icon-sm" variant="ghost" className="text-primary-foreground hover:bg-white/10" onClick={() => (online ? flush() : load())} aria-label={f.syncNow}><RefreshCw className={cn(syncing && "animate-spin")} /></Button>
-            <Button size="icon-sm" variant="ghost" className="text-primary-foreground hover:bg-white/10" onClick={() => { try { sessionStorage.removeItem(SESSION_KEY); } catch { /* */ } logoutAction(); }} aria-label={f.signOut}><LogOut /></Button>
+            <Button size="icon-sm" variant="ghost" className="text-mist hover:bg-white/10 hover:text-mist" onClick={() => (online ? flush() : load())} aria-label={f.syncNow}><RefreshCw className={cn(syncing && "animate-spin")} /></Button>
+            <Button size="icon-sm" variant="ghost" className="text-mist hover:bg-white/10 hover:text-mist" onClick={() => { try { sessionStorage.removeItem(SESSION_KEY); } catch { /* */ } logoutAction(); }} aria-label={f.signOut}><LogOut /></Button>
           </div>
         </div>
         <div className="mt-2 flex items-center gap-2 text-xs">
-          <span className={cn("flex items-center gap-1 rounded-full px-2 py-0.5", online ? "bg-white/15" : "bg-warning text-black")} data-testid="field-online">
-            {online ? <span className="size-1.5 rounded-full bg-emerald-300" /> : <CloudOff className="size-3" />}{online ? f.online : f.offline}
+          <span className={cn("flex items-center gap-1 rounded-full px-2 py-0.5", online ? "bg-white/10" : "bg-warning text-white")} data-testid="field-online">
+            {online ? <span className="size-1.5 rounded-full bg-success-on-dark" /> : <CloudOff className="size-3" />}{online ? f.online : f.offline}
           </span>
-          {pending.length > 0 && <span className="rounded-full bg-white/15 px-2 py-0.5" data-testid="field-pending">{interpolate(f.pending, { n: pending.length })}</span>}
-          <span className="ms-auto truncate opacity-80">{agentName}</span>
+          {pending.length > 0 && <span className="rounded-full bg-white/10 px-2 py-0.5" data-testid="field-pending">{interpolate(f.pending, { n: pending.length })}</span>}
+          <span className="ms-auto truncate text-mist/75">{agentName}</span>
         </div>
       </header>
 
@@ -202,7 +202,7 @@ export function FieldApp({ orgSlug, orgName, agentName }: { orgSlug: string; org
       ) : (
         <main className="grid gap-5 p-4">
           <section>
-            <h2 className="mb-2 flex items-center gap-2 text-sm font-semibold"><Truck className="size-4" /> {f.active} <span className="tabular text-muted-foreground">({active.length})</span></h2>
+            <h2 className="mb-2 flex items-center gap-2 text-sm font-medium"><Truck className="size-4" /> {f.active} <span className="tabular text-muted-foreground">({active.length})</span></h2>
             {active.length === 0 && <p className="rounded-xl border border-dashed p-6 text-center text-sm text-muted-foreground">{f.empty}</p>}
             <ul className="grid gap-2.5">
               {active.map((d) => {
@@ -217,7 +217,7 @@ export function FieldApp({ orgSlug, orgName, agentName }: { orgSlug: string; org
                           {d.priority === "CRITICAL" || d.priority === "HIGH" ? <StatusBadge status={d.priority} label={m.enums.priority[d.priority]} dot={false} /> : null}
                           {queued > 0 && <CloudOff className="size-3.5 text-warning" />}
                         </div>
-                        <div className="mt-1.5 text-[15px] leading-snug font-semibold">{d.recipient.honorific} {d.recipient.name}</div>
+                        <div className="mt-1.5 text-[15px] leading-snug font-medium">{d.recipient.honorific} {d.recipient.name}</div>
                         <div className="text-xs text-muted-foreground">{d.recipient.organizationName}</div>
                         <div className="mt-1 flex items-center gap-1 text-xs"><MapPin className="size-3 text-muted-foreground" />{[d.recipient.city, d.recipient.district].filter(Boolean).join(" · ")}</div>
                         {d.recipient.preferredWindow && <div className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground"><Clock className="size-3" />{d.recipient.preferredWindow}</div>}
@@ -236,7 +236,7 @@ export function FieldApp({ orgSlug, orgName, agentName }: { orgSlug: string; org
           </section>
           {done.length > 0 && (
             <section>
-              <h2 className="mb-2 text-sm font-semibold text-muted-foreground">{f.completed} ({done.length})</h2>
+              <h2 className="mb-2 text-sm font-medium text-muted-foreground">{f.completed} ({done.length})</h2>
               <ul className="grid gap-1.5">
                 {done.map((d) => (
                   <li key={d.id} className="surface flex items-center gap-2 rounded-lg px-3 py-2 text-xs">

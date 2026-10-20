@@ -62,7 +62,7 @@ export function CampaignDetail({ orgSlug, projectId, data, currentUserId }: { or
     <div className="grid gap-4">
       <Breadcrumbs dir={dir} items={[{ label: dg.title, href: `/o/${orgSlug}/projects/${projectId}/digital` }, { label: c.name }]} />
       <div className="flex flex-wrap items-center gap-2">
-        <h2 className="text-lg font-semibold">{c.name}</h2>
+        <h2 className="text-lg font-medium">{c.name}</h2>
         <StatusBadge status={c.status} label={m.enums.campaignStatus[c.status]} />
         <span className="text-xs text-muted-foreground">{c.channel && m.enums.channel[c.channel]}</span>
         <div className="ms-auto flex flex-wrap gap-2">
@@ -116,7 +116,7 @@ export function CampaignDetail({ orgSlug, projectId, data, currentUserId }: { or
         </Section>
         <div className="grid content-start gap-4">
           <Section title={dg.preview}>
-            <div className="p-4"><div className="rounded-2xl rounded-ss-sm bg-jade-soft p-3 text-[13px] leading-relaxed whitespace-pre-wrap">{data.preview ?? <span className="text-muted-foreground">{m.common.emptyTitle}</span>}</div></div>
+            <div className="p-4"><div className="rounded-2xl rounded-ss-sm bg-brand-soft p-3 text-[13px] leading-relaxed whitespace-pre-wrap">{data.preview ?? <span className="text-muted-foreground">{m.common.emptyTitle}</span>}</div></div>
           </Section>
           <Section title={m.projects.approvals} description={dg.approvalNote}>
             {data.approvals.length ? <ApprovalsBox orgSlug={orgSlug} approvals={data.approvals} canDecide={data.scope.approve && data.approvals.every((a) => a.requestedById !== currentUserId)} nameOf={() => "—"} /> : <p className="px-4 py-3 text-xs text-muted-foreground">{m.common.none}</p>}

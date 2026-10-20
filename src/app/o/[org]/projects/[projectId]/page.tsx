@@ -1,8 +1,9 @@
 import Link from "next/link";
 import { AlertTriangle, CheckCircle2, ClipboardCheck, Clock, Gauge } from "lucide-react";
-import { KV, ProgressBar, Section, Stat } from "@/components/app/page";
+import { KV, Section, Stat } from "@/components/app/page";
 import { StatusBadge } from "@/components/app/status-badge";
 import { HealthPill } from "@/components/app/health";
+import { StatusRing } from "@/components/brand/status-ring";
 import { formatDate, formatDual, formatMoney, formatPercent, formatRelative } from "@/lib/format";
 import { interpolate } from "@/lib/i18n";
 import { getI18n } from "@/lib/i18n/server";
@@ -43,9 +44,9 @@ async function ProjectOverviewPage({ params }: { params: Promise<{ org: string; 
                     <Link href={`${b}/tasks?ws=${w.id}`} className="text-[13px] font-medium hover:text-primary">{(locale === "en" && w.nameEn) || w.name}</Link>
                     <div className="text-[11px] text-muted-foreground">{m.enums.workstreamKind[w.kind]}</div>
                   </div>
-                  <div className="w-40">
-                    <ProgressBar value={w.total ? (w.done / w.total) * 100 : 0} tone={w.blocked ? "warning" : "jade"} />
-                    <div className="tabular mt-1 text-end text-[11px] text-muted-foreground">{w.done}/{w.total}</div>
+                  <div className="flex items-center gap-2">
+                    <span className="tabular text-[11px] text-muted-foreground">{w.done}/{w.total}</span>
+                    <StatusRing state={w.total > 0 && w.done >= w.total ? "complete" : w.blocked ? "paused" : w.done > 0 ? "inProgress" : "notStarted"} value={w.total ? w.done / w.total : 0} size={22} />
                   </div>
                 </li>
               ))}

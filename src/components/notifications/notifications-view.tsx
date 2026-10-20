@@ -51,7 +51,7 @@ export function NotificationsView({ orgSlug, items, prefs, types, base }: { orgS
                 </>
               );
               return (
-                <li key={n.id} className={cn(!n.readAt && "bg-jade-soft/30")} data-testid="notification">
+                <li key={n.id} className={cn(!n.readAt && "bg-brand-soft/30")} data-testid="notification">
                   {to ? <Link href={to} onClick={() => !n.readAt && markReadAction(orgSlug, { ids: [n.id] })} className="flex gap-3 px-4 py-3 hover:bg-muted/40">{inner}</Link> : <div className="flex gap-3 px-4 py-3">{inner}</div>}
                 </li>
               );

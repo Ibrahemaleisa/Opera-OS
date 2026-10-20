@@ -17,15 +17,15 @@ export default async function RsvpPage({ params, searchParams }: { params: Promi
     const brand = brandColor && /^#[0-9a-fA-F]{3,8}$/.test(brandColor) ? brandColor : null;
     return (
     <div dir={dir} className="min-h-dvh bg-muted/40 px-4 py-10">
-      <div className="mx-auto max-w-md overflow-hidden rounded-xl border bg-card shadow-sm">
-        <div className="h-1.5" style={{ background: brand ?? "#c9a46a" }} />
+      <div className="mx-auto max-w-md overflow-hidden rounded-xl border bg-card">
+        <div className="h-1.5" style={{ background: brand ?? "var(--brand-violet)" }} />
         <div className="p-6">{children}</div>
       </div>
       <p className="mx-auto mt-4 max-w-md text-center text-[11px] text-muted-foreground">{p.privacy}</p>
     </div>
     );
   };
-  if (!data) return shell(<h1 className="text-lg font-semibold">{m.errors.tokenInvalid}</h1>);
+  if (!data) return shell(<h1 className="text-lg font-medium">{m.errors.tokenInvalid}</h1>);
 
   const name = (locale === "en" ? data.recipient?.nameEn ?? data.recipient?.nameAr : data.recipient?.nameAr ?? data.recipient?.nameEn) ?? "";
   const orgName = locale === "en" ? data.org.nameEn ?? data.org.name : data.org.name;
@@ -34,12 +34,12 @@ export default async function RsvpPage({ params, searchParams }: { params: Promi
   return shell(
     <div className="grid gap-5">
       <div>
-        <p className="text-xs font-medium tracking-wide text-muted-foreground">{orgName}</p>
-        <h1 className="mt-3 text-xl font-semibold">{p.dear} {data.recipient?.honorific} {name}</h1>
+        <p className="eyebrow">{orgName}</p>
+        <h1 className="mt-3 text-xl font-medium">{p.dear} {data.recipient?.honorific} {name}</h1>
         {data.event && (
           <div className="mt-3 grid gap-1.5 text-sm">
             <p className="text-muted-foreground">{p.invited}</p>
-            <p className="text-base font-semibold">{data.event.name}</p>
+            <p className="text-base font-medium">{data.event.name}</p>
             <p className="flex items-center gap-1.5 text-muted-foreground"><CalendarDays className="size-4" /><span className="ltr-nums">{formatDateTime(data.event.startsAt, { locale })}</span></p>
             {data.event.venue && <p className="flex items-center gap-1.5 text-muted-foreground"><MapPin className="size-4" />{data.event.venue.name}{data.event.venue.city ? ` — ${data.event.venue.city}` : ""}</p>}
           </div>

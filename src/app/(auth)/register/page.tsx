@@ -8,7 +8,7 @@ export default async function RegisterPage() {
   const { m } = await getI18n();
   return (
     <div>
-      <h1 className="text-2xl font-semibold tracking-tight">{m.auth.registerTitle}</h1>
+      <h1 className="text-2xl font-medium">{m.auth.registerTitle}</h1>
       <p className="mt-1 text-sm text-muted-foreground">{m.auth.registerSubtitle}</p>
       <RegisterForm />
       <p className="mt-6 text-sm text-muted-foreground">

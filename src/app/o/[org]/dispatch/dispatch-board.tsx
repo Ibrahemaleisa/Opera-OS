@@ -73,7 +73,7 @@ export function DispatchBoard({ orgSlug, projectId, campaignId, campaigns, deliv
         <div className="grid auto-cols-[minmax(280px,1fr)] grid-flow-col gap-3 overflow-x-auto pb-2">
           <div className="flex max-h-[72vh] flex-col rounded-lg bg-muted/50 p-2">
             <div className="mb-2 flex items-center justify-between gap-2 px-1">
-              <span className="text-sm font-semibold">{dd.pool} <span className="tabular text-xs text-muted-foreground">({pool.length})</span></span>
+              <span className="text-sm font-medium">{dd.pool} <span className="tabular text-xs text-muted-foreground">({pool.length})</span></span>
               <Checkbox checked={selected.size > 0 && selected.size === assignablePool.length} onCheckedChange={(v) => setSelected(v ? new Set(assignablePool.map((d) => d.id)) : new Set())} aria-label="select all" />
             </div>
             {selected.size > 0 && (
@@ -97,12 +97,12 @@ export function DispatchBoard({ orgSlug, projectId, campaignId, campaigns, deliv
                 onDragOver={(e) => { e.preventDefault(); setOver(a.id); }}
                 onDragLeave={() => setOver(null)}
                 onDrop={(e) => { e.preventDefault(); setOver(null); const ids = (e.dataTransfer.getData("text/deliveries") || "").split(",").filter(Boolean); if (ids.length) doAssign(ids, a.id); }}
-                className={cn("flex max-h-[72vh] flex-col rounded-lg bg-muted/50 p-2 transition-colors", over === a.id && "bg-jade-soft ring-1 ring-primary/40")}
+                className={cn("flex max-h-[72vh] flex-col rounded-lg bg-muted/50 p-2 transition-colors", over === a.id && "bg-brand-soft ring-1 ring-primary/40")}
                 data-testid={`agent-col-${a.id}`}
               >
                 <div className="mb-2 px-1">
-                  <div className="flex items-center justify-between text-sm font-semibold">{a.name}<span className="tabular text-xs font-normal text-muted-foreground">{a.open}/{a.capacity}</span></div>
-                  <ProgressBar value={load * 100} tone={load > 1 ? "danger" : load > 0.8 ? "warning" : "jade"} className="mt-1" />
+                  <div className="flex items-center justify-between text-sm font-medium">{a.name}<span className="tabular text-xs font-normal text-muted-foreground">{a.open}/{a.capacity}</span></div>
+                  <ProgressBar value={load * 100} tone={load > 1 ? "danger" : load > 0.8 ? "warning" : "brand"} className="mt-1" />
                   <div className="mt-1 text-[11px] text-muted-foreground">{dd.today}: {a.deliveredToday} ✓{a.territories.length ? ` · ${a.territories.join("، ")}` : ""}</div>
                 </div>
                 <div className="grid gap-1.5 overflow-y-auto">{items.map((d) => <MiniCard key={d.id} d={d} orgSlug={orgSlug} projectId={projectId} />)}</div>
@@ -123,7 +123,7 @@ function MiniCard({ d, orgSlug, projectId, selectable, selected, dragIds, onSele
     <div
       draggable={selectable}
       onDragStart={(e) => e.dataTransfer.setData("text/deliveries", (selected && dragIds?.length ? dragIds : [d.id]).join(","))}
-      className={cn("surface flex items-start gap-2 p-2 text-[12.5px]", selected && "border-primary bg-jade-soft/50", d.escalatedAt && "border-s-2 border-s-danger")}
+      className={cn("surface flex items-start gap-2 p-2 text-[12.5px]", selected && "border-primary bg-brand-soft/50", d.escalatedAt && "border-s-2 border-s-danger")}
       data-testid="dispatch-card"
     >
       {selectable && <Checkbox checked={selected} onCheckedChange={(v) => onSelect?.(!!v)} className="mt-0.5" aria-label={d.trackingCode} />}

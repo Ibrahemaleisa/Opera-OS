@@ -28,7 +28,7 @@ export function AccountForms({ user, sessions }: { user: U; sessions: S[] }) {
   return (
     <>
       <section className="rounded-xl border bg-card">
-        <h2 className="border-b px-4 py-2.5 text-sm font-semibold">{t.profile}</h2>
+        <h2 className="border-b px-4 py-2.5 text-sm font-medium">{t.profile}</h2>
         <form className="grid gap-3 p-4 sm:grid-cols-2" onSubmit={(e) => { e.preventDefault(); const fd = new FormData(e.currentTarget); start(async () => handle(await updateProfileAction(Object.fromEntries(fd)), m.common.saved)); }}>
           <Field label={m.common.nameEn} error={err("name")} required><Input name="name" defaultValue={user.name} required dir="ltr" /></Field>
           <Field label={m.common.nameAr}><Input name="nameAr" defaultValue={user.nameAr ?? ""} /></Field>
@@ -39,7 +39,7 @@ export function AccountForms({ user, sessions }: { user: U; sessions: S[] }) {
         </form>
       </section>
       <section className="rounded-xl border bg-card">
-        <h2 className="border-b px-4 py-2.5 text-sm font-semibold">{t.password}</h2>
+        <h2 className="border-b px-4 py-2.5 text-sm font-medium">{t.password}</h2>
         <form className="grid gap-3 p-4 sm:grid-cols-2" onSubmit={(e) => { e.preventDefault(); const form = e.currentTarget; const fd = new FormData(form); start(async () => { const r = await changePasswordAction(Object.fromEntries(fd)); handle(r, t.changed); if (r.ok) form.reset(); }); }}>
           <Field label={t.current} error={err("current")}><Input name="current" type="password" autoComplete="current-password" required dir="ltr" /></Field>
           <Field label={t.next} error={err("next")} hint={m.auth.passwordTooShort}><Input name="next" type="password" autoComplete="new-password" required minLength={10} dir="ltr" /></Field>
@@ -47,11 +47,11 @@ export function AccountForms({ user, sessions }: { user: U; sessions: S[] }) {
         </form>
       </section>
       <section className="rounded-xl border bg-card">
-        <h2 className="border-b px-4 py-2.5 text-sm font-semibold">{t.sessions} ({sessions.length})</h2>
+        <h2 className="border-b px-4 py-2.5 text-sm font-medium">{t.sessions} ({sessions.length})</h2>
         <ul className="divide-y">
           {sessions.map((s) => (
             <li key={s.id} className="flex flex-wrap items-center gap-2 px-4 py-2.5 text-sm" data-testid="session-row">
-              <span className="flex-1">{s.deviceLabel ?? "—"}{s.current && <span className="ms-2 rounded bg-jade-soft px-1.5 text-[10px] text-primary">{t.thisDevice}</span>}</span>
+              <span className="flex-1">{s.deviceLabel ?? "—"}{s.current && <span className="ms-2 rounded bg-brand-soft px-1.5 text-[10px] text-primary">{t.thisDevice}</span>}</span>
               <span className="ltr-nums text-xs text-muted-foreground">{s.ip ?? ""} · {t.lastSeen} <TimeAgo date={s.lastSeenAt} /></span>
               {!s.current && <Button size="xs" variant="ghost" className="text-danger" disabled={pending} onClick={() => start(async () => handle(await revokeDeviceAction(s.id), m.common.saved))}>{t.revoke}</Button>}
             </li>

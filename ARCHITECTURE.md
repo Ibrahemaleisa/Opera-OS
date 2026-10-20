@@ -177,8 +177,11 @@ tests/e2e               Playwright
   throughout so layouts mirror correctly.
 * Formatting: `Asia/Riyadh` timezone, SAR currency, Gregorian or Hijri
   (Umm al‑Qura) display per org/user setting.
-* Design tokens as CSS variables (light/dark), Instrument Sans + IBM Plex Sans
-  Arabic, self‑hosted via Fontsource (no third‑party font requests).
+* Visual identity follows the Opera Brand Guidelines v1.2 (see BRAND.md): palette
+  tokens as CSS variables (light/dark) in `src/app/globals.css`, Jost (Latin) and
+  Thmanyah Sans (Arabic; IBM Plex Sans Arabic stands in until the licensed files are
+  installed), self‑hosted via `next/font/local` (no third‑party font requests). Marks
+  live in `src/components/brand` (logo, symbol, status ring, spinner).
 
 ## 9. Deployment topology
 

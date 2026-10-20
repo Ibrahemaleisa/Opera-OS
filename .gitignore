@@ -4,6 +4,7 @@ out
 .env
 .env.local
 storage/
+storage-test/
 src/generated/
 coverage
 playwright-report

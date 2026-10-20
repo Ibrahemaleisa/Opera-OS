@@ -1,0 +1,19 @@
+/*
+ * Thmanyah Sans — the brand's Arabic face. Loaded only when NEXT_PUBLIC_THMANYAH_FONT=1.
+ * The font files are not part of this repository: the licence allows use in websites and apps
+ * but not redistribution. Download them from thmanyah.com and place them here (see README.md).
+ */
+@font-face { font-family: "Thmanyah Sans"; font-weight: 300; font-display: swap; size-adjust: 115%;
+  src: local("Thmanyah Sans Light"), url("./ThmanyahSans-Light.woff2") format("woff2"), url("./ThmanyahSans-Light.otf") format("opentype"); }
+@font-face { font-family: "Thmanyah Sans"; font-weight: 400; font-display: swap; size-adjust: 115%;
+  src: local("Thmanyah Sans"), url("./ThmanyahSans-Regular.woff2") format("woff2"), url("./ThmanyahSans-Regular.otf") format("opentype"); }
+@font-face { font-family: "Thmanyah Sans"; font-weight: 500; font-display: swap; size-adjust: 115%;
+  src: local("Thmanyah Sans Medium"), url("./ThmanyahSans-Medium.woff2") format("woff2"), url("./ThmanyahSans-Medium.otf") format("opentype"); }
+@font-face { font-family: "Thmanyah Sans"; font-weight: 700; font-display: swap; size-adjust: 115%;
+  src: local("Thmanyah Sans Bold"), url("./ThmanyahSans-Bold.woff2") format("woff2"), url("./ThmanyahSans-Bold.otf") format("opentype"); }
+@font-face { font-family: "Thmanyah Sans"; font-weight: 900; font-display: swap; size-adjust: 115%;
+  src: local("Thmanyah Sans Black"), url("./ThmanyahSans-Black.woff2") format("woff2"), url("./ThmanyahSans-Black.otf") format("opentype"); }
+
+html:root {
+  --app-font: var(--font-jost), "Thmanyah Sans", var(--font-arabic), system-ui, sans-serif;
+}

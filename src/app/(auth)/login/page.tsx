@@ -13,7 +13,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
   const { m } = await getI18n();
   return (
     <div>
-      <h1 className="text-2xl font-semibold tracking-tight">{m.auth.signInTitle}</h1>
+      <h1 className="text-2xl font-medium">{m.auth.signInTitle}</h1>
       <p className="mt-1 text-sm text-muted-foreground">{m.auth.signInSubtitle}</p>
       <LoginForm next={next} />
       <p className="mt-6 text-sm text-muted-foreground">

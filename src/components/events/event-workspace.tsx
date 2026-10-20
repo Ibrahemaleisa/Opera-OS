@@ -160,7 +160,7 @@ export function EventWorkspace({ orgSlug, data }: { orgSlug: string; data: W }) 
     <div className="grid gap-4">
       <Breadcrumbs dir={dir} items={[{ label: m.nav.events, href: `/o/${orgSlug}/projects/${data.project.id}/events` }, { label: e.name }]} />
       <div className="flex flex-wrap items-center gap-2">
-        <h2 className="text-lg font-semibold">{e.name}</h2>
+        <h2 className="text-lg font-medium">{e.name}</h2>
         <StatusBadge status={e.phase} label={m.enums.eventPhase[e.phase]} />
         {data.live && <span className="flex items-center gap-1 rounded bg-danger-soft px-2 py-0.5 text-xs text-danger"><Radio className="size-3 animate-pulse" /> {t.live}</span>}
         <span className="ltr-nums text-xs text-muted-foreground">{formatDateTime(e.startsAt, fmt)} → {formatTime(e.endsAt, fmt)}</span>
@@ -201,7 +201,7 @@ export function EventWorkspace({ orgSlug, data }: { orgSlug: string; data: W }) 
                   if (!items.length) return null;
                   const r = items.filter((x) => x.status === "READY").length;
                   const issue = items.some((x) => x.status === "ISSUE");
-                  return <li key={k} className="grid grid-cols-[110px_1fr_40px] items-center gap-2 text-xs"><span>{label}</span><ProgressBar value={(r / items.length) * 100} tone={issue ? "danger" : r === items.length ? "success" : "jade"} /><span className="tabular text-end text-muted-foreground">{r}/{items.length}</span></li>;
+                  return <li key={k} className="grid grid-cols-[110px_1fr_40px] items-center gap-2 text-xs"><span>{label}</span><ProgressBar value={(r / items.length) * 100} tone={issue ? "danger" : r === items.length ? "success" : "brand"} /><span className="tabular text-end text-muted-foreground">{r}/{items.length}</span></li>;
                 })}
               </ul>
             </Section>

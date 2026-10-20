@@ -63,7 +63,7 @@ async function DashboardPage({ params }: { params: Promise<{ org: string }> }) {
               {([["planned", d.finance.planned], ["committed", d.finance.committed], ["actual", d.finance.actual]] as const).map(([k, v]) => (
                 <div key={k}>
                   <div className="flex justify-between text-xs"><span className="text-muted-foreground">{m.projects[k]}</span><span className="tabular">{formatMoney(v, fmt)}</span></div>
-                  <ProgressBar value={d.finance!.planned ? (v / d.finance!.planned) * 100 : 0} tone={k === "actual" && v > d.finance!.planned ? "danger" : "jade"} className="mt-1" />
+                  <ProgressBar value={d.finance!.planned ? (v / d.finance!.planned) * 100 : 0} tone={k === "actual" && v > d.finance!.planned ? "danger" : "brand"} className="mt-1" />
                 </div>
               ))}
             </div>

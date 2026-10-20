@@ -30,13 +30,13 @@ async function CommandCenterPage({ params }: { params: Promise<{ org: string }> 
             return (
               <Link key={e.id} href={`${b}/${e.project.id}/events/${e.id}`} className="grid gap-3 rounded-xl border bg-card p-4 hover:border-primary/40" data-testid="cc-event">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-semibold">{e.name}</span>
+                  <span className="font-medium">{e.name}</span>
                   <StatusBadge status={e.phase} label={m.enums.eventPhase[e.phase]} />
                   {live && <span className="flex items-center gap-1 rounded bg-danger-soft px-2 py-0.5 text-[11px] text-danger"><Radio className="size-3 animate-pulse" /> {t.live}</span>}
                   <span className="ltr-nums ms-auto text-xs text-muted-foreground">{e.project.code} · {formatDateTime(e.startsAt, fmt)}</span>
                 </div>
                 <div className="grid gap-3 text-xs sm:grid-cols-4">
-                  <div><div className="mb-1 text-muted-foreground">{t.readiness} {e.readiness.ready}/{e.readiness.total}</div><ProgressBar value={e.readiness.total ? (e.readiness.ready / e.readiness.total) * 100 : 0} tone={e.readiness.issues ? "danger" : "jade"} /></div>
+                  <div><div className="mb-1 text-muted-foreground">{t.readiness} {e.readiness.ready}/{e.readiness.total}</div><ProgressBar value={e.readiness.total ? (e.readiness.ready / e.readiness.total) * 100 : 0} tone={e.readiness.issues ? "danger" : "brand"} /></div>
                   <div><div className="text-muted-foreground">{t.nowLive}</div><div className="font-medium">{e.currentCue?.title ?? "—"}</div><div className="text-muted-foreground">{e.nextCue ? `${t.upNext}: ${formatTime(e.nextCue.startsAt, fmt)} ${e.nextCue.title}` : ""}</div></div>
                   <div><div className="text-muted-foreground">{t.staffOnSite}</div><div className="tabular font-medium">{e.staff.checkedIn}/{e.staff.due}{e.staff.noShow ? <span className="text-danger"> · {e.staff.noShow} {t.noShow}</span> : null}</div></div>
                   <div><div className="text-muted-foreground">{t.guestsArrived}</div><div className="tabular font-medium">{e.guests.arrived}/{e.guests.expected}</div>{e.incidents > 0 && <div className="flex items-center gap-1 text-danger"><AlertTriangle className="size-3" /> {e.incidents}</div>}</div>

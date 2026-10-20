@@ -59,7 +59,7 @@ export function ProjectWizard({ orgSlug, clients, venues, managers, currentUserI
       <ol className="flex flex-wrap gap-2">
         {steps.map((s, i) => (
           <li key={s}>
-            <button onClick={() => i < step && setStep(i)} className={cn("flex items-center gap-2 rounded-full border px-3 py-1 text-xs", i === step ? "border-primary bg-jade-soft text-primary" : i < step ? "text-foreground" : "text-muted-foreground")}>
+            <button onClick={() => i < step && setStep(i)} className={cn("flex items-center gap-2 rounded-full border px-3 py-1 text-xs", i === step ? "border-primary bg-brand-soft text-primary" : i < step ? "text-foreground" : "text-muted-foreground")}>
               <span className={cn("flex size-4 items-center justify-center rounded-full text-[10px]", i < step ? "bg-primary text-primary-foreground" : "bg-muted")}>{i < step ? <Check className="size-3" /> : i + 1}</span>
               {s}
             </button>
@@ -110,7 +110,7 @@ export function ProjectWizard({ orgSlug, clients, venues, managers, currentUserI
               <div className="flex flex-wrap gap-2">
                 {venues.length === 0 && <span className="text-xs text-muted-foreground">{m.common.none}</span>}
                 {venues.map((v) => (
-                  <button key={v.id} type="button" onClick={() => setVenueIds((ids) => (ids.includes(v.id) ? ids.filter((x) => x !== v.id) : [...ids, v.id]))} className={cn("rounded-full border px-3 py-1 text-xs", venueIds.includes(v.id) && "border-primary bg-jade-soft text-primary")}>
+                  <button key={v.id} type="button" onClick={() => setVenueIds((ids) => (ids.includes(v.id) ? ids.filter((x) => x !== v.id) : [...ids, v.id]))} className={cn("rounded-full border px-3 py-1 text-xs", venueIds.includes(v.id) && "border-primary bg-brand-soft text-primary")}>
                     {v.name} · {v.city}
                   </button>
                 ))}
@@ -151,10 +151,10 @@ export function ProjectWizard({ orgSlug, clients, venues, managers, currentUserI
       {step === 3 && (
         <Section>
           <div className="grid gap-3 p-4 text-sm">
-            <div className="text-lg font-semibold">{data.name}</div>
+            <div className="text-lg font-medium">{data.name}</div>
             <div className="text-muted-foreground">{m.enums.projectType[data.type as keyof typeof m.enums.projectType]} · {clients.find((c) => c.id === data.clientId)?.name ?? m.projects.noClient}</div>
             <div className="tabular text-xs text-muted-foreground">{m.projects.eventStart}: {formatDate(parseRiyadhDateTime(data.eventStartAt), fmt)} · {m.projects.deadline}: {formatDate(parseRiyadhDate(data.deadline), fmt)}</div>
-            <div className="flex items-start gap-2 rounded-md bg-jade-soft p-3 text-primary">
+            <div className="flex items-start gap-2 rounded-md bg-brand-soft p-3 text-primary">
               <Layers className="mt-0.5 size-4" />
               <div>
                 <div className="font-medium">{templates.filter((t) => selected.includes(t.id)).map((t) => t.name).join(" + ") || m.common.none}</div>

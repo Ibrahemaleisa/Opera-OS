@@ -59,7 +59,7 @@ export function ProtocolBoard({ orgSlug, projectId, data }: { orgSlug: string; p
   const expected = arrived + (data.counts.EXPECTED ?? 0) + (data.counts.CONFIRMED ?? 0);
 
   const columns = useMemo<ColumnDef<G, unknown>[]>(() => [
-    { accessorKey: "protocolLevel", header: t.level, cell: ({ getValue }) => <span className="tabular inline-flex size-6 items-center justify-center rounded-full bg-muted text-xs font-semibold">{getValue() as number}</span> },
+    { accessorKey: "protocolLevel", header: t.level, cell: ({ getValue }) => <span className="tabular inline-flex size-6 items-center justify-center rounded-full bg-muted text-xs font-medium">{getValue() as number}</span> },
     {
       accessorKey: "displayName",
       header: m.common.name,
@@ -140,7 +140,7 @@ export function ProtocolBoard({ orgSlug, projectId, data }: { orgSlug: string; p
             {data.zones.map((z) => (
               <li key={z.id} className="grid gap-1 text-xs">
                 <div className="flex items-center justify-between"><span className="flex items-center gap-1 font-medium"><Armchair className="size-3.5" /> {z.name}</span><span className="tabular text-muted-foreground">{z.occupied}/{z.capacity || "∞"}{z.protocolLevel ? ` · ≤${z.protocolLevel}` : ""}</span></div>
-                {z.capacity > 0 && <ProgressBar value={(z.occupied / z.capacity) * 100} tone={z.occupied >= z.capacity ? "warning" : "jade"} />}
+                {z.capacity > 0 && <ProgressBar value={(z.occupied / z.capacity) * 100} tone={z.occupied >= z.capacity ? "warning" : "brand"} />}
               </li>
             ))}
           </ul>

@@ -79,7 +79,7 @@ export function TaskViews({ orgSlug, projectId, view, workstreamId, tasks, works
         <MonthCalendar locale={locale} items={tasks.filter((t) => t.dueAt).map((t) => ({ id: t.id, name: `#${t.number} ${t.title}`, start: t.dueAt, href: href(t.id), tone: t.statusCategory !== "DONE" && t.dueAt && new Date(t.dueAt) < new Date() ? "danger" : undefined }))} />
       ) : view === "timeline" ? (
         <Section>
-          <GanttRows locale={locale} rows={tasks.map((t) => ({ id: t.id, label: `#${t.number} ${t.title}`, sub: [wsById.get(t.workstreamId ?? "")?.name, t.owner?.name].filter(Boolean).join(" · "), start: t.startAt ? new Date(t.startAt) : null, end: t.dueAt ? new Date(t.dueAt) : null, href: href(t.id), tone: t.statusCategory === "DONE" ? "muted" : t.statusCategory === "BLOCKED" ? "danger" : t.dueAt && new Date(t.dueAt) < new Date() ? "warning" : "jade" }))} />
+          <GanttRows locale={locale} rows={tasks.map((t) => ({ id: t.id, label: `#${t.number} ${t.title}`, sub: [wsById.get(t.workstreamId ?? "")?.name, t.owner?.name].filter(Boolean).join(" · "), start: t.startAt ? new Date(t.startAt) : null, end: t.dueAt ? new Date(t.dueAt) : null, href: href(t.id), tone: t.statusCategory === "DONE" ? "muted" : t.statusCategory === "BLOCKED" ? "danger" : t.dueAt && new Date(t.dueAt) < new Date() ? "warning" : "brand" }))} />
         </Section>
       ) : view === "workload" ? (
         <Workload tasks={tasks} members={members} href={href} />
@@ -111,7 +111,7 @@ function TaskCard({ t, href, ws, draggable, onDragStart }: { t: T; href: string;
         <div className="flex items-center gap-2 text-[11px]">
           {t.checklist.total > 0 && <span className="tabular text-muted-foreground">☑ {t.checklist.done}/{t.checklist.total}</span>}
           {t.dueAt && <span className={cn("tabular", overdue ? "font-medium text-danger" : "text-muted-foreground")}>{formatDate(t.dueAt, fmt)}</span>}
-          {t.owner ? <span className="flex size-5 items-center justify-center rounded-full bg-secondary text-[9px] font-semibold" title={t.owner.name}>{t.owner.name.slice(0, 2)}</span> : <span className="size-5 rounded-full border border-dashed" title={m.common.unassigned} />}
+          {t.owner ? <span className="flex size-5 items-center justify-center rounded-full bg-secondary text-[9px] font-medium" title={t.owner.name}>{t.owner.name.slice(0, 2)}</span> : <span className="size-5 rounded-full border border-dashed" title={m.common.unassigned} />}
         </div>
       </div>
     </Link>
@@ -149,7 +149,7 @@ function Board({ tasks, workstream, wsById, orgSlug, href, onAdd }: { tasks: T[]
             onDragOver={(e) => { e.preventDefault(); setOver(col.key); }}
             onDragLeave={() => setOver((o) => (o === col.key ? null : o))}
             onDrop={(e) => onDrop(col.key, col.category, e)}
-            className={cn("flex min-h-60 flex-col rounded-lg bg-muted/50 p-2 transition-colors", over === col.key && "bg-jade-soft ring-1 ring-primary/40")}
+            className={cn("flex min-h-60 flex-col rounded-lg bg-muted/50 p-2 transition-colors", over === col.key && "bg-brand-soft ring-1 ring-primary/40")}
             data-testid={`column-${col.key}`}
           >
             <div className="mb-2 flex items-center justify-between px-1">
@@ -244,7 +244,7 @@ function Workload({ tasks, members, href }: { tasks: T[]; members: { id: string;
             </div>
             {r.tasks.length > 0 && (
               <div className="flex flex-wrap gap-1 md:col-span-3">
-                {r.tasks.slice(0, 12).map((t) => <Link key={t.id} href={href(t.id)} className="truncate rounded bg-muted px-1.5 py-0.5 text-[11px] hover:bg-jade-soft" style={{ maxWidth: 220 }}>#{t.number} {t.title}</Link>)}
+                {r.tasks.slice(0, 12).map((t) => <Link key={t.id} href={href(t.id)} className="truncate rounded bg-muted px-1.5 py-0.5 text-[11px] hover:bg-brand-soft" style={{ maxWidth: 220 }}>#{t.number} {t.title}</Link>)}
               </div>
             )}
           </li>

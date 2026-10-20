@@ -31,7 +31,7 @@ async function ArrivalsPage({ params }: { params: Promise<{ org: string }> }) {
                   <ul className="divide-y">
                     {guests.map((g) => (
                       <li key={g.id} className="grid gap-1 px-4 py-2.5 text-sm md:grid-cols-[40px_1fr_160px_140px] md:items-center">
-                        <span className="tabular inline-flex size-6 items-center justify-center rounded-full bg-muted text-xs font-semibold">{g.protocolLevel}</span>
+                        <span className="tabular inline-flex size-6 items-center justify-center rounded-full bg-muted text-xs font-medium">{g.protocolLevel}</span>
                         <div><div className="flex items-center gap-1 font-medium">{g.honorific} {g.displayName}{g.hasRestricted && <Lock className="size-3 text-warning" />}</div><div className="text-[11px] text-muted-foreground">{g.organizationName}</div></div>
                         <span className="ltr-nums text-xs text-muted-foreground">{g.arrivalAt ? formatTime(g.arrivalAt, fmt) : "—"}{g.arrivalPoint ? ` · ${g.arrivalPoint}` : ""}</span>
                         <StatusBadge status={g.attendance === "ARRIVED" || g.attendance === "SEATED" ? "DELIVERED" : g.attendance === "NO_SHOW" ? "FAILED" : g.attendance} label={m.enums.attendance[g.attendance]} />

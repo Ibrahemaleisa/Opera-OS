@@ -141,7 +141,7 @@ export function RisksPanel({ orgSlug, projectId, risks, canEdit, members }: { or
             return (
               <li key={r.id}>
                 <button disabled={!canEdit} onClick={() => setEdit(r)} className="flex w-full items-center gap-3 px-4 py-2 text-start hover:bg-muted/40">
-                  <span className={`tabular flex size-7 shrink-0 items-center justify-center rounded text-xs font-bold ${score >= 15 ? "bg-danger text-white" : score >= 8 ? "bg-warning-soft text-warning" : "bg-muted text-muted-foreground"}`}>{score}</span>
+                  <span className={`tabular flex size-7 shrink-0 items-center justify-center rounded text-xs font-medium ${score >= 15 ? "bg-danger text-white" : score >= 8 ? "bg-warning-soft text-warning" : "bg-muted text-muted-foreground"}`}>{score}</span>
                   <span className="min-w-0 flex-1"><span className="block truncate text-[13px]">{r.title}</span>{r.mitigation && <span className="block truncate text-[11px] text-muted-foreground">{r.mitigation}</span>}</span>
                   <StatusBadge status={r.status === "MITIGATING" ? "IN_PROGRESS" : r.status} label={statusLabels[r.status]} />
                 </button>

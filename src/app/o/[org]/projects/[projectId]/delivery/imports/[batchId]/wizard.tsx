@@ -3,8 +3,9 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, ArrowLeftRight, CheckCircle2, Download, Loader2, RotateCcw, Wrench } from "lucide-react";
+import { AlertTriangle, ArrowLeftRight, CheckCircle2, Download, RotateCcw, Wrench } from "lucide-react";
 import { toast } from "sonner";
+import { Spinner } from "@/components/brand/spinner";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -38,7 +39,7 @@ export function ImportWizard({ orgSlug, projectId, data, preview, campaigns, sta
       <div className="flex flex-wrap items-center gap-3">
         <ol className="flex flex-wrap gap-2">
           {[im.steps.upload, im.steps.map, im.steps.review, im.steps.commit].map((s, i) => (
-            <li key={s} className={cn("flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs", i === step ? "border-primary bg-jade-soft text-primary" : i < step ? "text-foreground" : "text-muted-foreground")}>
+            <li key={s} className={cn("flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs", i === step ? "border-primary bg-brand-soft text-primary" : i < step ? "text-foreground" : "text-muted-foreground")}>
               <span className={cn("flex size-4 items-center justify-center rounded-full text-[10px]", i < step ? "bg-primary text-primary-foreground" : "bg-muted")}>{i < step ? "✓" : i + 1}</span>{s}
             </li>
           ))}
@@ -74,7 +75,7 @@ function Progress({ orgSlug, batchId }: { orgSlug: string; batchId: string }) {
   return (
     <Section>
       <div className="grid gap-2 p-4">
-        <div className="flex items-center gap-2 text-sm"><Loader2 className="size-4 animate-spin" /> {p.status === "COMMITTING" ? m.delivery.import.committing : m.delivery.import.validating}</div>
+        <div className="flex items-center gap-2 text-sm"><Spinner /> {p.status === "COMMITTING" ? m.delivery.import.committing : m.delivery.import.validating}</div>
         <ProgressBar value={p.progress} />
         <p className="text-xs text-muted-foreground">{m.delivery.import.background}</p>
       </div>
@@ -143,7 +144,7 @@ function MappingStep({ orgSlug, preview: initial, onDone }: { orgSlug: string; p
                   <tr key={f.key} className="border-b last:border-0">
                     <td className="px-3 py-1.5">{locale === "ar" ? f.ar : f.en}</td>
                     <td className="px-3 py-1">
-                      <NativeSelect className={cn("h-8", mapping[f.key] && "border-primary/50 bg-jade-soft/40")} value={mapping[f.key] ?? ""} onChange={(e) => setMapping((mm) => ({ ...mm, [f.key]: e.target.value }))} data-testid={`map-${f.key}`}>
+                      <NativeSelect className={cn("h-8", mapping[f.key] && "border-primary/50 bg-brand-soft/40")} value={mapping[f.key] ?? ""} onChange={(e) => setMapping((mm) => ({ ...mm, [f.key]: e.target.value }))} data-testid={`map-${f.key}`}>
                         <option value="">{im.ignore}</option>
                         {preview.headers.map((h) => <option key={h} value={h}>{h}</option>)}
                       </NativeSelect>
@@ -179,7 +180,7 @@ function MappingStep({ orgSlug, preview: initial, onDone }: { orgSlug: string; p
               data-testid="import-validate"
               onClick={() => configure.run({ batchId: preview.batch.id, sheetName: preview.sheetName, headerRow: preview.headerRow, mapping: Object.fromEntries(Object.entries(mapping).map(([k, v]) => [k, v || null])), options: { ...opts, defaultCity: opts.defaultCity ?? null }, saveMappingAs: saveAs || null })}
             >
-              {configure.pending ? <><Loader2 className="animate-spin" /> {im.validating}</> : im.validate}
+              {configure.pending ? <><Spinner /> {im.validating}</> : im.validate}
             </Button>
           </div>
         </Section>
@@ -219,8 +220,8 @@ function ReviewStep({ orgSlug, projectId, data, campaigns, statusFilter }: { org
     <div className="grid gap-4">
       <div className="flex flex-wrap items-center gap-2">
         {chips.map(([k, label, n]) => (
-          <button key={k} onClick={() => router.replace(k ? `${pathname}?status=${k}` : pathname)} className={cn("flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs", statusFilter === k && "border-primary bg-jade-soft text-primary")} data-testid={`chip-${k || "ALL"}`}>
-            {k && <StatusBadge status={k} label="" className="w-2 px-0" dot />} {label} <span className="tabular font-semibold">{n ?? 0}</span>
+          <button key={k} onClick={() => router.replace(k ? `${pathname}?status=${k}` : pathname)} className={cn("flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs", statusFilter === k && "border-primary bg-brand-soft text-primary")} data-testid={`chip-${k || "ALL"}`}>
+            {k && <StatusBadge status={k} label="" className="w-2 px-0" dot />} {label} <span className="tabular font-medium">{n ?? 0}</span>
           </button>
         ))}
         <div className="ms-auto flex flex-wrap gap-2">
@@ -288,7 +289,7 @@ function ReviewStep({ orgSlug, projectId, data, campaigns, statusFilter }: { org
             )}
           </div>
           <Button disabled={commit.pending} onClick={() => commit.run({ batchId: data.batch.id, includeWarnings, acceptPartial, campaignId: campaignId || null })} data-testid="import-commit">
-            {commit.pending ? <><Loader2 className="animate-spin" /> {im.committing}</> : <><CheckCircle2 /> {im.commit}</>}
+            {commit.pending ? <><Spinner /> {im.committing}</> : <><CheckCircle2 /> {im.commit}</>}
           </Button>
         </div>
       </Section>
@@ -337,7 +338,7 @@ function DoneStep({ orgSlug, projectId, data }: { orgSlug: string; projectId: st
     <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
       <Section>
         <div className="grid gap-3 p-5">
-          <div className="flex items-center gap-2 text-lg font-semibold">{b.status === "ROLLED_BACK" ? <RotateCcw className="size-5 text-muted-foreground" /> : <CheckCircle2 className="size-5 text-success" />}{b.status === "ROLLED_BACK" ? im.rolledBack : interpolate(im.committed, { n: b.committedRows })}</div>
+          <div className="flex items-center gap-2 text-lg font-medium">{b.status === "ROLLED_BACK" ? <RotateCcw className="size-5 text-muted-foreground" /> : <CheckCircle2 className="size-5 text-success" />}{b.status === "ROLLED_BACK" ? im.rolledBack : interpolate(im.committed, { n: b.committedRows })}</div>
           <div className="tabular text-sm text-muted-foreground">{interpolate(im.summary, { valid: b.validRows, warning: b.warningRows, invalid: b.invalidRows, duplicate: b.duplicateRows })} · {m.enums.importRowStatus.SKIPPED}: {data.counts.SKIPPED ?? 0}</div>
           {data.campaign && <div className="text-sm">{m.delivery.campaign}: <Link className="text-primary hover:underline" href={`/o/${orgSlug}/projects/${projectId}/delivery/cards?c=${data.campaign.id}`}>{data.campaign.name}</Link></div>}
           <div className="flex flex-wrap gap-2">

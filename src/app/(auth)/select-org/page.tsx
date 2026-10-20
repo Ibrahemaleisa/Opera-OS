@@ -12,13 +12,13 @@ export default async function SelectOrgPage() {
   if (orgs.length === 1) redirect(homePathFor(orgs[0].role.baseRole, orgs[0].organization.slug));
   return (
     <div>
-      <h1 className="text-2xl font-semibold tracking-tight">{m.auth.chooseOrg}</h1>
+      <h1 className="text-2xl font-medium">{m.auth.chooseOrg}</h1>
       {orgs.length === 0 && <p className="mt-4 text-sm text-muted-foreground">{m.auth.noOrgs}</p>}
       <ul className="mt-6 grid gap-2">
         {orgs.map((o) => (
           <li key={o.id}>
             <Link href={homePathFor(o.role.baseRole, o.organization.slug)} className="surface flex items-center gap-3 px-4 py-3 hover:border-primary">
-              <span className="flex size-8 items-center justify-center rounded-md text-sm font-bold text-white" style={{ backgroundColor: o.organization.brandColor }}>
+              <span className="flex size-8 items-center justify-center rounded-md text-sm font-medium text-white" style={{ backgroundColor: o.organization.brandColor }}>
                 {o.organization.name.charAt(0)}
               </span>
               <span>

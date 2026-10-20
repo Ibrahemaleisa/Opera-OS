@@ -38,7 +38,7 @@ export function UploadImport({ orgSlug, projectId, campaigns, defaultCampaign }:
         onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
         onDragLeave={() => setDrag(false)}
         onDrop={(e) => { e.preventDefault(); setDrag(false); setFile(e.dataTransfer.files[0] ?? null); }}
-        className={cn("flex flex-col items-center gap-2 rounded-lg border-2 border-dashed px-4 py-8 text-center transition-colors", drag ? "border-primary bg-jade-soft" : "hover:border-primary/50")}
+        className={cn("flex flex-col items-center gap-2 rounded-lg border-2 border-dashed px-4 py-8 text-center transition-colors", drag ? "border-primary bg-brand-soft" : "hover:border-primary/50")}
       >
         <FileSpreadsheet className="size-8 text-muted-foreground" />
         <span className="text-sm font-medium">{file ? file.name : m.delivery.import.upload}</span>

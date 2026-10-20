@@ -40,7 +40,7 @@ export function DeliveryCard({ orgSlug, projectId, data, agents, comments, membe
     <div className="grid gap-4">
       <Breadcrumbs dir={dir} items={[{ label: dl.cards, href: `/o/${orgSlug}/projects/${projectId}/delivery/cards?c=${data.campaign.id}` }, { label: d.trackingCode }]} />
       <div className="flex flex-wrap items-center gap-3">
-        <h2 className="ltr-nums font-mono text-lg font-semibold">{d.trackingCode}</h2>
+        <h2 className="ltr-nums font-mono text-lg font-medium">{d.trackingCode}</h2>
         <StatusBadge status={d.status} label={m.enums.deliveryStatus[d.status]} />
         {d.escalatedAt && <span className="flex items-center gap-1 text-xs text-danger"><AlertCircle className="size-3.5" /> {dl.escalated}: {d.escalationNote}</span>}
         <span className="text-xs text-muted-foreground">{data.campaign.name}</span>

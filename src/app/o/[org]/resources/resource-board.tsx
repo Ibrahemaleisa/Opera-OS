@@ -33,7 +33,7 @@ export function ResourceBoard({ orgSlug, data }: { orgSlug: string; data: D }) {
                     <td className="px-3 py-2"><div className="font-medium">{r.name}</div><div className="text-[11px] text-muted-foreground">{r.role}</div></td>
                     <td className="px-3 py-2 text-xs">{t.kind[r.kind as keyof typeof t.kind]}{r.vehicle ? ` · ${r.vehicle}` : ""}</td>
                     <td className="tabular px-3 py-2">{r.capacity}</td>
-                    <td className="w-40 px-3 py-2"><ProgressBar value={Math.min(100, (r.load ?? 0) * 100)} tone={over ? "danger" : (r.load ?? 0) > 0.8 ? "warning" : "jade"} /><span className={cn("tabular text-[11px]", over ? "text-danger" : "text-muted-foreground")}>{formatPercent(r.load, fmt)}{over ? ` · ${t.overloaded}` : ""}</span></td>
+                    <td className="w-40 px-3 py-2"><ProgressBar value={Math.min(100, (r.load ?? 0) * 100)} tone={over ? "danger" : (r.load ?? 0) > 0.8 ? "warning" : "brand"} /><span className={cn("tabular text-[11px]", over ? "text-danger" : "text-muted-foreground")}>{formatPercent(r.load, fmt)}{over ? ` · ${t.overloaded}` : ""}</span></td>
                     <td className="tabular px-3 py-2">{r.openTasks}{r.overdue > 0 && <span className="ms-1 text-[11px] text-danger">({r.overdue} {t.overdue})</span>}</td>
                     <td className="tabular px-3 py-2">{r.dueThisWeek}</td>
                     <td className="tabular px-3 py-2">{r.shiftHours}</td>

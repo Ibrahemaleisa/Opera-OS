@@ -115,7 +115,7 @@ export function BoothWorkspace({ orgSlug, data }: { orgSlug: string; data: D }) 
     <div className="grid gap-4">
       <Breadcrumbs dir={dir} items={[{ label: m.nav.booths, href: `/o/${orgSlug}/projects/${data.project.id}/production` }, { label: b.name }]} />
       <div className="flex flex-wrap items-center gap-2">
-        <h2 className="text-lg font-semibold">{b.name}</h2>
+        <h2 className="text-lg font-medium">{b.name}</h2>
         <span className="text-xs text-muted-foreground">{t.kind[b.kind as keyof typeof t.kind]}{b.standNumber ? ` · ${b.standNumber}` : ""}{b.hall ? ` · ${b.hall}` : ""}</span>
         <StatusBadge status={idx >= STAGES.indexOf("HANDOVER") ? "DONE" : "IN_PROGRESS"} label={m.enums.boothStage[b.stage]} />
         {can && <Button size="sm" variant="outline" className="ms-auto" onClick={() => setDlg({ kind: "booth", values: b as unknown as Record<string, unknown> })}>{m.common.edit}</Button>}
@@ -126,7 +126,7 @@ export function BoothWorkspace({ orgSlug, data }: { orgSlug: string; data: D }) 
         {STAGES.map((s, i) => (
           <li key={s} className={cn("flex min-w-[88px] flex-1 flex-col gap-1 text-[10px]", i <= idx ? "text-foreground" : "text-muted-foreground")}>
             <span className={cn("h-1.5 rounded-full", i < idx ? "bg-primary" : i === idx ? "bg-primary/60" : "bg-muted")} />
-            <span className={cn(i === idx && "font-semibold")}>{m.enums.boothStage[s]}</span>
+            <span className={cn(i === idx && "font-medium")}>{m.enums.boothStage[s]}</span>
           </li>
         ))}
       </ol>
@@ -190,7 +190,7 @@ export function BoothWorkspace({ orgSlug, data }: { orgSlug: string; data: D }) 
               {data.revisions.map((r) => (
                 <li key={r.id} className="grid gap-3 px-4 py-4" data-testid="revision">
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="tabular rounded bg-muted px-1.5 text-xs font-semibold">R{r.revisionNo}</span>
+                    <span className="tabular rounded bg-muted px-1.5 text-xs font-medium">R{r.revisionNo}</span>
                     <span className="text-[13px] font-medium">{r.title}</span>
                     <StatusBadge status={r.status} label={m.enums.revisionStatus[r.status]} />
                     {r.approval?.decisionComment && <span className="text-[11px] text-muted-foreground">“{r.approval.decisionComment}”</span>}

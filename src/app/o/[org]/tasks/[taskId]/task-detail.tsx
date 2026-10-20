@@ -180,7 +180,7 @@ export function TaskDetail({ orgSlug, data }: { orgSlug: string; data: Detail })
                 {data.members.filter((x) => !["CLIENT_VIEWER", "CLIENT_APPROVER"].includes(x.role)).map((x) => {
                   const on = t.collaborators.some((c) => c.userId === x.id);
                   return (
-                    <button key={x.id} disabled={ro || collab.pending} onClick={() => collab.run({ taskId: t.id, userIds: on ? t.collaborators.filter((c) => c.userId !== x.id).map((c) => c.userId) : [...t.collaborators.map((c) => c.userId), x.id] })} className={`rounded-full border px-2.5 py-0.5 text-xs ${on ? "border-primary bg-jade-soft text-primary" : "text-muted-foreground"}`}>
+                    <button key={x.id} disabled={ro || collab.pending} onClick={() => collab.run({ taskId: t.id, userIds: on ? t.collaborators.filter((c) => c.userId !== x.id).map((c) => c.userId) : [...t.collaborators.map((c) => c.userId), x.id] })} className={`rounded-full border px-2.5 py-0.5 text-xs ${on ? "border-primary bg-brand-soft text-primary" : "text-muted-foreground"}`}>
                       {x.name}
                     </button>
                   );

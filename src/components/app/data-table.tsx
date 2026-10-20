@@ -127,7 +127,7 @@ export function DataTable<T>({
         {toolbar}
         <div className="ms-auto flex items-center gap-2">
           {selectable && selected.length > 0 && (
-            <div className="flex items-center gap-2 rounded-md bg-jade-soft px-2 py-1 text-xs text-primary">
+            <div className="flex items-center gap-2 rounded-md bg-brand-soft px-2 py-1 text-xs text-primary">
               <span className="font-medium">{interpolate(m.common.selected, { count: selected.length })}</span>
               {bulkActions?.(selected, clear)}
               <button onClick={clear} className="opacity-70 hover:opacity-100" aria-label={m.common.clearFilters}>
@@ -185,7 +185,7 @@ export function DataTable<T>({
                 key={row.id}
                 data-state={row.getIsSelected() ? "selected" : undefined}
                 onClick={onRowClick ? () => onRowClick(row.original) : undefined}
-                className={cn("border-b last:border-0 hover:bg-muted/40 data-[state=selected]:bg-jade-soft/60", onRowClick && "cursor-pointer", rowClassName?.(row.original))}
+                className={cn("border-b last:border-0 hover:bg-muted/40 data-[state=selected]:bg-brand-soft/60", onRowClick && "cursor-pointer", rowClassName?.(row.original))}
               >
                 {row.getVisibleCells().map((cell) => (
                   <td key={cell.id} className={cn("px-3 align-middle", dense ? "h-10" : "h-12")}>
