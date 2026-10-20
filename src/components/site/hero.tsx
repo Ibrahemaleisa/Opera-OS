@@ -6,7 +6,7 @@ import { Container } from "./primitives";
 /** The orbit: the symbol's open ring as one thin line, its dot the current moment. Never mirrored. */
 function Orbit({ className }: { className?: string }) {
   return (
-    <svg viewBox="-4 -4 108 108" className={className} aria-hidden style={{ direction: "ltr" }}>
+    <svg viewBox="-4 -4 108 108" className={className} aria-hidden>
       <path className="orbit-ring" d={SYMBOL.ring} pathLength={1} fill="none" stroke="var(--mist)" strokeOpacity={0.7} strokeWidth={0.18} />
       <circle className="orbit-dot" cx={SYMBOL.dot.cx} cy={SYMBOL.dot.cy} r={2.4} fill="var(--brand-violet)" />
     </svg>
@@ -16,7 +16,7 @@ function Orbit({ className }: { className?: string }) {
 export function Hero({ t, country }: { t: SiteCopy; country: string }) {
   return (
     <section aria-labelledby="hero-title" className="bg-night-gradient relative isolate -mt-[72px] overflow-hidden text-mist">
-      <Orbit className="pointer-events-none absolute -end-[34%] top-[56px] -z-10 aspect-square w-[88%] sm:-end-[18%] sm:w-[70%] lg:-end-[6%] lg:top-[88px] lg:w-[min(68vh,44vw)]" />
+      <Orbit className="pointer-events-none absolute -end-[34%] top-[56px] -z-10 aspect-square w-[88%] rtl:-end-[10%] sm:-end-[18%] sm:w-[70%] sm:rtl:-end-[4%] lg:rtl:-end-[6%] lg:-end-[6%] lg:top-[88px] lg:w-[min(68vh,44vw)]" />
       <Container className="flex min-h-[100svh] flex-col pt-[136px] pb-10">
         <div className="mt-auto">
           <p className="hero-in eyebrow !text-[12px] !text-lilac" style={{ "--d": "100ms" } as React.CSSProperties}>{t.hero.eyebrow}</p>
