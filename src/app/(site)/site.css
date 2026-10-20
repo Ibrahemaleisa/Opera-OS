@@ -1,0 +1,125 @@
+/*
+ * Opera corporate site. Builds on the brand tokens in globals.css; adds only the editorial
+ * type scale and motion. Motion follows the brand: ease-out, opacity/translate only, the
+ * logo reveal order (dot → ring → name), and nothing moves under prefers-reduced-motion.
+ */
+
+html:has(.opera-site) {
+  scroll-behavior: smooth;
+  scroll-padding-top: 5rem;
+}
+
+/* Editorial scale. Arabic keeps the brand's 1.25 heading leading and never tracks. */
+.site-display {
+  font-size: clamp(2.5rem, 6.6vw, 6rem);
+  line-height: 1.04;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+.site-h2 {
+  font-size: clamp(1.875rem, 3.8vw, 3.25rem);
+  line-height: 1.1;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+.site-h3 {
+  font-size: clamp(1.375rem, 2.2vw, 2rem);
+  line-height: 1.2;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+.site-lead {
+  font-size: clamp(1.0625rem, 1.35vw, 1.25rem);
+  line-height: 1.6;
+  text-wrap: pretty;
+}
+html[lang="ar"] .site-display {
+  font-size: clamp(2.25rem, 5.6vw, 5.25rem);
+  line-height: 1.25;
+  letter-spacing: 0;
+}
+html[lang="ar"] :is(.site-h2, .site-h3) {
+  line-height: 1.35;
+  letter-spacing: 0;
+}
+html[lang="ar"] .site-lead {
+  line-height: 1.8;
+}
+
+/* Header: transparent over the hero, Night once the page scrolls (solid where unsupported). */
+.site-header {
+  background-color: var(--night);
+  border-bottom: 1px solid rgb(245 242 248 / 0.08);
+}
+@supports (animation-timeline: scroll()) {
+  .site-header {
+    animation: site-header-solid linear both;
+    animation-timeline: scroll(root);
+    animation-range: 0 120px;
+  }
+}
+@keyframes site-header-solid {
+  from {
+    background-color: rgb(8 5 14 / 0);
+    border-bottom-color: rgb(245 242 248 / 0);
+  }
+}
+
+/* Scroll reveal: content is visible by default; browsers with view timelines fade it up. */
+@supports (animation-timeline: view()) {
+  .reveal {
+    animation: site-reveal linear both;
+    animation-timeline: view();
+    animation-range: entry 0% entry 55%;
+  }
+}
+@keyframes site-reveal {
+  from {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+}
+
+/* Hero: the logo reveal — the dot appears, the ring draws, then the words arrive. */
+.orbit-dot {
+  animation: site-fade 250ms var(--ease-out) both;
+}
+.orbit-ring {
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: site-draw 1000ms var(--ease-out) 200ms forwards;
+}
+.hero-in {
+  animation: site-rise 600ms var(--ease-out) both;
+  animation-delay: var(--d, 500ms);
+}
+@keyframes site-fade {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes site-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes site-rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal,
+  .orbit-dot,
+  .hero-in {
+    animation: none !important;
+  }
+  .orbit-ring {
+    animation: none !important;
+    stroke-dashoffset: 0;
+  }
+}

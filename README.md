@@ -125,6 +125,20 @@ Differences from the Docker setup: there is no long-running worker — jobs run 
 request, and a daily Vercel Cron (`/api/cron/scheduler`, Hobby plan limit) sends due-soon/overdue
 reminders; without Redis, rate limits are per function instance; uploads are limited to ~4 MB.
 
+## Corporate site
+
+`/` is Opera's public website (route group `src/app/(site)`); the operations workspace lives
+behind `/login` as before, and signed-in visitors get a "Workspace" link that routes each role to
+its own dashboard. Only `/` and `/work/*` are indexable.
+
+Content is kept in three files, and nothing is published that isn't in them:
+
+| File | What to supply |
+|---|---|
+| `src/content/company.ts` | contact email, phone and address; leadership titles and portraits (`/public/leadership/…`). `null` shows a marked placeholder. |
+| `src/content/work.ts` | real, approved projects (images under `/public/work/<slug>/`). Each gets a page at `/work/<slug>`; while empty the section says the selection is being prepared. |
+| `src/content/site-copy.ts` | all Arabic and English copy of the site. |
+
 ## Project layout
 
 ```

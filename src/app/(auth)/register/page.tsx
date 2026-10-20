@@ -2,7 +2,7 @@ import Link from "next/link";
 import { getI18n } from "@/lib/i18n/server";
 import { RegisterForm } from "./register-form";
 
-export const metadata = { title: "Create agency" };
+export const metadata = { title: "Create workspace" };
 
 export default async function RegisterPage() {
   const { m } = await getI18n();

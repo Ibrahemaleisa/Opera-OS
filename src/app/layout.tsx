@@ -2,6 +2,7 @@ import "./globals.css";
 import type { Metadata, Viewport } from "next";
 import { getI18n } from "@/lib/i18n/server";
 import { cn } from "@/lib/utils";
+import { appBaseUrl } from "@/server/app-url";
 import { arabic, jost } from "./fonts";
 import { Providers } from "./providers";
 
@@ -9,6 +10,7 @@ import { Providers } from "./providers";
 export const maxDuration = 300;
 
 export const metadata: Metadata = {
+  metadataBase: new URL(appBaseUrl()),
   title: { default: "Opera", template: "%s · Opera" },
   description: "Operations platform for event, protocol and VIP invitation agencies",
   robots: { index: false, follow: false },

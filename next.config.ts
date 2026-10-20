@@ -20,7 +20,12 @@ const nextConfig: NextConfig = {
     authInterrupts: true,
   },
   async headers() {
-    return [{ source: "/:path*", headers: securityHeaders }];
+    return [
+      { source: "/:path*", headers: securityHeaders },
+      // the corporate site is the only public, indexable surface (a later match overrides the key)
+      { source: "/", headers: [{ key: "X-Robots-Tag", value: "index, follow" }] },
+      { source: "/work/:path*", headers: [{ key: "X-Robots-Tag", value: "index, follow" }] },
+    ];
   },
 };
 

@@ -1,0 +1,49 @@
+import Link from "next/link";
+import { SYMBOL } from "@/components/brand/logo-paths";
+import type { SiteCopy } from "@/content/site-copy";
+import { Container } from "./primitives";
+
+/** The orbit: the symbol's open ring as one thin line, its dot the current moment. Never mirrored. */
+function Orbit({ className }: { className?: string }) {
+  return (
+    <svg viewBox="-4 -4 108 108" className={className} aria-hidden style={{ direction: "ltr" }}>
+      <path className="orbit-ring" d={SYMBOL.ring} pathLength={1} fill="none" stroke="var(--mist)" strokeOpacity={0.7} strokeWidth={0.18} />
+      <circle className="orbit-dot" cx={SYMBOL.dot.cx} cy={SYMBOL.dot.cy} r={2.4} fill="var(--brand-violet)" />
+    </svg>
+  );
+}
+
+export function Hero({ t, country }: { t: SiteCopy; country: string }) {
+  return (
+    <section aria-labelledby="hero-title" className="bg-night-gradient relative isolate -mt-[72px] overflow-hidden text-mist">
+      <Orbit className="pointer-events-none absolute -end-[34%] top-[56px] -z-10 aspect-square w-[88%] sm:-end-[18%] sm:w-[70%] lg:-end-[6%] lg:top-[88px] lg:w-[min(68vh,44vw)]" />
+      <Container className="flex min-h-[100svh] flex-col pt-[136px] pb-10">
+        <div className="mt-auto">
+          <p className="hero-in eyebrow !text-[12px] !text-lilac" style={{ "--d": "300ms" } as React.CSSProperties}>{t.hero.eyebrow}</p>
+          <h1 id="hero-title" className="site-display mt-6 max-w-[14ch]">
+            <span className="hero-in block" style={{ "--d": "600ms" } as React.CSSProperties}>{t.hero.line1}</span>
+            <span className="hero-in block text-lilac" style={{ "--d": "760ms" } as React.CSSProperties}>{t.hero.line2}</span>
+          </h1>
+        </div>
+        <div className="mt-10 grid gap-8 border-t border-mist/15 pt-8 lg:grid-cols-12">
+          <p className="hero-in site-lead max-w-xl text-mist/75 lg:col-span-6" style={{ "--d": "900ms" } as React.CSSProperties}>{t.hero.body}</p>
+          <div className="hero-in flex flex-wrap items-start gap-3 lg:col-span-6 lg:justify-end" style={{ "--d": "1000ms" } as React.CSSProperties}>
+            <Link href="#about" className="inline-flex h-12 items-center rounded-md bg-brand-violet px-6 text-sm font-medium text-mist transition-colors outline-none hover:bg-aubergine focus-visible:ring-2 focus-visible:ring-lilac focus-visible:ring-offset-2 focus-visible:ring-offset-night">
+              {t.hero.primary}
+            </Link>
+            <Link href="#capabilities" className="inline-flex h-12 items-center rounded-md border border-mist/30 px-6 text-sm font-medium text-mist transition-colors outline-none hover:border-mist focus-visible:ring-2 focus-visible:ring-lilac">
+              {t.hero.secondary}
+            </Link>
+          </div>
+        </div>
+        <div className="mt-10 flex items-center justify-between text-xs text-mist/55">
+          <span>{country}</span>
+          <a href="#about" className="flex items-center gap-3 rounded-sm outline-none hover:text-mist focus-visible:ring-2 focus-visible:ring-lilac">
+            {t.hero.scroll}
+            <span className="h-8 w-px bg-mist/40" aria-hidden />
+          </a>
+        </div>
+      </Container>
+    </section>
+  );
+}
