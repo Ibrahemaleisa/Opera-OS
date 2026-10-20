@@ -3,8 +3,9 @@ import { getI18n } from "@/lib/i18n/server";
 import { listRecipients } from "@/server/modules/delivery/service";
 import { requirePageContext } from "@/server/request";
 import { RecipientRegistry } from "@/components/delivery/recipient-registry";
+import { guardPage } from "@/server/page-guard";
 
-export default async function OrgRecipientsPage({ params }: { params: Promise<{ org: string }> }) {
+async function OrgRecipientsPage({ params }: { params: Promise<{ org: string }> }) {
   const { org } = await params;
   const ctx = await requirePageContext(org);
   const { m } = await getI18n();
@@ -16,3 +17,5 @@ export default async function OrgRecipientsPage({ params }: { params: Promise<{ 
     </PageBody>
   );
 }
+
+export default guardPage(OrgRecipientsPage);

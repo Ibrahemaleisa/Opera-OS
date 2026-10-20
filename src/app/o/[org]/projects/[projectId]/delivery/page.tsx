@@ -9,8 +9,9 @@ import { can } from "@/server/authz/policy";
 import { campaignKpis, listCampaigns } from "@/server/modules/delivery/analytics";
 import { requirePageContext } from "@/server/request";
 import { CampaignSwitcher, NewCampaignButton } from "./campaign-controls";
+import { guardPage } from "@/server/page-guard";
 
-export default async function DeliveryOverview({ params, searchParams }: { params: Promise<{ org: string; projectId: string }>; searchParams: Promise<{ c?: string }> }) {
+async function DeliveryOverview({ params, searchParams }: { params: Promise<{ org: string; projectId: string }>; searchParams: Promise<{ c?: string }> }) {
   const { org, projectId } = await params;
   const { c } = await searchParams;
   const ctx = await requirePageContext(org);
@@ -81,3 +82,5 @@ export default async function DeliveryOverview({ params, searchParams }: { param
     </div>
   );
 }
+
+export default guardPage(DeliveryOverview);

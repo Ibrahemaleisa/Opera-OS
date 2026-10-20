@@ -5,8 +5,9 @@ import { listProviders } from "@/server/modules/digital/service";
 import { providerStatus } from "@/server/modules/digital/providers";
 import { requirePageContext } from "@/server/request";
 import { ProvidersClient } from "./providers-client";
+import { guardPage } from "@/server/page-guard";
 
-export default async function ProvidersPage({ params }: { params: Promise<{ org: string }> }) {
+async function ProvidersPage({ params }: { params: Promise<{ org: string }> }) {
   const { org } = await params;
   const ctx = await requirePageContext(org);
   assertCan(ctx, "campaign.manage");
@@ -24,3 +25,5 @@ export default async function ProvidersPage({ params }: { params: Promise<{ org:
     </>
   );
 }
+
+export default guardPage(ProvidersPage);

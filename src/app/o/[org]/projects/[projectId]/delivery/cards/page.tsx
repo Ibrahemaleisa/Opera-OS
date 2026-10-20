@@ -4,8 +4,9 @@ import { listCampaigns } from "@/server/modules/delivery/analytics";
 import { listAgents, listDeliveries } from "@/server/modules/delivery/service";
 import { requirePageContext } from "@/server/request";
 import { DeliveryTable } from "@/components/delivery/delivery-table";
+import { guardPage } from "@/server/page-guard";
 
-export default async function CardsPage({ params, searchParams }: { params: Promise<{ org: string; projectId: string }>; searchParams: Promise<{ c?: string; status?: string; agent?: string }> }) {
+async function CardsPage({ params, searchParams }: { params: Promise<{ org: string; projectId: string }>; searchParams: Promise<{ c?: string; status?: string; agent?: string }> }) {
   const { org, projectId } = await params;
   const sp = await searchParams;
   const ctx = await requirePageContext(org);
@@ -26,3 +27,5 @@ export default async function CardsPage({ params, searchParams }: { params: Prom
     />
   );
 }
+
+export default guardPage(CardsPage);

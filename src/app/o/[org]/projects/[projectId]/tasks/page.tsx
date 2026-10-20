@@ -2,8 +2,9 @@ import { getI18n } from "@/lib/i18n/server";
 import { listProjectTasks } from "@/server/modules/tasks/service";
 import { requirePageContext } from "@/server/request";
 import { TaskViews } from "./task-views";
+import { guardPage } from "@/server/page-guard";
 
-export default async function ProjectTasksPage({ params, searchParams }: { params: Promise<{ org: string; projectId: string }>; searchParams: Promise<{ view?: string; ws?: string; owner?: string; overdue?: string; category?: string; q?: string }> }) {
+async function ProjectTasksPage({ params, searchParams }: { params: Promise<{ org: string; projectId: string }>; searchParams: Promise<{ view?: string; ws?: string; owner?: string; overdue?: string; category?: string; q?: string }> }) {
   const { org, projectId } = await params;
   const sp = await searchParams;
   const ctx = await requirePageContext(org);
@@ -23,3 +24,5 @@ export default async function ProjectTasksPage({ params, searchParams }: { param
     />
   );
 }
+
+export default guardPage(ProjectTasksPage);

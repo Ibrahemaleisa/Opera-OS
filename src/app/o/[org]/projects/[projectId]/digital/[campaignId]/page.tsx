@@ -4,8 +4,9 @@ import { getI18n } from "@/lib/i18n/server";
 import { NotFoundError } from "@/server/errors";
 import { getDigitalCampaign } from "@/server/modules/digital/service";
 import { requirePageContext } from "@/server/request";
+import { guardPage } from "@/server/page-guard";
 
-export default async function CampaignPage({ params }: { params: Promise<{ org: string; projectId: string; campaignId: string }> }) {
+async function CampaignPage({ params }: { params: Promise<{ org: string; projectId: string; campaignId: string }> }) {
   const { org, projectId, campaignId } = await params;
   const ctx = await requirePageContext(org);
   await getI18n();
@@ -15,3 +16,5 @@ export default async function CampaignPage({ params }: { params: Promise<{ org: 
   });
   return <CampaignDetail orgSlug={org} projectId={projectId} data={JSON.parse(JSON.stringify(d))} currentUserId={ctx.userId} />;
 }
+
+export default guardPage(CampaignPage);

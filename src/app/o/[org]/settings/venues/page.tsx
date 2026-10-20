@@ -4,8 +4,9 @@ import { assertCan } from "@/server/authz/policy";
 import { listVenues } from "@/server/modules/org/service";
 import { requirePageContext } from "@/server/request";
 import { VenuesClient } from "./venues-client";
+import { guardPage } from "@/server/page-guard";
 
-export default async function VenuesPage({ params }: { params: Promise<{ org: string }> }) {
+async function VenuesPage({ params }: { params: Promise<{ org: string }> }) {
   const { org } = await params;
   const ctx = await requirePageContext(org);
   assertCan(ctx, "org.directory.manage");
@@ -18,3 +19,5 @@ export default async function VenuesPage({ params }: { params: Promise<{ org: st
     </>
   );
 }
+
+export default guardPage(VenuesPage);

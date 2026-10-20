@@ -3,8 +3,9 @@ import { BoothList } from "@/components/booths/booth-list";
 import { NotFoundError } from "@/server/errors";
 import { listBooths } from "@/server/modules/booths/service";
 import { requirePageContext } from "@/server/request";
+import { guardPage } from "@/server/page-guard";
 
-export default async function ProjectProductionPage({ params }: { params: Promise<{ org: string; projectId: string }> }) {
+async function ProjectProductionPage({ params }: { params: Promise<{ org: string; projectId: string }> }) {
   const { org, projectId } = await params;
   const ctx = await requirePageContext(org);
   const data = await listBooths(ctx, projectId).catch((e) => {
@@ -13,3 +14,5 @@ export default async function ProjectProductionPage({ params }: { params: Promis
   });
   return <BoothList orgSlug={org} projectId={projectId} data={data} />;
 }
+
+export default guardPage(ProjectProductionPage);

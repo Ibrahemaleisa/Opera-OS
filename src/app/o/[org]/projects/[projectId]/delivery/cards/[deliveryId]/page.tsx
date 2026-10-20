@@ -7,8 +7,9 @@ import { withTenant } from "@/server/db/tenant";
 import { listComments } from "@/server/modules/tasks/service";
 import { projectScope, can } from "@/server/authz/policy";
 import { DeliveryCard } from "@/components/delivery/delivery-card";
+import { guardPage } from "@/server/page-guard";
 
-export default async function DeliveryCardPage({ params }: { params: Promise<{ org: string; projectId: string; deliveryId: string }> }) {
+async function DeliveryCardPage({ params }: { params: Promise<{ org: string; projectId: string; deliveryId: string }> }) {
   const { org, projectId, deliveryId } = await params;
   const ctx = await requirePageContext(org);
   await getI18n();
@@ -23,3 +24,5 @@ export default async function DeliveryCardPage({ params }: { params: Promise<{ o
   ]);
   return <DeliveryCard orgSlug={org} projectId={projectId} data={JSON.parse(JSON.stringify(d))} agents={agents} comments={JSON.parse(JSON.stringify(comments))} members={members.map((x) => ({ id: x.userId, name: x.user.nameAr ?? x.user.name }))} />;
 }
+
+export default guardPage(DeliveryCardPage);

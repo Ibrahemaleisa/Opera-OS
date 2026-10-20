@@ -16,6 +16,8 @@ const nextConfig: NextConfig = {
   serverExternalPackages: ["@node-rs/argon2", "exceljs", "bullmq", "ioredis", "pg"],
   experimental: {
     serverActions: { bodySizeLimit: "30mb" },
+    // forbidden() renders app/forbidden.tsx (see src/server/page-guard.ts)
+    authInterrupts: true,
   },
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];

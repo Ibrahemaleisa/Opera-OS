@@ -4,8 +4,9 @@ import { formatDateTime } from "@/lib/format";
 import { listAudit } from "@/server/modules/org/service";
 import { requirePageContext } from "@/server/request";
 import { assertCan } from "@/server/authz/policy";
+import { guardPage } from "@/server/page-guard";
 
-export default async function AuditPage({ params, searchParams }: { params: Promise<{ org: string }>; searchParams: Promise<{ action?: string; entity?: string; cursor?: string }> }) {
+async function AuditPage({ params, searchParams }: { params: Promise<{ org: string }>; searchParams: Promise<{ action?: string; entity?: string; cursor?: string }> }) {
   const { org } = await params;
   const sp = await searchParams;
   const ctx = await requirePageContext(org);
@@ -51,3 +52,5 @@ export default async function AuditPage({ params, searchParams }: { params: Prom
     </>
   );
 }
+
+export default guardPage(AuditPage);

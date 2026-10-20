@@ -5,8 +5,9 @@ import { formatMoney, formatPercent } from "@/lib/format";
 import { getI18n } from "@/lib/i18n/server";
 import { financeOverview } from "@/server/modules/finance/service";
 import { requirePageContext } from "@/server/request";
+import { guardPage } from "@/server/page-guard";
 
-export default async function FinanceOverviewPage({ params }: { params: Promise<{ org: string }> }) {
+async function FinanceOverviewPage({ params }: { params: Promise<{ org: string }> }) {
   const { org } = await params;
   const ctx = await requirePageContext(org);
   const { m, fmt } = await getI18n();
@@ -64,3 +65,5 @@ export default async function FinanceOverviewPage({ params }: { params: Promise<
     </PageBody>
   );
 }
+
+export default guardPage(FinanceOverviewPage);

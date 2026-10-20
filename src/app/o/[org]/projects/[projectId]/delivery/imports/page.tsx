@@ -8,8 +8,9 @@ import { listCampaigns } from "@/server/modules/delivery/analytics";
 import { listImports } from "@/server/modules/delivery/imports/service";
 import { requirePageContext } from "@/server/request";
 import { UploadImport } from "./upload";
+import { guardPage } from "@/server/page-guard";
 
-export default async function ImportsPage({ params, searchParams }: { params: Promise<{ org: string; projectId: string }>; searchParams: Promise<{ c?: string }> }) {
+async function ImportsPage({ params, searchParams }: { params: Promise<{ org: string; projectId: string }>; searchParams: Promise<{ c?: string }> }) {
   const { org, projectId } = await params;
   const { c } = await searchParams;
   const ctx = await requirePageContext(org);
@@ -42,3 +43,5 @@ export default async function ImportsPage({ params, searchParams }: { params: Pr
     </div>
   );
 }
+
+export default guardPage(ImportsPage);

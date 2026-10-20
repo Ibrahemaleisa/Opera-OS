@@ -3,8 +3,9 @@ import { ProjectFinance } from "@/components/finance/project-finance";
 import { ForbiddenError, NotFoundError } from "@/server/errors";
 import { getProjectFinance } from "@/server/modules/finance/service";
 import { requirePageContext } from "@/server/request";
+import { guardPage } from "@/server/page-guard";
 
-export default async function ProjectFinancePage({ params }: { params: Promise<{ org: string; projectId: string }> }) {
+async function ProjectFinancePage({ params }: { params: Promise<{ org: string; projectId: string }> }) {
   const { org, projectId } = await params;
   const ctx = await requirePageContext(org);
   const data = await getProjectFinance(ctx, projectId).catch((e) => {
@@ -13,3 +14,5 @@ export default async function ProjectFinancePage({ params }: { params: Promise<{
   });
   return <ProjectFinance orgSlug={org} data={data} />;
 }
+
+export default guardPage(ProjectFinancePage);

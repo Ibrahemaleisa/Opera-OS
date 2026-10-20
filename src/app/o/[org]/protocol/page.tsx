@@ -7,10 +7,11 @@ import { formatDateTime, formatTime } from "@/lib/format";
 import { getI18n } from "@/lib/i18n/server";
 import { arrivalsBoard } from "@/server/modules/protocol/service";
 import { requirePageContext } from "@/server/request";
+import { guardPage } from "@/server/page-guard";
 
 export const dynamic = "force-dynamic";
 
-export default async function ArrivalsPage({ params }: { params: Promise<{ org: string }> }) {
+async function ArrivalsPage({ params }: { params: Promise<{ org: string }> }) {
   const { org } = await params;
   const ctx = await requirePageContext(org);
   const { m, fmt } = await getI18n();
@@ -46,3 +47,5 @@ export default async function ArrivalsPage({ params }: { params: Promise<{ org: 
     </PageBody>
   );
 }
+
+export default guardPage(ArrivalsPage);

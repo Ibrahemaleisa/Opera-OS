@@ -5,8 +5,9 @@ import { NotFoundError } from "@/server/errors";
 import { getTaskDetail } from "@/server/modules/tasks/service";
 import { requirePageContext } from "@/server/request";
 import { TaskDetail } from "./task-detail";
+import { guardPage } from "@/server/page-guard";
 
-export default async function TaskPage({ params }: { params: Promise<{ org: string; taskId: string }> }) {
+async function TaskPage({ params }: { params: Promise<{ org: string; taskId: string }> }) {
   const { org, taskId } = await params;
   const ctx = await requirePageContext(org);
   await getI18n();
@@ -20,3 +21,5 @@ export default async function TaskPage({ params }: { params: Promise<{ org: stri
     </PageBody>
   );
 }
+
+export default guardPage(TaskPage);

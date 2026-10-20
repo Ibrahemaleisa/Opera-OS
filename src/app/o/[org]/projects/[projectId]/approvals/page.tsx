@@ -5,8 +5,9 @@ import { listChangeRequests } from "@/server/modules/portal/service";
 import { requirePageContext } from "@/server/request";
 import { ApprovalsList } from "./approvals-list";
 import { ChangeRequests } from "./change-requests";
+import { guardPage } from "@/server/page-guard";
 
-export default async function ApprovalsPage({ params }: { params: Promise<{ org: string; projectId: string }> }) {
+async function ApprovalsPage({ params }: { params: Promise<{ org: string; projectId: string }> }) {
   const { org, projectId } = await params;
   const ctx = await requirePageContext(org);
   const { m } = await getI18n();
@@ -18,3 +19,5 @@ export default async function ApprovalsPage({ params }: { params: Promise<{ org:
     </div>
   );
 }
+
+export default guardPage(ApprovalsPage);

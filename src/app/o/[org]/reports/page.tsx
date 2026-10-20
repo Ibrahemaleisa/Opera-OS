@@ -3,8 +3,9 @@ import { EmptyState, PageBody, PageHeader } from "@/components/app/page";
 import { getI18n } from "@/lib/i18n/server";
 import { availableReports } from "@/server/modules/reports/service";
 import { requirePageContext } from "@/server/request";
+import { guardPage } from "@/server/page-guard";
 
-export default async function ReportsPage({ params }: { params: Promise<{ org: string }> }) {
+async function ReportsPage({ params }: { params: Promise<{ org: string }> }) {
   const { org } = await params;
   const ctx = await requirePageContext(org);
   const { m } = await getI18n();
@@ -29,3 +30,5 @@ export default async function ReportsPage({ params }: { params: Promise<{ org: s
     </PageBody>
   );
 }
+
+export default guardPage(ReportsPage);

@@ -5,8 +5,9 @@ import { listCampaigns } from "@/server/modules/delivery/analytics";
 import { getImportPreview, listImportRows } from "@/server/modules/delivery/imports/service";
 import { requirePageContext } from "@/server/request";
 import { ImportWizard } from "./wizard";
+import { guardPage } from "@/server/page-guard";
 
-export default async function ImportBatchPage({ params, searchParams }: { params: Promise<{ org: string; projectId: string; batchId: string }>; searchParams: Promise<{ status?: string }> }) {
+async function ImportBatchPage({ params, searchParams }: { params: Promise<{ org: string; projectId: string; batchId: string }>; searchParams: Promise<{ status?: string }> }) {
   const { org, projectId, batchId } = await params;
   const { status } = await searchParams;
   const ctx = await requirePageContext(org);
@@ -28,3 +29,5 @@ export default async function ImportBatchPage({ params, searchParams }: { params
     />
   );
 }
+
+export default guardPage(ImportBatchPage);

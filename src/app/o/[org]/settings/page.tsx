@@ -4,8 +4,9 @@ import { assertCan } from "@/server/authz/policy";
 import { getOrganization, readSettings } from "@/server/modules/org/service";
 import { requirePageContext } from "@/server/request";
 import { OrgSettingsForm } from "./settings-form";
+import { guardPage } from "@/server/page-guard";
 
-export default async function SettingsPage({ params }: { params: Promise<{ org: string }> }) {
+async function SettingsPage({ params }: { params: Promise<{ org: string }> }) {
   const { org: slug } = await params;
   const ctx = await requirePageContext(slug);
   assertCan(ctx, "org.manage");
@@ -26,3 +27,5 @@ export default async function SettingsPage({ params }: { params: Promise<{ org: 
     </>
   );
 }
+
+export default guardPage(SettingsPage);

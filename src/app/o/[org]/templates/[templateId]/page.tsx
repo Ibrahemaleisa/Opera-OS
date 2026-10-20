@@ -4,8 +4,9 @@ import { assertCan } from "@/server/authz/policy";
 import { getTemplate } from "@/server/modules/templates/service";
 import { requirePageContext } from "@/server/request";
 import { TemplateBuilder } from "./builder";
+import { guardPage } from "@/server/page-guard";
 
-export default async function TemplatePage({ params }: { params: Promise<{ org: string; templateId: string }> }) {
+async function TemplatePage({ params }: { params: Promise<{ org: string; templateId: string }> }) {
   const { org, templateId } = await params;
   const ctx = await requirePageContext(org);
   assertCan(ctx, "template.manage");
@@ -23,3 +24,5 @@ export default async function TemplatePage({ params }: { params: Promise<{ org: 
     </PageBody>
   );
 }
+
+export default guardPage(TemplatePage);

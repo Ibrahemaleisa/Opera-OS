@@ -5,8 +5,9 @@ import { projectScope } from "@/server/authz/policy";
 import { withTenant } from "@/server/db/tenant";
 import { NotFoundError } from "@/server/errors";
 import { requirePageContext } from "@/server/request";
+import { guardPage } from "@/server/page-guard";
 
-export default async function ActivityPage({ params }: { params: Promise<{ org: string; projectId: string }> }) {
+async function ActivityPage({ params }: { params: Promise<{ org: string; projectId: string }> }) {
   const { org, projectId } = await params;
   const ctx = await requirePageContext(org);
   const { m, fmt } = await getI18n();
@@ -29,3 +30,5 @@ export default async function ActivityPage({ params }: { params: Promise<{ org: 
     </Section>
   );
 }
+
+export default guardPage(ActivityPage);

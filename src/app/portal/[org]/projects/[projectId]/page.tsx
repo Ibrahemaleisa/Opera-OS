@@ -3,8 +3,9 @@ import { NotFoundError } from "@/server/errors";
 import { portalProject } from "@/server/modules/portal/service";
 import { requirePageContext } from "@/server/request";
 import { PortalProject } from "./portal-project";
+import { guardPage } from "@/server/page-guard";
 
-export default async function PortalProjectPage({ params }: { params: Promise<{ org: string; projectId: string }> }) {
+async function PortalProjectPage({ params }: { params: Promise<{ org: string; projectId: string }> }) {
   const { org, projectId } = await params;
   const ctx = await requirePageContext(org);
   const data = await portalProject(ctx, projectId).catch((e) => {
@@ -13,3 +14,5 @@ export default async function PortalProjectPage({ params }: { params: Promise<{ 
   });
   return <PortalProject orgSlug={org} data={data} />;
 }
+
+export default guardPage(PortalProjectPage);

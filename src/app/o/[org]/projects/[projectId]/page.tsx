@@ -10,8 +10,9 @@ import { getProjectOverview } from "@/server/modules/projects/service";
 import { requirePageContext } from "@/server/request";
 import { listClients } from "@/server/modules/org/service";
 import { DeliverablesPanel, EditProjectButton, MilestonesPanel, ProjectStatusMenu, RisksPanel } from "./overview-panels";
+import { guardPage } from "@/server/page-guard";
 
-export default async function ProjectOverviewPage({ params }: { params: Promise<{ org: string; projectId: string }> }) {
+async function ProjectOverviewPage({ params }: { params: Promise<{ org: string; projectId: string }> }) {
   const { org, projectId } = await params;
   const ctx = await requirePageContext(org);
   const { m, fmt, locale } = await getI18n();
@@ -111,3 +112,5 @@ export default async function ProjectOverviewPage({ params }: { params: Promise<
     </div>
   );
 }
+
+export default guardPage(ProjectOverviewPage);

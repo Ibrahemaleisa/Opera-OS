@@ -3,8 +3,9 @@ import { EventWorkspace } from "@/components/events/event-workspace";
 import { NotFoundError } from "@/server/errors";
 import { getEventWorkspace } from "@/server/modules/events/service";
 import { requirePageContext } from "@/server/request";
+import { guardPage } from "@/server/page-guard";
 
-export default async function EventPage({ params }: { params: Promise<{ org: string; projectId: string; eventId: string }> }) {
+async function EventPage({ params }: { params: Promise<{ org: string; projectId: string; eventId: string }> }) {
   const { org, projectId, eventId } = await params;
   const ctx = await requirePageContext(org);
   const data = await getEventWorkspace(ctx, eventId).catch((e) => {
@@ -14,3 +15,5 @@ export default async function EventPage({ params }: { params: Promise<{ org: str
   if (data.project.id !== projectId) notFound();
   return <EventWorkspace orgSlug={org} data={data} />;
 }
+
+export default guardPage(EventPage);

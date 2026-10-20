@@ -3,8 +3,9 @@ import { BoothWorkspace } from "@/components/booths/booth-workspace";
 import { NotFoundError } from "@/server/errors";
 import { getBooth } from "@/server/modules/booths/service";
 import { requirePageContext } from "@/server/request";
+import { guardPage } from "@/server/page-guard";
 
-export default async function BoothPage({ params }: { params: Promise<{ org: string; projectId: string; boothId: string }> }) {
+async function BoothPage({ params }: { params: Promise<{ org: string; projectId: string; boothId: string }> }) {
   const { org, projectId, boothId } = await params;
   const ctx = await requirePageContext(org);
   const data = await getBooth(ctx, boothId).catch((e) => {
@@ -14,3 +15,5 @@ export default async function BoothPage({ params }: { params: Promise<{ org: str
   if (data.project.id !== projectId) notFound();
   return <BoothWorkspace orgSlug={org} data={data} />;
 }
+
+export default guardPage(BoothPage);

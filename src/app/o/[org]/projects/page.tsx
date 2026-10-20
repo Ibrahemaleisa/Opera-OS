@@ -7,10 +7,11 @@ import { can } from "@/server/authz/policy";
 import { listProjects } from "@/server/modules/projects/service";
 import { requirePageContext } from "@/server/request";
 import { PortfolioViews } from "./portfolio-views";
+import { guardPage } from "@/server/page-guard";
 
 export const metadata = { title: "Projects" };
 
-export default async function ProjectsPage({ params, searchParams }: { params: Promise<{ org: string }>; searchParams: Promise<{ view?: string; status?: string; q?: string; closed?: string }> }) {
+async function ProjectsPage({ params, searchParams }: { params: Promise<{ org: string }>; searchParams: Promise<{ view?: string; status?: string; q?: string; closed?: string }> }) {
   const { org } = await params;
   const sp = await searchParams;
   const ctx = await requirePageContext(org);
@@ -29,3 +30,5 @@ export default async function ProjectsPage({ params, searchParams }: { params: P
     </PageBody>
   );
 }
+
+export default guardPage(ProjectsPage);

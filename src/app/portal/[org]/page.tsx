@@ -6,8 +6,9 @@ import { formatDate, formatPercent } from "@/lib/format";
 import { getI18n } from "@/lib/i18n/server";
 import { portalHome } from "@/server/modules/portal/service";
 import { requirePageContext } from "@/server/request";
+import { guardPage } from "@/server/page-guard";
 
-export default async function PortalHome({ params }: { params: Promise<{ org: string }> }) {
+async function PortalHome({ params }: { params: Promise<{ org: string }> }) {
   const { org } = await params;
   const ctx = await requirePageContext(org);
   const { m, fmt } = await getI18n();
@@ -31,3 +32,5 @@ export default async function PortalHome({ params }: { params: Promise<{ org: st
     </div>
   );
 }
+
+export default guardPage(PortalHome);

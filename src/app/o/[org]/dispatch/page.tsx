@@ -7,8 +7,9 @@ import { listAgents, listDeliveries } from "@/server/modules/delivery/service";
 import { requirePageContext } from "@/server/request";
 import { withTenant } from "@/server/db/tenant";
 import { DispatchBoard } from "./dispatch-board";
+import { guardPage } from "@/server/page-guard";
 
-export default async function DispatchPage({ params, searchParams }: { params: Promise<{ org: string }>; searchParams: Promise<{ project?: string; campaign?: string; view?: string }> }) {
+async function DispatchPage({ params, searchParams }: { params: Promise<{ org: string }>; searchParams: Promise<{ project?: string; campaign?: string; view?: string }> }) {
   const { org } = await params;
   const sp = await searchParams;
   const ctx = await requirePageContext(org);
@@ -38,3 +39,5 @@ export default async function DispatchPage({ params, searchParams }: { params: P
     </PageBody>
   );
 }
+
+export default guardPage(DispatchPage);

@@ -6,8 +6,9 @@ import { listMembers } from "@/server/modules/org/service";
 import { requirePageContext } from "@/server/request";
 import { withTenant } from "@/server/db/tenant";
 import { MembersClient } from "./members-client";
+import { guardPage } from "@/server/page-guard";
 
-export default async function MembersPage({ params }: { params: Promise<{ org: string }> }) {
+async function MembersPage({ params }: { params: Promise<{ org: string }> }) {
   const { org } = await params;
   const ctx = await requirePageContext(org);
   assertCan(ctx, "org.members.view");
@@ -33,3 +34,5 @@ export default async function MembersPage({ params }: { params: Promise<{ org: s
     </>
   );
 }
+
+export default guardPage(MembersPage);

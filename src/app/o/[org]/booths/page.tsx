@@ -4,8 +4,9 @@ import { getI18n } from "@/lib/i18n/server";
 import { assertCan } from "@/server/authz/policy";
 import { listBooths } from "@/server/modules/booths/service";
 import { requirePageContext } from "@/server/request";
+import { guardPage } from "@/server/page-guard";
 
-export default async function BoothsPage({ params }: { params: Promise<{ org: string }> }) {
+async function BoothsPage({ params }: { params: Promise<{ org: string }> }) {
   const { org } = await params;
   const ctx = await requirePageContext(org);
   assertCan(ctx, "booth.manage");
@@ -18,3 +19,5 @@ export default async function BoothsPage({ params }: { params: Promise<{ org: st
     </PageBody>
   );
 }
+
+export default guardPage(BoothsPage);

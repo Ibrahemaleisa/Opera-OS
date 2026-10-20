@@ -3,8 +3,9 @@ import { CampaignList } from "@/components/digital/campaign-list";
 import { getI18n } from "@/lib/i18n/server";
 import { listDigitalCampaigns } from "@/server/modules/digital/service";
 import { requirePageContext } from "@/server/request";
+import { guardPage } from "@/server/page-guard";
 
-export default async function OrgDigitalPage({ params }: { params: Promise<{ org: string }> }) {
+async function OrgDigitalPage({ params }: { params: Promise<{ org: string }> }) {
   const { org } = await params;
   const ctx = await requirePageContext(org);
   const { m } = await getI18n();
@@ -16,3 +17,5 @@ export default async function OrgDigitalPage({ params }: { params: Promise<{ org
     </PageBody>
   );
 }
+
+export default guardPage(OrgDigitalPage);

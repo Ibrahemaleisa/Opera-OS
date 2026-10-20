@@ -5,8 +5,9 @@ import { listClients, listVenues, memberDirectory } from "@/server/modules/org/s
 import { listTemplates } from "@/server/modules/templates/service";
 import { requirePageContext } from "@/server/request";
 import { ProjectWizard } from "./wizard";
+import { guardPage } from "@/server/page-guard";
 
-export default async function NewProjectPage({ params }: { params: Promise<{ org: string }> }) {
+async function NewProjectPage({ params }: { params: Promise<{ org: string }> }) {
   const { org } = await params;
   const ctx = await requirePageContext(org);
   assertCan(ctx, "project.create");
@@ -26,3 +27,5 @@ export default async function NewProjectPage({ params }: { params: Promise<{ org
     </PageBody>
   );
 }
+
+export default guardPage(NewProjectPage);

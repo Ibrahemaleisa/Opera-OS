@@ -7,8 +7,9 @@ import { getI18n } from "@/lib/i18n/server";
 import { orgDashboard } from "@/server/modules/analytics/service";
 import { requirePageContext } from "@/server/request";
 import { BarList } from "@/components/app/charts";
+import { guardPage } from "@/server/page-guard";
 
-export default async function DashboardPage({ params }: { params: Promise<{ org: string }> }) {
+async function DashboardPage({ params }: { params: Promise<{ org: string }> }) {
   const { org } = await params;
   const ctx = await requirePageContext(org);
   const { m, fmt } = await getI18n();
@@ -72,3 +73,5 @@ export default async function DashboardPage({ params }: { params: Promise<{ org:
     </PageBody>
   );
 }
+
+export default guardPage(DashboardPage);

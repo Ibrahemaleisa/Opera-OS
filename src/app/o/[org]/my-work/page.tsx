@@ -5,8 +5,9 @@ import { formatDate } from "@/lib/format";
 import { getI18n } from "@/lib/i18n/server";
 import { myWork } from "@/server/modules/tasks/service";
 import { requirePageContext } from "@/server/request";
+import { guardPage } from "@/server/page-guard";
 
-export default async function MyWorkPage({ params }: { params: Promise<{ org: string }> }) {
+async function MyWorkPage({ params }: { params: Promise<{ org: string }> }) {
   const { org } = await params;
   const ctx = await requirePageContext(org);
   const { m, fmt, locale } = await getI18n();
@@ -53,3 +54,5 @@ export default async function MyWorkPage({ params }: { params: Promise<{ org: st
     </PageBody>
   );
 }
+
+export default guardPage(MyWorkPage);

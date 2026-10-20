@@ -3,8 +3,9 @@ import { getProjectOverview } from "@/server/modules/projects/service";
 import { memberDirectory } from "@/server/modules/org/service";
 import { requirePageContext } from "@/server/request";
 import { TeamClient } from "./team-client";
+import { guardPage } from "@/server/page-guard";
 
-export default async function TeamPage({ params }: { params: Promise<{ org: string; projectId: string }> }) {
+async function TeamPage({ params }: { params: Promise<{ org: string; projectId: string }> }) {
   const { org, projectId } = await params;
   const ctx = await requirePageContext(org);
   await getI18n();
@@ -21,3 +22,5 @@ export default async function TeamPage({ params }: { params: Promise<{ org: stri
     />
   );
 }
+
+export default guardPage(TeamPage);

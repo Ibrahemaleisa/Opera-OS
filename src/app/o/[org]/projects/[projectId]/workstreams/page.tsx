@@ -5,8 +5,9 @@ import { getProjectOverview } from "@/server/modules/projects/service";
 import { listTemplates } from "@/server/modules/templates/service";
 import { requirePageContext } from "@/server/request";
 import { ApplyTemplate } from "./apply-template";
+import { guardPage } from "@/server/page-guard";
 
-export default async function WorkstreamsPage({ params }: { params: Promise<{ org: string; projectId: string }> }) {
+async function WorkstreamsPage({ params }: { params: Promise<{ org: string; projectId: string }> }) {
   const { org, projectId } = await params;
   const ctx = await requirePageContext(org);
   const { m, fmt, locale } = await getI18n();
@@ -41,3 +42,5 @@ export default async function WorkstreamsPage({ params }: { params: Promise<{ or
     </div>
   );
 }
+
+export default guardPage(WorkstreamsPage);

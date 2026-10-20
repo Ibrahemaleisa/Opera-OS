@@ -3,8 +3,9 @@ import { getI18n } from "@/lib/i18n/server";
 import { vendorPortal } from "@/server/modules/vendors/service";
 import { requirePageContext } from "@/server/request";
 import { VendorWork } from "./vendor-work";
+import { guardPage } from "@/server/page-guard";
 
-export default async function VendorHome({ params }: { params: Promise<{ org: string }> }) {
+async function VendorHome({ params }: { params: Promise<{ org: string }> }) {
   const { org } = await params;
   const ctx = await requirePageContext(org);
   const { m } = await getI18n();
@@ -17,3 +18,5 @@ export default async function VendorHome({ params }: { params: Promise<{ org: st
     </div>
   );
 }
+
+export default guardPage(VendorHome);
