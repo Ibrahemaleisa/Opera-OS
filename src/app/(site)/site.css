@@ -89,11 +89,11 @@ html[lang="ar"] .site-lead {
 .orbit-ring {
   stroke-dasharray: 1;
   stroke-dashoffset: 1;
-  animation: site-draw 1000ms var(--ease-out) 200ms forwards;
+  animation: site-draw 1000ms var(--ease-out) 100ms forwards;
 }
 .hero-in {
   animation: site-rise 600ms var(--ease-out) both;
-  animation-delay: var(--d, 500ms);
+  animation-delay: var(--d, 200ms);
 }
 @keyframes site-fade {
   from {
