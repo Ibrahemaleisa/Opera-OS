@@ -1,7 +1,11 @@
+"use client"
+
 import * as React from "react"
 import { cn } from "@/lib/utils"
+import { useFieldControl } from "@/components/ui/field-context"
 
-function Input({ className, type, ...props }: React.ComponentProps<"input">) {
+function Input({ className, type, ...rest }: React.ComponentProps<"input">) {
+  const props = useFieldControl(rest)
   return (
     <input
       type={type}

@@ -24,11 +24,18 @@ export function UploadImport({ orgSlug, projectId, campaigns, defaultCampaign }:
     fd.set("file", file);
     fd.set("projectId", projectId);
     if (campaignId) fd.set("campaignId", campaignId);
-    const res = await fetch(`/api/o/${orgSlug}/imports`, { method: "POST", body: fd });
-    const json = await res.json();
-    setBusy(false);
-    if (json.ok) router.push(`/o/${orgSlug}/projects/${projectId}/delivery/imports/${json.data.batchId}`);
-    else toast.error(tk(json.error));
+    try {
+      const res = await fetch(`/api/o/${orgSlug}/imports`, { method: "POST", body: fd });
+      // a proxy or size-limit rejection may not be JSON
+      const json = (await res.json().catch(() => ({ ok: false, error: res.status === 413 ? "errors.fileTooLarge" : "errors.unexpected" }))) as { ok: boolean; error?: string; data?: { batchId: string } };
+      if (json.ok && json.data) router.push(`/o/${orgSlug}/projects/${projectId}/delivery/imports/${json.data.batchId}`);
+      else toast.error(tk(json.error ?? "errors.unexpected"));
+    } catch {
+      // network failure: keep the chosen file so the user can retry
+      toast.error(tk("common.net.unreachable"));
+    } finally {
+      setBusy(false);
+    }
   };
   return (
     <div className="grid gap-3 p-4">

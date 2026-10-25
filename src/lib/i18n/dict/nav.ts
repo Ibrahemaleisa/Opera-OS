@@ -2,7 +2,7 @@ import { defineMessages } from "../define";
 
 export const nav = defineMessages(
   {
-    dashboard: "لوحة القيادة",
+    dashboard: "العمليات",
     projects: "المشاريع",
     myWork: "مهامي",
     templates: "القوالب",
@@ -36,7 +36,7 @@ export const nav = defineMessages(
     collapse: "طي القائمة",
   },
   {
-    dashboard: "Dashboard",
+    dashboard: "Operations",
     projects: "Projects",
     myWork: "My work",
     templates: "Templates",

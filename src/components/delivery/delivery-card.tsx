@@ -11,7 +11,7 @@ import { Field, NativeSelect } from "@/components/app/field";
 import { Breadcrumbs, KV, Section } from "@/components/app/page";
 import { StatusBadge } from "@/components/app/status-badge";
 import { useAction } from "@/hooks/use-action";
-import { formatDateTime, formatRelative, parseRiyadhDateTime } from "@/lib/format";
+import { formatDateTime, parseRiyadhDateTime } from "@/lib/format";
 import { telHref } from "@/lib/phone";
 import { useI18n } from "@/lib/i18n/client";
 import { TimeAgo } from "@/components/app/time-ago";
@@ -89,8 +89,8 @@ export function DeliveryCard({ orgSlug, projectId, data, agents, comments, membe
                           <Field label={dl.receivedBy} required={data.campaign.config.requireReceiverName}><Input name="receivedByName" required={data.campaign.config.requireReceiverName} /></Field>
                           <Field label={dl.relation}><Input name="receivedByRelation" /></Field>
                         </div>
-                        <Field label={dl.evidence} required={data.campaign.config.requireEvidence} hint={evidence.length ? `${evidence.length} ✓` : undefined}>
-                          <input type="file" accept="image/*,application/pdf" capture="environment" disabled={busy} onChange={async (e) => {
+                        <Field label={dl.evidence} required={data.campaign.config.requireEvidence} hint={evidence.length ? `${evidence.length} ✓` : undefined} htmlFor={`evidence-${d.id}`}>
+                          <input id={`evidence-${d.id}`} type="file" accept="image/*,application/pdf" capture="environment" disabled={busy} onChange={async (e) => {
                             const f = e.target.files?.[0];
                             if (!f) return;
                             setBusy(true);

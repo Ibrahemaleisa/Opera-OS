@@ -1,11 +1,33 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Browser, type Page } from "@playwright/test";
 
 /** Booth production, procurement and finance (synthetic data, single agency owner). */
 const stamp = Date.now().toString(36);
 const slug = `pf-${stamp}`;
+const PASS = "E2e-Strong-Pass-2026";
+
+// Separation of duties now includes the person who created the spend (F-02): a finance approver other
+// than the owner who awarded the PO must exist, so the scenario invites one before submitting.
+async function inviteApprover(page: Page, browser: Browser) {
+  await page.goto(`/o/${slug}/settings/members`);
+  await page.getByRole("button", { name: "دعوة مستخدم" }).first().click();
+  const dialog = page.getByRole("dialog");
+  await dialog.locator("input[name=email]").fill(`dir-${stamp}@example.test`);
+  await dialog.locator("select[name=roleId]").selectOption({ label: "مدير العمليات" });
+  await dialog.getByRole("button", { name: "دعوة مستخدم" }).click();
+  const link = new URL(await dialog.getByTestId("invite-link").inputValue()).pathname;
+  await page.keyboard.press("Escape");
+  const director = await (await browser.newContext({ locale: "ar-SA" })).newPage();
+  await director.goto(link);
+  await director.fill("#name", "مدير العمليات");
+  await director.fill("#password", PASS);
+  await director.getByRole("button", { name: "قبول الدعوة" }).click();
+  await director.waitForURL((u) => !u.pathname.startsWith("/invite"));
+  return director;
+}
+
 const PNG = Buffer.from("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082", "hex");
 
-test("booth BOQ and gates, RFQ award to PO, threshold PO, expense evidence, budget summary", async ({ page }) => {
+test("booth BOQ and gates, RFQ award to PO, threshold PO, expense evidence, budget summary", async ({ page, browser }) => {
   page.on("dialog", (d) => d.accept(d.type() === "prompt" ? "4" : undefined));
   await page.goto("/register");
   await page.fill("#name", "مدير الإنتاج");
@@ -79,6 +101,7 @@ test("booth BOQ and gates, RFQ award to PO, threshold PO, expense evidence, budg
   await expect(page.getByText(/تمت الترسية وإنشاء أمر شراء PO-/)).toBeVisible();
 
   // finance: the awarded PO (115,000 incl. VAT) needs approval; a small PO is approved directly
+  await inviteApprover(page, browser);
   await page.goto(`${projectPath}/finance`);
   await expect(page.getByTestId("po-row").first()).toHaveAttribute("data-status", "DRAFT");
   await page.getByTestId("po-submit").first().click();

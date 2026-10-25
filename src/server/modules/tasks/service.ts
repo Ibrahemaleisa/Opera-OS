@@ -5,6 +5,7 @@ import { projectScope, taskVisibilityWhere, type ProjectScope } from "@/server/a
 import { withTenant, type Tx } from "@/server/db/tenant";
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/server/errors";
 import { audit } from "@/server/modules/audit/audit";
+import { cancelPendingApprovalsTx, INACTIVE_PROJECT_STATUSES, mayDecide, resolveApproverSet, supersedeApprovalsTx } from "@/server/modules/approvals/service";
 import { emit } from "@/server/modules/automation/outbox";
 import { DEFAULT_STATUSES, type StatusDef } from "@/server/modules/templates/definition";
 import { nextTaskNumber } from "./numbering";
@@ -65,7 +66,8 @@ function canEditTask(ctx: ServiceContext, scope: ProjectScope, task: Task) {
 async function assertAssignable(tx: Tx, projectId: string, userId: string | null | undefined) {
   if (!userId) return;
   const pm = await tx.projectMember.findUnique({ where: { projectId_userId: { projectId, userId } } });
-  const m = await tx.membership.findFirst({ where: { userId, status: "ACTIVE" }, include: { role: true } });
+  const project = await tx.project.findUniqueOrThrow({ where: { id: projectId }, select: { organizationId: true } });
+  const m = await tx.membership.findFirst({ where: { organizationId: project.organizationId, userId, status: "ACTIVE" }, include: { role: true } });
   if (!m) throw new ValidationError("errors.validation", { ownerId: ["errors.notFound"] });
   // External roles (clients/vendors) and drivers must be on the project to receive work.
   if (["CLIENT", "CLIENT_APPROVER", "VENDOR", "FIELD_AGENT", "FREELANCER"].includes(m.role.baseRole) && !pm) throw new ValidationError("errors.validation", { ownerId: ["errors.forbidden"] });
@@ -103,6 +105,9 @@ export async function updateTask(ctx: ServiceContext, patch: z.output<typeof tas
     const { task, scope } = await loadTask(tx, ctx, patch.id);
     if (!canEditTask(ctx, scope, task)) throw new ForbiddenError();
     const { id, version, recurrence, ...data } = patch;
+    // removing an approval gate or exposing a task to the client is a project-manager decision
+    const gateChange = (data.requiresApproval !== undefined && data.requiresApproval !== task.requiresApproval) || (data.clientVisible !== undefined && data.clientVisible !== task.clientVisible);
+    if (gateChange && !scope.manage) throw new ForbiddenError();
     if (data.ownerId !== undefined && data.ownerId !== task.ownerId) {
       if (!scope.manage && !scope.operate) throw new ForbiddenError();
       await assertAssignable(tx, task.projectId, data.ownerId);
@@ -146,8 +151,9 @@ export async function changeTaskStatus(ctx: ServiceContext, input: { id: string;
       if (open.length) throw new ValidationError("errors.blockedByDependencies", { status: open.map((d) => d.dependsOn.title) });
     }
     if (target.category === "DONE" && task.requiresApproval) {
-      const approved = await tx.approval.findFirst({ where: { entityType: "TASK", entityId: task.id, status: "APPROVED" } });
-      if (!approved) throw new ValidationError("errors.approvalRequired");
+      // the latest approval must be APPROVED and still valid (reopening supersedes it)
+      const latest = await tx.approval.findFirst({ where: { entityType: "TASK", entityId: task.id, status: { not: "CANCELLED" } }, orderBy: { createdAt: "desc" } });
+      if (latest?.status !== "APPROVED") throw new ValidationError("errors.approvalRequired");
     }
     const res = await tx.task.updateMany({
       where: { id: task.id, ...(input.version !== undefined ? { version: input.version } : {}) },
@@ -161,6 +167,9 @@ export async function changeTaskStatus(ctx: ServiceContext, input: { id: string;
     });
     if (!res.count) throw new ConflictError();
     await audit(tx, ctx, { action: "task.status", entityType: "TASK", entityId: task.id, projectId: task.projectId, before: { status: task.status }, after: { status: target.key }, summary: input.reason ?? undefined });
+    // reopening approved work invalidates its approval; cancelling work closes its open requests
+    if (task.statusCategory === "DONE" && target.category !== "DONE") await supersedeApprovalsTx(tx, ctx, "TASK", task.id, input.reason?.trim() || "task reopened");
+    if (target.category === "CANCELLED") await cancelPendingApprovalsTx(tx, ctx, { entityType: "TASK", entityId: task.id }, { reason: input.reason?.trim() || "task cancelled" });
     await emit(tx, ctx, "task.status_changed", { taskId: task.id, projectId: task.projectId, from: task.status, to: target.key, category: target.category, ownerId: task.ownerId, title: task.title });
     if (target.category === "DONE" && task.recurrence) await scheduleNextOccurrence(tx, ctx, task);
     return tx.task.findUniqueOrThrow({ where: { id: task.id } });
@@ -215,6 +224,8 @@ export async function addDependency(ctx: ServiceContext, taskId: string, depends
     if (!canEditTask(ctx, scope, task)) throw new ForbiddenError();
     const other = await tx.task.findFirst({ where: { id: dependsOnId, projectId: task.projectId } });
     if (!other) throw new NotFoundError();
+    // serialise graph edits per project so two concurrent edges can't form a cycle
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`deps:${task.projectId}`}))`;
     const edges = await tx.taskDependency.findMany({ where: { task: { projectId: task.projectId } }, select: { taskId: true, dependsOnId: true } });
     if (wouldCreateCycle(edges, taskId, dependsOnId)) throw new ValidationError("errors.dependencyCycle");
     await tx.taskDependency.upsert({ where: { taskId_dependsOnId: { taskId, dependsOnId } }, create: { organizationId: ctx.orgId, taskId, dependsOnId }, update: {} });
@@ -288,6 +299,8 @@ export async function addComment(ctx: ServiceContext, input: { entityType: strin
       const t = await tx.task.findFirst({ where: { id: input.entityId, projectId: input.projectId }, include: { collaborators: true } });
       if (!t) throw new NotFoundError();
       assertTaskVisible(ctx, scope, t);
+    } else if (!(await commentTargetInProject(tx, input.entityType, input.entityId, input.projectId))) {
+      throw new NotFoundError();
     }
     // mentions are restricted to project members (and for client comments, nobody outside the project)
     const members = await tx.projectMember.findMany({ where: { projectId: input.projectId }, select: { userId: true, role: true } });
@@ -299,6 +312,20 @@ export async function addComment(ctx: ServiceContext, input: { entityType: strin
     if (mentions.length) await emit(tx, ctx, "comment.mentioned", { projectId: input.projectId, mentions, name: ctx.userName, title: input.body.slice(0, 80), link: input.entityType === "TASK" ? `/tasks/${input.entityId}` : `/projects/${input.projectId}` });
     return c;
   });
+}
+
+/** A comment thread may only be attached to a record of the project it claims. */
+async function commentTargetInProject(tx: Tx, entityType: string, entityId: string, projectId: string): Promise<boolean> {
+  const where = { id: entityId, projectId };
+  switch (entityType) {
+    case "PROJECT": return entityId === projectId;
+    case "DELIVERY": return !!(await tx.delivery.findFirst({ where, select: { id: true } }));
+    case "APPROVAL": return !!(await tx.approval.findFirst({ where, select: { id: true } }));
+    case "BOOTH": return !!(await tx.booth.findFirst({ where, select: { id: true } }));
+    case "INCIDENT": return !!(await tx.incident.findFirst({ where, select: { id: true } }));
+    case "CHANGE_REQUEST": return !!(await tx.changeRequest.findFirst({ where, select: { id: true } }));
+    default: return false;
+  }
 }
 
 export async function listComments(tx: Tx, scope: ProjectScope, entityType: string, entityId: string) {
@@ -391,19 +418,30 @@ export async function getTaskDetail(ctx: ServiceContext, taskId: string) {
       }),
       listComments(tx, scope, "TASK", taskId),
       tx.attachment.findMany({ where: { entityType: "TASK", entityId: taskId, deletedAt: null, ...(scope.clientView ? { clientVisible: true } : {}) }, orderBy: { createdAt: "desc" } }),
-      tx.approval.findMany({ where: { entityType: "TASK", entityId: taskId }, include: { decisions: { orderBy: { createdAt: "asc" } } }, orderBy: { createdAt: "desc" } }),
+      tx.approval.findMany({ where: { entityType: "TASK", entityId: taskId, ...(scope.clientView ? { clientVisible: true } : {}) }, include: { decisions: { orderBy: { createdAt: "asc" } } }, orderBy: { createdAt: "desc" } }),
       tx.taskAssignmentHistory.findMany({ where: { taskId }, orderBy: { createdAt: "desc" } }),
       scope.clientView ? Promise.resolve([]) : tx.auditEvent.findMany({ where: { entityType: "TASK", entityId: taskId }, orderBy: { createdAt: "desc" }, take: 50 }),
       tx.projectMember.findMany({ where: { projectId: task.projectId }, include: { user: { select: { id: true, name: true, nameAr: true } } } }),
-      tx.task.findMany({ where: { projectId: task.projectId, id: { not: taskId }, parentId: null }, select: { id: true, number: true, title: true }, orderBy: { number: "asc" }, take: 500 }),
+      // dependency picker: only tasks the caller may see in this project
+      tx.task.findMany({ where: { ...(taskVisibilityWhere(ctx, scope) as Prisma.TaskWhereInput), id: { not: taskId }, parentId: null }, select: { id: true, number: true, title: true }, orderBy: { number: "asc" }, take: 500 }),
     ]);
+    // Same rule as decideApproval, so the UI never offers a decision the server would refuse.
+    const active = !(INACTIVE_PROJECT_STATUSES as readonly string[]).includes(scope.project.status);
+    const requestLike = { entityType: "TASK", entityId: taskId, requestedById: ctx.userId, approverUserId: null, clientVisible: true };
+    const [internalApprovers, clientApprovers] = scope.clientView || !active
+      ? [{ eligible: [] as string[] }, { eligible: [] as string[] }]
+      : await Promise.all([
+          resolveApproverSet(tx, scope.project, { ...requestLike, approverType: "INTERNAL" }),
+          resolveApproverSet(tx, scope.project, { ...requestLike, approverType: "CLIENT" }),
+        ]);
     return {
       task: full,
       statuses: statusesOf(task.workstream),
       workstream: task.workstream ? { id: task.workstream.id, name: (ctx.locale === "en" && task.workstream.nameEn) || task.workstream.name } : null,
       comments,
       attachments,
-      approvals,
+      approvals: approvals.map((a) => ({ ...a, canDecide: active && a.status === "PENDING" && mayDecide(ctx, scope, a, null) })),
+      eligibleApprovers: { INTERNAL: internalApprovers.eligible, CLIENT: clientApprovers.eligible },
       history,
       auditTrail,
       members: members.map((m) => ({ id: m.userId, name: (ctx.locale === "ar" ? m.user.nameAr : null) ?? m.user.name, role: m.role })),
@@ -454,8 +492,10 @@ export async function bulkUpdateTasks(ctx: ServiceContext, input: z.output<typeo
     await withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
       const scope = await projectScope(tx, ctx, input.projectId);
       if (!scope.operate || scope.clientView || scope.taskScope === "assigned") throw new ForbiddenError();
+      if (rest.clientVisible !== undefined && !scope.manage) throw new ForbiddenError();
       if (rest.ownerId) await assertAssignable(tx, input.projectId, rest.ownerId);
-      const tasks = await tx.task.findMany({ where: { id: { in: input.taskIds }, projectId: input.projectId } });
+      // write scope = read scope (workstream restrictions included)
+      const tasks = await tx.task.findMany({ where: { ...(taskVisibilityWhere(ctx, scope) as Prisma.TaskWhereInput), id: { in: input.taskIds } } });
       for (const t of tasks) {
         await tx.task.update({ where: { id: t.id }, data: { ...rest, ...(addTag && !t.tags.includes(addTag) ? { tags: { push: addTag } } : {}), version: { increment: 1 } } });
         if (rest.ownerId !== undefined && rest.ownerId !== t.ownerId) {

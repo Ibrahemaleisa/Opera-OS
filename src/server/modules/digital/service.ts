@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { appBaseUrl } from "@/server/app-url";
-import type { Channel, DigitalInvitation, Recipient } from "@/generated/prisma/client";
+import type { CampaignStatus, Channel, DigitalInvitation, InvitationCampaign, Recipient } from "@/generated/prisma/client";
 import { formatDateTime } from "@/lib/format";
 import { shortCode } from "@/lib/id";
 import { randomToken, sha256Hex } from "@/server/auth/crypto";
@@ -12,8 +12,9 @@ import { withTenant, type Tx } from "@/server/db/tenant";
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/server/errors";
 import { audit } from "@/server/modules/audit/audit";
 import { emit } from "@/server/modules/automation/outbox";
-import { requestApprovalTx } from "@/server/modules/approvals/service";
+import { cancelPendingApprovalsTx, INACTIVE_PROJECT_STATUSES, requestApprovalTx, supersedeApprovalsTx } from "@/server/modules/approvals/service";
 import { enqueue } from "@/server/jobs/dispatch";
+import { jobsMode } from "@/server/jobs/queue";
 import { providerStatus } from "./providers";
 
 export { VARIABLES } from "@/lib/digital-vars";
@@ -54,6 +55,27 @@ export function personalization(r: Pick<Recipient, "nameAr" | "nameEn" | "honori
   };
 }
 
+/** From the approval request until sending starts, content and audience are frozen: changing them voids the approval. */
+const APPROVAL_LOCKED: CampaignStatus[] = ["PENDING_APPROVAL", "APPROVED", "SCHEDULED"];
+
+/**
+ * Invalidates the campaign's approval (pending → CANCELLED, approved → SUPERSEDED, both audited and
+ * notified) and returns it to DRAFT. Returns false when the campaign wasn't approval-locked.
+ */
+async function invalidateCampaignApproval(tx: Tx, ctx: ServiceContext, c: Pick<InvitationCampaign, "id" | "status" | "projectId" | "name">, reason: string) {
+  if (!APPROVAL_LOCKED.includes(c.status)) return false;
+  await cancelPendingApprovalsTx(tx, ctx, { entityType: "CAMPAIGN", entityId: c.id }, { reason, action: "approval.invalidated" });
+  await supersedeApprovalsTx(tx, ctx, "CAMPAIGN", c.id, reason);
+  const r = await tx.invitationCampaign.updateMany({ where: { id: c.id, status: c.status }, data: { status: "DRAFT", approvedById: null, approvedAt: null } });
+  if (!r.count) throw new ConflictError();
+  await audit(tx, ctx, { action: "campaign.approval_invalidated", entityType: "CAMPAIGN", entityId: c.id, projectId: c.projectId, summary: c.name, before: { status: c.status }, after: { status: "DRAFT" }, meta: { reason } });
+  return true;
+}
+
+function projectActive(status: string) {
+  return !(INACTIVE_PROJECT_STATUSES as readonly string[]).includes(status);
+}
+
 async function loadCampaign(tx: Tx, ctx: ServiceContext, campaignId: string) {
   const c = await tx.invitationCampaign.findUnique({ where: { id: campaignId } });
   if (!c || c.type !== "DIGITAL") throw new NotFoundError();
@@ -69,19 +91,22 @@ export async function saveDigitalCampaign(ctx: ServiceContext, input: z.output<t
     if (!scope.operate) throw new ForbiddenError();
     if (input.channel === "EMAIL" && !input.subject) throw new ValidationError("errors.validation", { subject: ["common.required"] });
     const { id, projectId, ...data } = input;
+    if (data.eventId && !(await tx.event.findFirst({ where: { id: data.eventId, projectId } }))) throw new NotFoundError();
     if (id) {
       const existing = await tx.invitationCampaign.findFirst({ where: { id, projectId, type: "DIGITAL" } });
       if (!existing) throw new NotFoundError();
-      // content changes after approval require a fresh approval
-      if (["APPROVED", "SCHEDULED"].includes(existing.status) && (existing.bodyTemplate !== data.bodyTemplate || existing.subject !== (data.subject ?? null) || existing.channel !== data.channel)) {
-        await tx.approval.updateMany({ where: { entityType: "CAMPAIGN", entityId: id, status: "APPROVED" }, data: { status: "CANCELLED" } });
-        await tx.invitationCampaign.update({ where: { id }, data: { status: "DRAFT", approvedById: null, approvedAt: null } });
-      }
-      if (["SENDING", "ACTIVE", "COMPLETED"].includes(existing.status) && existing.bodyTemplate !== data.bodyTemplate) throw new ConflictError();
+      if (["SENDING", "ACTIVE", "COMPLETED", "CANCELLED"].includes(existing.status) && existing.bodyTemplate !== data.bodyTemplate) throw new ConflictError();
+      // what the approver reviewed: any change from the request onwards voids the approval
+      const contentChanged =
+        existing.bodyTemplate !== data.bodyTemplate || existing.subject !== (data.subject ?? null) || existing.channel !== data.channel ||
+        (existing.eventId ?? null) !== (data.eventId ?? null) || existing.rsvpEnabled !== data.rsvpEnabled || existing.qrEnabled !== data.qrEnabled ||
+        // the send time is part of what was approved (a save that omits it keeps it)
+        (data.scheduledAt !== undefined && (existing.scheduledAt?.getTime() ?? null) !== (data.scheduledAt ? new Date(data.scheduledAt as Date).getTime() : null));
+      const approvalInvalidated = contentChanged ? await invalidateCampaignApproval(tx, ctx, existing, "content changed after the approval request") : false;
       const c = await tx.invitationCampaign.update({ where: { id }, data: { ...data, subject: data.subject ?? null } });
       if (existing.channel !== c.channel) await readdressAudience(tx, c);
-      await audit(tx, ctx, { action: "campaign.update", entityType: "CAMPAIGN", entityId: id, projectId, summary: c.name });
-      return c;
+      await audit(tx, ctx, { action: "campaign.update", entityType: "CAMPAIGN", entityId: id, projectId, summary: c.name, meta: { approvalInvalidated } });
+      return Object.assign(c, { approvalInvalidated });
     }
     const ws = await tx.workstream.findFirst({ where: { projectId, kind: "DIGITAL_INVITES" } });
     const c = await tx.invitationCampaign.create({ data: { ...data, subject: data.subject ?? null, organizationId: ctx.orgId, projectId, workstreamId: ws?.id ?? null, type: "DIGITAL", createdById: ctx.userId } });
@@ -109,6 +134,7 @@ export async function addAudience(ctx: ServiceContext, input: { campaignId: stri
   return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
     const { c } = await loadCampaign(tx, ctx, input.campaignId);
     if (["SENDING", "COMPLETED", "CANCELLED"].includes(c.status)) throw new ValidationError("errors.importState");
+    const approvalInvalidated = await invalidateCampaignApproval(tx, ctx, c, "audience changed after the approval request");
     const recipients = await tx.recipient.findMany({ where: { id: { in: input.recipientIds }, projectId: c.projectId, deletedAt: null, anonymizedAt: null } });
     const existing = new Set((await tx.digitalInvitation.findMany({ where: { campaignId: c.id }, select: { recipientId: true } })).map((x) => x.recipientId));
     const address = (r: Recipient) => (c.channel === "EMAIL" ? r.email : r.mobile);
@@ -125,7 +151,7 @@ export async function addAudience(ctx: ServiceContext, input: { campaignId: stri
       added++;
     }
     await audit(tx, ctx, { action: "campaign.audience_add", entityType: "CAMPAIGN", entityId: c.id, projectId: c.projectId, summary: `${added} added, ${missing} without address` });
-    return { added, missing, skipped: existing.size };
+    return { added, missing, skipped: existing.size, approvalInvalidated };
   });
 }
 
@@ -133,9 +159,11 @@ export async function removeAudience(ctx: ServiceContext, input: { campaignId: s
   assertCan(ctx, "campaign.manage");
   return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
     const { c } = await loadCampaign(tx, ctx, input.campaignId);
+    if (["SENDING", "COMPLETED", "CANCELLED"].includes(c.status)) throw new ValidationError("errors.importState");
+    const approvalInvalidated = await invalidateCampaignApproval(tx, ctx, c, "audience changed after the approval request");
     const r = await tx.digitalInvitation.deleteMany({ where: { id: { in: input.invitationIds }, campaignId: c.id, status: { in: ["QUEUED", "SUPPRESSED"] }, messages: { none: {} } } });
     await audit(tx, ctx, { action: "campaign.audience_remove", entityType: "CAMPAIGN", entityId: c.id, projectId: c.projectId, summary: `${r.count} removed` });
-    return { removed: r.count };
+    return { removed: r.count, approvalInvalidated };
   });
 }
 
@@ -156,7 +184,8 @@ export async function requestCampaignApproval(ctx: ServiceContext, campaignId: s
 export async function launchCampaign(ctx: ServiceContext, campaignId: string) {
   assertCan(ctx, "campaign.send");
   const c = await withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
-    const { c } = await loadCampaign(tx, ctx, campaignId);
+    const { c, scope } = await loadCampaign(tx, ctx, campaignId);
+    if (!projectActive(scope.project.status)) throw new ValidationError("errors.projectInactive");
     if (c.status !== "APPROVED") throw new ValidationError("errors.campaignNotApproved");
     const approval = await tx.approval.findFirst({ where: { entityType: "CAMPAIGN", entityId: c.id, status: "APPROVED" }, orderBy: { decidedAt: "desc" } });
     if (!approval) throw new ValidationError("errors.campaignNotApproved");
@@ -166,6 +195,9 @@ export async function launchCampaign(ctx: ServiceContext, campaignId: string) {
     await audit(tx, ctx, { action: next === "SCHEDULED" ? "campaign.schedule" : "campaign.launch", entityType: "CAMPAIGN", entityId: c.id, projectId: c.projectId, summary: c.name, meta: { scheduledAt: c.scheduledAt, approvalId: approval.id } });
     return { ...c, status: next };
   });
+  // Inline mode can't hold a delayed job: a scheduled campaign waits for the scheduler step
+  // (dispatchDueCampaigns), which sends it once it is due. Queue mode also gets a delayed job.
+  if (c.status === "SCHEDULED" && jobsMode() === "inline") return { status: c.status, mode: "scheduled" as const };
   const delay = c.status === "SCHEDULED" && c.scheduledAt ? c.scheduledAt.getTime() - Date.now() : 0;
   const mode = await enqueue("campaign.dispatch", { orgId: ctx.orgId, actorId: ctx.userId, campaignId }, { jobId: `campaign-${campaignId}`, delay: Math.max(0, delay) });
   return { status: c.status, mode };
@@ -175,9 +207,12 @@ export async function cancelCampaign(ctx: ServiceContext, campaignId: string) {
   assertCan(ctx, "campaign.manage");
   return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
     const { c } = await loadCampaign(tx, ctx, campaignId);
-    await tx.invitationCampaign.update({ where: { id: c.id }, data: { status: "CANCELLED" } });
+    if (["COMPLETED", "CANCELLED"].includes(c.status)) throw new ValidationError("errors.invalidTransition");
+    const u = await tx.invitationCampaign.updateMany({ where: { id: c.id, status: c.status }, data: { status: "CANCELLED" } });
+    if (!u.count) throw new ConflictError();
+    await cancelPendingApprovalsTx(tx, ctx, { entityType: "CAMPAIGN", entityId: c.id }, { reason: "campaign cancelled" });
     const r = await tx.messageJob.updateMany({ where: { invitation: { campaignId: c.id }, status: "QUEUED" }, data: { status: "CANCELLED" } });
-    await audit(tx, ctx, { action: "campaign.cancel", entityType: "CAMPAIGN", entityId: c.id, projectId: c.projectId, summary: `${r.count} queued messages cancelled` });
+    await audit(tx, ctx, { action: "campaign.cancel", entityType: "CAMPAIGN", entityId: c.id, projectId: c.projectId, summary: `${r.count} queued messages cancelled`, before: { status: c.status }, after: { status: "CANCELLED" } });
   });
 }
 
@@ -249,10 +284,18 @@ export async function issueRsvpToken(tx: Tx, orgId: string, inv: DigitalInvitati
   return token;
 }
 
-async function resolveRsvp(token: string) {
+/** RSVP links stay usable until a week after the later of the RSVP deadline and the event end (90 days if neither is set). */
+export function rsvpTokenExpiry(rsvpDeadline: Date | null, eventEndsAt: Date | null, now = new Date()): Date {
+  const base = Math.max(rsvpDeadline?.getTime() ?? 0, eventEndsAt?.getTime() ?? 0) || now.getTime() + 83 * 86400_000;
+  return new Date(base + 7 * 86400_000);
+}
+
+async function resolveRsvp(token: string, opts: { allowExpired?: boolean } = {}) {
   if (!token || token.length > 100) return null;
   const pt = await db.publicToken.findUnique({ where: { id: sha256Hex(token) } });
-  if (!pt || pt.kind !== "RSVP") return null;
+  if (!pt || pt.kind !== "RSVP" || pt.usedAt) return null;
+  // an expired link no longer reveals the guest's name or accepts a response
+  if (!opts.allowExpired && pt.expiresAt && pt.expiresAt < new Date()) return null;
   return pt;
 }
 
@@ -296,7 +339,8 @@ export async function submitRsvp(input: z.output<typeof rsvpSchema>, ip: string 
 /** Opt-out → suppression list (honoured by every future send on that channel). */
 export async function optOut(token: string, ip: string | null) {
   await enforceRateLimit(`optout:${ip ?? "unknown"}`, 30, 600);
-  const pt = await resolveRsvp(token);
+  // opting out stays possible on an expired link: it only ever reduces what we send
+  const pt = await resolveRsvp(token, { allowExpired: true });
   if (!pt) throw new NotFoundError("errors.tokenInvalid");
   return withTenant({ orgId: pt.organizationId }, async (tx) => {
     const inv = await tx.digitalInvitation.findUnique({ where: { id: pt.refId } });

@@ -12,6 +12,7 @@ import { useAction } from "@/hooks/use-action";
 import { formObject } from "@/lib/form";
 import { useI18n } from "@/lib/i18n/client";
 import { saveClientAction, saveContactAction } from "../actions";
+import { DigitsInput } from "@/components/app/number-input";
 
 interface Contact { id: string; name: string; title: string | null; email: string | null; phone: string | null; isPrimary: boolean }
 interface ClientRow { id: string; name: string; nameEn: string | null; sector: string | null; city: string | null; crNumber: string | null; vatNumber: string | null; website: string | null; notes: string | null; projects: number; contacts: Contact[] }
@@ -59,8 +60,8 @@ export function ClientsClient({ orgSlug, clients }: { orgSlug: string; clients: 
               <Field label={m.common.nameEn}><Input name="nameEn" defaultValue={current?.nameEn ?? ""} dir="ltr" /></Field>
               <Field label={m.org.sector}><Input name="sector" defaultValue={current?.sector ?? ""} /></Field>
               <Field label={m.common.city}><Input name="city" defaultValue={current?.city ?? ""} /></Field>
-              <Field label={m.org.crNumber}><Input name="crNumber" defaultValue={current?.crNumber ?? ""} dir="ltr" /></Field>
-              <Field label={m.org.vatNumber}><Input name="vatNumber" defaultValue={current?.vatNumber ?? ""} dir="ltr" /></Field>
+              <Field label={m.org.crNumber} error={save.errorFor("crNumber")}><DigitsInput name="crNumber" defaultValue={current?.crNumber ?? ""} /></Field>
+              <Field label={m.org.vatNumber} error={save.errorFor("vatNumber")}><DigitsInput name="vatNumber" defaultValue={current?.vatNumber ?? ""} /></Field>
             </div>
             <Field label={m.org.website}><Input name="website" defaultValue={current?.website ?? ""} dir="ltr" /></Field>
             <Field label={m.common.notes}><Textarea name="notes" defaultValue={current?.notes ?? ""} rows={2} /></Field>
@@ -76,7 +77,7 @@ export function ClientsClient({ orgSlug, clients }: { orgSlug: string; clients: 
             <Field label={m.org.jobTitle}><Input name="title" /></Field>
             <div className="grid grid-cols-2 gap-3">
               <Field label={m.common.email} error={saveContact.errorFor("email")}><Input name="email" type="email" dir="ltr" /></Field>
-              <Field label={m.common.phone}><Input name="phone" dir="ltr" /></Field>
+              <Field label={m.common.phone} error={saveContact.errorFor("phone")}><DigitsInput kind="tel" name="phone" /></Field>
             </div>
             <label className="flex items-center gap-2 text-sm"><input type="checkbox" name="isPrimary" /> {m.org.primary}</label>
             <DialogFooter><Button type="submit" disabled={saveContact.pending}>{m.common.save}</Button></DialogFooter>

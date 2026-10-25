@@ -4,7 +4,7 @@ import { assertSameOrigin } from "@/server/http";
 import { statusSchema, syncFieldMutations } from "@/server/modules/delivery/service";
 import { requireActionContext } from "@/server/request";
 import { jsonError } from "@/server/route";
-import { kickOutbox } from "@/server/jobs/dispatch";
+import { kickOutboxAfterResponse } from "@/server/jobs/dispatch";
 import { ValidationError } from "@/server/errors";
 
 // imports, campaign launches and automations run in-request on serverless (JOBS_MODE=inline)
@@ -21,7 +21,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ org
     const parsed = body.safeParse(await req.json());
     if (!parsed.success) throw new ValidationError();
     const results = await syncFieldMutations(ctx, parsed.data.mutations);
-    void kickOutbox(ctx.orgId);
+    kickOutboxAfterResponse(ctx.orgId);
     return NextResponse.json({ ok: true, data: results });
   } catch (e) {
     return jsonError(e);

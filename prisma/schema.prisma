@@ -94,6 +94,7 @@ enum ApprovalStatus {
   APPROVED
   REJECTED
   CANCELLED
+  SUPERSEDED // an APPROVED decision invalidated because the entity was reopened/changed afterwards
 }
 
 enum ApproverType {
@@ -429,6 +430,7 @@ model Membership {
 
   @@unique([organizationId, userId])
   @@index([userId])
+  @@index([organizationId, roleId])
 }
 
 model Invitation {
@@ -471,6 +473,8 @@ model Team {
   createdAt      DateTime     @default(now())
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   members        TeamMember[]
+
+  @@index([organizationId])
 }
 
 model TeamMember {
@@ -537,6 +541,8 @@ model Contact {
   vendor         Vendor?  @relation(fields: [vendorId], references: [id], onDelete: Cascade)
 
   @@index([organizationId])
+  @@index([organizationId, clientId])
+  @@index([organizationId, vendorId])
 }
 
 model Venue {
@@ -701,6 +707,7 @@ model Project {
 
   @@unique([organizationId, code])
   @@index([organizationId, status])
+  @@index([organizationId, clientId])
 }
 
 model ProjectMember {
@@ -732,6 +739,7 @@ model ProjectVenue {
   venue          Venue   @relation(fields: [venueId], references: [id], onDelete: Cascade)
 
   @@unique([projectId, venueId])
+  @@index([organizationId, venueId])
 }
 
 model Risk {
@@ -862,6 +870,7 @@ model TemplateInstance {
   workstreams       Workstream[]
 
   @@index([organizationId, projectId])
+  @@index([organizationId, templateVersionId])
 }
 
 model Workstream {
@@ -885,6 +894,7 @@ model Workstream {
 
   @@unique([projectId, key])
   @@index([organizationId, projectId])
+  @@index([organizationId, templateInstanceId])
 }
 
 // ───────────────────────────── Tasks ─────────────────────────────
@@ -936,6 +946,8 @@ model Task {
   @@index([organizationId, projectId, statusCategory])
   @@index([organizationId, ownerId, statusCategory])
   @@index([organizationId, dueAt])
+  @@index([organizationId, workstreamId])
+  @@index([organizationId, parentId])
 }
 
 model TaskCollaborator {
@@ -960,6 +972,7 @@ model TaskDependency {
   dependsOn      Task   @relation("TaskBlocks", fields: [dependsOnId], references: [id], onDelete: Cascade)
 
   @@unique([taskId, dependsOnId])
+  @@index([organizationId, dependsOnId])
 }
 
 model TaskAssignmentHistory {
@@ -972,6 +985,8 @@ model TaskAssignmentHistory {
   reason         String?
   createdAt      DateTime @default(now())
   task           Task     @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, taskId])
 }
 
 model Checklist {
@@ -982,6 +997,8 @@ model Checklist {
   sortOrder      Int             @default(0)
   task           Task            @relation(fields: [taskId], references: [id], onDelete: Cascade)
   items          ChecklistItem[]
+
+  @@index([organizationId, taskId])
 }
 
 model ChecklistItem {
@@ -994,6 +1011,8 @@ model ChecklistItem {
   doneAt         DateTime?
   sortOrder      Int       @default(0)
   checklist      Checklist @relation(fields: [checklistId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, checklistId])
 }
 
 model Comment {
@@ -1012,6 +1031,7 @@ model Comment {
   author         User       @relation(fields: [authorId], references: [id])
 
   @@index([organizationId, entityType, entityId])
+  @@index([organizationId, authorId])
 }
 
 model Attachment {
@@ -1070,6 +1090,8 @@ model ApprovalDecision {
   actorId        String
   createdAt      DateTime       @default(now())
   approval       Approval       @relation(fields: [approvalId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, approvalId])
 }
 
 // ───────────────────────────── VIP Physical Delivery ─────────────────────────────
@@ -1281,6 +1303,8 @@ model Delivery {
   @@index([importBatchId])
   @@index([organizationId, projectId, status])
   @@index([organizationId, agentId, status])
+  @@index([organizationId, recipientId])
+  @@index([organizationId, batchId])
 }
 
 model DeliveryEvent {
@@ -1334,6 +1358,7 @@ model DeliveryAssignment {
   delivery       Delivery  @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
 
   @@index([organizationId, agentId])
+  @@index([organizationId, deliveryId])
 }
 
 model DeliveryEvidence {
@@ -1345,6 +1370,8 @@ model DeliveryEvidence {
   kind           String   @default("PHOTO") // PHOTO | SIGNATURE | DOCUMENT
   createdAt      DateTime @default(now())
   delivery       Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, deliveryId])
 }
 
 // ───────────────────────────── Digital Invitations ─────────────────────────────
@@ -1413,6 +1440,7 @@ model MessageJob {
 
   @@index([organizationId, status])
   @@index([provider, providerMessageId])
+  @@index([organizationId, invitationId])
 }
 
 model RSVP {
@@ -1738,6 +1766,8 @@ model Inspection {
   inspectedById  String
   inspectedAt    DateTime @default(now())
   booth          Booth    @relation(fields: [boothId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, boothId])
 }
 
 model Snag {
@@ -1753,6 +1783,8 @@ model Snag {
   fixedAt        DateTime?
   createdAt      DateTime  @default(now())
   booth          Booth     @relation(fields: [boothId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, boothId])
 }
 
 // ───────────────────────────── Vendors & Procurement ─────────────────────────────
@@ -1814,6 +1846,7 @@ model Quote {
   rfq            RFQ?        @relation(fields: [rfqId], references: [id], onDelete: SetNull)
 
   @@index([organizationId, projectId])
+  @@index([organizationId, rfqId])
 }
 
 model PurchaseOrder {
@@ -1959,4 +1992,5 @@ model AutomationExecution {
   rule           AutomationRule  @relation(fields: [ruleId], references: [id], onDelete: Cascade)
 
   @@index([organizationId, createdAt])
+  @@index([organizationId, ruleId])
 }

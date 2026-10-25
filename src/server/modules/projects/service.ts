@@ -1,13 +1,14 @@
 import type { z } from "zod";
 import type { Prisma, ProjectStatus } from "@/generated/prisma/client";
 import type { ServiceContext } from "@/server/authz/context";
-import { assertCan, can, projectScope, projectVisibilityWhere, type ProjectScope } from "@/server/authz/policy";
+import { assertCan, can, projectScope, projectVisibilityWhere, taskVisibilityWhere, type ProjectScope, operatesProject } from "@/server/authz/policy";
 import { withTenant, type Tx } from "@/server/db/tenant";
 import { ForbiddenError, NotFoundError, ValidationError } from "@/server/errors";
 import { audit } from "@/server/modules/audit/audit";
 import { emit } from "@/server/modules/automation/outbox";
 import { applyTemplateVersion } from "@/server/modules/templates/service";
-import { computeHealth } from "./health";
+import { FINANCIAL_ENTITY_TYPES } from "@/server/modules/approvals/service";
+import { loadProjectHealth } from "./health";
 import type { createProjectSchema, deliverableSchema, memberSchema, milestoneSchema, projectSchema, riskSchema } from "./schemas";
 
 async function nextProjectCode(tx: Tx, year: number) {
@@ -115,11 +116,11 @@ export async function listProjects(ctx: ServiceContext, f: PortfolioFilters = {}
     });
     const ids = projects.map((p) => p.id);
     const now = new Date();
-    const [byCat, overdue, risks, milestonesBlocked] = await Promise.all([
+    const [byCat, overdue, healthById] = await Promise.all([
       tx.task.groupBy({ by: ["projectId", "statusCategory"], where: { projectId: { in: ids }, parentId: null }, _count: true }),
       tx.task.groupBy({ by: ["projectId"], where: { projectId: { in: ids }, parentId: null, statusCategory: { notIn: ["DONE", "CANCELLED"] }, dueAt: { lt: now } }, _count: true }),
-      tx.risk.groupBy({ by: ["projectId"], where: { projectId: { in: ids }, status: { not: "CLOSED" }, likelihood: { gte: 3 }, impact: { gte: 3 } }, _count: true }),
-      tx.milestone.groupBy({ by: ["projectId"], where: { projectId: { in: ids }, OR: [{ status: "BLOCKED" }, { status: { not: "DONE" }, dueDate: { lt: now } }] }, _count: true }),
+      // health v2: the same computation as the overview and the operations board
+      loadProjectHealth(tx, ids, now),
     ]);
     return projects.map((p) => {
       const cats = byCat.filter((c) => c.projectId === p.id);
@@ -127,8 +128,7 @@ export async function listProjects(ctx: ServiceContext, f: PortfolioFilters = {}
       const done = cats.find((c) => c.statusCategory === "DONE")?._count ?? 0;
       const blocked = cats.find((c) => c.statusCategory === "BLOCKED")?._count ?? 0;
       const od = overdue.find((o) => o.projectId === p.id)?._count ?? 0;
-      const elapsed = p.startDate && p.deadline ? Math.max(0, Math.min(1, (now.getTime() - p.startDate.getTime()) / Math.max(1, p.deadline.getTime() - p.startDate.getTime()))) : null;
-      const health = computeHealth({ totalTasks: total, doneTasks: done, overdueTasks: od, blockedTasks: blocked, openHighRisks: risks.find((r) => r.projectId === p.id)?._count ?? 0, blockedMilestones: milestonesBlocked.find((r) => r.projectId === p.id)?._count ?? 0, overdueMilestones: 0, elapsed, budgetRatio: null });
+      const health = healthById.get(p.id)!;
       return {
         id: p.id,
         code: p.code,
@@ -146,6 +146,8 @@ export async function listProjects(ctx: ServiceContext, f: PortfolioFilters = {}
         tasks: { total, done, overdue: od, blocked },
         progress: total ? done / total : 0,
         health,
+        // finance reasons in health are shown in full only to finance viewers
+        financeVisible: can(ctx, "finance.view"),
         budgetAmount: can(ctx, "finance.view") ? p.budgetAmount?.toString() ?? null : null,
       };
     });
@@ -154,23 +156,57 @@ export async function listProjects(ctx: ServiceContext, f: PortfolioFilters = {}
 
 export type PortfolioProject = Awaited<ReturnType<typeof listProjects>>[number];
 
+/**
+ * Who may read the project's activity feed and risk register: not clients, not task-scoped people
+ * (freelancers, vendors), not members restricted to some workstreams — the feed embeds other work.
+ */
+function seesProjectInternals(scope: ProjectScope) {
+  return !scope.clientView && !scope.fieldOnly && scope.taskScope === "all" && scope.workstreamIds.length === 0;
+}
+
+/** Activity entries that would reveal VIP personal data or money to a member without that scope. */
+export function activityWhere(scope: ProjectScope): Prisma.AuditEventWhereInput {
+  const hidden: Prisma.AuditEventWhereInput[] = [];
+  if (!scope.vip) {
+    hidden.push({ entityType: { in: ["GUEST", "RECIPIENT", "PROTOCOL_ASSIGNMENT", "SEATING_ZONE", "DIGITAL_INVITATION", "SPEAKER"] } });
+    hidden.push({ action: { startsWith: "guest." } }, { action: { startsWith: "protocol." } }, { action: { startsWith: "vip." } }, { action: { startsWith: "recipient." } });
+  }
+  if (!scope.finance) {
+    hidden.push({ entityType: { in: ["BUDGET", "PURCHASE_ORDER", "EXPENSE", "CHANGE_ORDER", "QUOTE", "BOQ_ITEM"] } });
+    hidden.push({ action: { startsWith: "project.contract_value" } }, { action: { startsWith: "budget." } }, { action: { startsWith: "po." } }, { action: { startsWith: "expense." } });
+  }
+  return hidden.length ? { NOT: { OR: hidden } } : {};
+}
+
+/** The project activity feed (audit trail) as the caller may see it. */
+export async function listProjectActivity(ctx: ServiceContext, projectId: string, take = 300) {
+  return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
+    const scope = await projectScope(tx, ctx, projectId);
+    if (!seesProjectInternals(scope)) throw new NotFoundError();
+    return tx.auditEvent.findMany({ where: { projectId, ...activityWhere(scope) }, orderBy: { createdAt: "desc" }, take: Math.min(take, 500), select: { id: true, action: true, actorName: true, summary: true, entityType: true, entityId: true, createdAt: true } });
+  });
+}
+
 export async function getProjectOverview(ctx: ServiceContext, projectId: string) {
   return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
     const scope = await projectScope(tx, ctx, projectId);
     if (scope.fieldOnly) throw new NotFoundError();
     const now = new Date();
     const clientOnly = scope.clientView ? { clientVisible: true } : {};
+    // counters cover only the work the caller may see (own tasks for freelancers, allowed workstreams, client-visible for clients)
+    const visibleTasks = { ...(taskVisibilityWhere(ctx, scope) as Prisma.TaskWhereInput), parentId: null };
+    const internals = seesProjectInternals(scope);
     const [project, workstreams, milestones, deliverables, risks, members, approvals, catCounts, overdue, activity, instances, campaigns, events, booths] = await Promise.all([
       tx.project.findUniqueOrThrow({ where: { id: projectId }, include: { client: true, venues: { include: { venue: true } } } }),
       tx.workstream.findMany({ where: { projectId, ...(scope.workstreamIds.length ? { id: { in: scope.workstreamIds } } : {}) }, orderBy: { sortOrder: "asc" } }),
       tx.milestone.findMany({ where: { projectId, ...clientOnly }, orderBy: [{ dueDate: "asc" }, { sortOrder: "asc" }] }),
       tx.deliverable.findMany({ where: { projectId, ...clientOnly }, orderBy: { dueDate: "asc" } }),
-      scope.clientView ? Promise.resolve([]) : tx.risk.findMany({ where: { projectId }, orderBy: [{ status: "asc" }, { createdAt: "desc" }] }),
+      !internals ? Promise.resolve([]) : tx.risk.findMany({ where: { projectId }, orderBy: [{ status: "asc" }, { createdAt: "desc" }] }),
       tx.projectMember.findMany({ where: { projectId }, include: { user: { select: { id: true, name: true, nameAr: true, email: true } } } }),
-      tx.approval.findMany({ where: { projectId, status: "PENDING", ...(scope.clientView ? { approverType: "CLIENT" } : {}) }, orderBy: { createdAt: "desc" }, take: 20 }),
-      tx.task.groupBy({ by: ["workstreamId", "statusCategory"], where: { projectId, parentId: null, ...(scope.clientView ? { clientVisible: true } : {}) }, _count: true }),
-      tx.task.count({ where: { projectId, parentId: null, statusCategory: { notIn: ["DONE", "CANCELLED"] }, dueAt: { lt: now }, ...(scope.clientView ? { clientVisible: true } : {}) } }),
-      scope.clientView ? Promise.resolve([]) : tx.auditEvent.findMany({ where: { projectId }, orderBy: { createdAt: "desc" }, take: 25 }),
+      tx.approval.findMany({ where: { projectId, status: "PENDING", ...(scope.clientView ? { approverType: "CLIENT" } : {}), ...(scope.finance ? {} : { entityType: { notIn: [...FINANCIAL_ENTITY_TYPES] } }) }, orderBy: { createdAt: "desc" }, take: 20 }),
+      tx.task.groupBy({ by: ["workstreamId", "statusCategory"], where: visibleTasks, _count: true }),
+      tx.task.count({ where: { ...visibleTasks, statusCategory: { notIn: ["DONE", "CANCELLED"] }, dueAt: { lt: now } } }),
+      !internals ? Promise.resolve([]) : tx.auditEvent.findMany({ where: { projectId, ...activityWhere(scope) }, orderBy: { createdAt: "desc" }, take: 25 }),
       tx.templateInstance.findMany({ where: { projectId }, orderBy: { appliedAt: "asc" } }),
       tx.invitationCampaign.findMany({ where: { projectId }, select: { id: true, name: true, type: true, status: true } }),
       tx.event.findMany({ where: { projectId }, select: { id: true, name: true, startsAt: true, phase: true } }),
@@ -179,7 +215,6 @@ export async function getProjectOverview(ctx: ServiceContext, projectId: string)
     const total = catCounts.filter((c) => c.statusCategory !== "CANCELLED").reduce((n, c) => n + c._count, 0);
     const done = catCounts.filter((c) => c.statusCategory === "DONE").reduce((n, c) => n + c._count, 0);
     const blocked = catCounts.filter((c) => c.statusCategory === "BLOCKED").reduce((n, c) => n + c._count, 0);
-    let budgetRatio: number | null = null;
     let finance: { planned: number; committed: number; actual: number } | null = null;
     if (scope.finance) {
       const [budgets, pos, expenses] = await Promise.all([
@@ -189,20 +224,9 @@ export async function getProjectOverview(ctx: ServiceContext, projectId: string)
       ]);
       const planned = Number(budgets._sum.planned ?? project.budgetAmount ?? 0);
       finance = { planned, committed: Number(pos._sum.amount ?? 0), actual: Number(expenses._sum.amount ?? 0) };
-      budgetRatio = planned > 0 ? finance.actual / planned : null;
     }
-    const elapsed = project.startDate && project.deadline ? Math.max(0, Math.min(1, (now.getTime() - project.startDate.getTime()) / Math.max(1, project.deadline.getTime() - project.startDate.getTime()))) : null;
-    const health = computeHealth({
-      totalTasks: total,
-      doneTasks: done,
-      overdueTasks: overdue,
-      blockedTasks: blocked,
-      openHighRisks: risks.filter((r) => r.status !== "CLOSED" && r.likelihood >= 3 && r.impact >= 3).length,
-      blockedMilestones: milestones.filter((m) => m.status === "BLOCKED").length,
-      overdueMilestones: milestones.filter((m) => m.status !== "DONE" && m.dueDate && m.dueDate < now).length,
-      elapsed,
-      budgetRatio,
-    });
+    // health v2: the same computation as the portfolio and the operations board
+    const health = (await loadProjectHealth(tx, [projectId], now)).get(projectId)!;
     const wsProgress = workstreams.map((w) => {
       const c = catCounts.filter((x) => x.workstreamId === w.id);
       const t = c.filter((x) => x.statusCategory !== "CANCELLED").reduce((n, x) => n + x._count, 0);
@@ -272,7 +296,7 @@ export async function removeProjectMember(ctx: ServiceContext, projectId: string
 export async function saveMilestone(ctx: ServiceContext, input: z.output<typeof milestoneSchema>) {
   return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
     const scope = await projectScope(tx, ctx, input.projectId);
-    if (!scope.operate) throw new ForbiddenError();
+    if (!operatesProject(scope)) throw new ForbiddenError();
     const { id, ...data } = input;
     const before = id ? await tx.milestone.findFirst({ where: { id, projectId: input.projectId } }) : null;
     if (id && !before) throw new NotFoundError();
@@ -288,7 +312,7 @@ export async function saveMilestone(ctx: ServiceContext, input: z.output<typeof 
 export async function saveRisk(ctx: ServiceContext, input: z.output<typeof riskSchema>) {
   return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
     const scope = await projectScope(tx, ctx, input.projectId);
-    if (!scope.operate || scope.clientView) throw new ForbiddenError();
+    if (!operatesProject(scope)) throw new ForbiddenError();
     const { id, ...data } = input;
     if (id && !(await tx.risk.findFirst({ where: { id, projectId: input.projectId } }))) throw new NotFoundError();
     const r = id ? await tx.risk.update({ where: { id }, data }) : await tx.risk.create({ data: { ...data, organizationId: ctx.orgId } });
@@ -300,7 +324,7 @@ export async function saveRisk(ctx: ServiceContext, input: z.output<typeof riskS
 export async function saveDeliverable(ctx: ServiceContext, input: z.output<typeof deliverableSchema>) {
   return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
     const scope = await projectScope(tx, ctx, input.projectId);
-    if (!scope.operate) throw new ForbiddenError();
+    if (!operatesProject(scope)) throw new ForbiddenError();
     const { id, ...data } = input;
     const before = id ? await tx.deliverable.findFirst({ where: { id, projectId: input.projectId } }) : null;
     if (id && !before) throw new NotFoundError();

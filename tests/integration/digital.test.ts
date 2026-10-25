@@ -29,10 +29,12 @@ describe("digital invitations", () => {
 
     // cannot launch without approval
     await expect(launchCampaign(a.ctx, c.id)).rejects.toThrow("errors.campaignNotApproved");
+    // the approver must exist when approval is requested: a request nobody else can decide is refused
+    await expect(requestCampaignApproval(a.ctx, c.id)).rejects.toThrow("errors.noEligibleApprover");
+    const director = await addMember(a.ctx, "ops_director", "Director");
     const approval = await requestCampaignApproval(a.ctx, c.id);
     // requester cannot approve their own bulk campaign (four-eyes)
     await expect(decideApproval(a.ctx, { approvalId: approval.id, decision: "APPROVED" })).rejects.toThrow("errors.forbidden");
-    const director = await addMember(a.ctx, "ops_director", "Director");
     await decideApproval(director.ctx, { approvalId: approval.id, decision: "APPROVED", comment: "ok" });
 
     const launched = await launchCampaign(a.ctx, c.id);

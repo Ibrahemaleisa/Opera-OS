@@ -5,7 +5,7 @@ import { redirect } from "next/navigation";
 import { db } from "@/server/db/client";
 import { revokeSession, revokeSessionById } from "@/server/auth/session-store";
 import { LOCALE_COOKIE } from "@/lib/i18n";
-import { getSession, requestMeta, SESSION_COOKIE } from "@/server/request";
+import { getSession, requestMeta, safeNextPath, SESSION_COOKIE } from "@/server/request";
 import { acceptInvitation, login, registerAgency } from "@/server/modules/auth/service";
 import { toActionError, type ActionResult } from "@/server/action";
 import { sha256Hex } from "@/server/auth/crypto";
@@ -15,16 +15,13 @@ async function setSessionCookie(token: string, expiresAt: Date) {
   store.set(SESSION_COOKIE, token, { httpOnly: true, secure: process.env.COOKIE_SECURE === "true", sameSite: "lax", path: "/", expires: expiresAt });
 }
 
-function safeNext(next: unknown): string | null {
-  return typeof next === "string" && next.startsWith("/") && !next.startsWith("//") ? next : null;
-}
 
 export async function loginAction(input: { email: string; password: string; next?: string }): Promise<ActionResult<{ redirectTo: string }>> {
   try {
     const r = await login(input, await requestMeta());
     await setSessionCookie(r.session.token, r.session.expiresAt);
     (await cookies()).set(LOCALE_COOKIE, r.locale === "en" ? "en" : "ar", { path: "/", maxAge: 31536000, sameSite: "lax" });
-    return { ok: true, data: { redirectTo: safeNext(input.next) ?? r.redirectTo } };
+    return { ok: true, data: { redirectTo: safeNextPath(input.next) ?? r.redirectTo } };
   } catch (e) {
     return toActionError(e);
   }

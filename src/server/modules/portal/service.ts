@@ -40,7 +40,7 @@ export async function portalHome(ctx: ServiceContext) {
   assertClient(ctx);
   return withTenant(scoped(ctx), async (tx) => {
     const memberships = await tx.projectMember.findMany({ where: { userId: ctx.userId }, select: { projectId: true } });
-    const projects = await tx.project.findMany({ where: { id: { in: memberships.map((m) => m.projectId) }, clientPortal: true, archivedAt: null }, select: { id: true, code: true, name: true, nameEn: true, status: true, eventStartAt: true, deadline: true }, orderBy: { eventStartAt: "asc" } });
+    const projects = await tx.project.findMany({ where: { id: { in: memberships.map((m) => m.projectId) }, clientPortal: true, archivedAt: null, clientId: ctx.clientId ?? null }, select: { id: true, code: true, name: true, nameEn: true, status: true, eventStartAt: true, deadline: true }, orderBy: { eventStartAt: "asc" } });
     const ids = projects.map((p) => p.id);
     const progress = await clientProgress(tx, ids);
     const pending = await tx.approval.groupBy({ by: ["projectId"], where: { projectId: { in: ids }, clientVisible: true, approverType: "CLIENT", status: "PENDING" }, _count: true });

@@ -57,7 +57,9 @@ export function computeProjectScope(ctx: ServiceContext, project: Project, membe
   }
   const client = isClientRole(ctx.role);
   if (client) {
-    if (!member || !can(ctx, "portal.access") || !project.clientPortal) throw new NotFoundError();
+    // the client contact must belong to the project's client company (re-assigning a project to
+    // another client ends the previous client's access even if a stale membership row remains)
+    if (!member || !can(ctx, "portal.access") || !project.clientPortal || (ctx.clientId ?? null) !== (project.clientId ?? null)) throw new NotFoundError();
     return { ...base, manage: false, operate: false, finance: false, vip: false, export: false, approve: can(ctx, "portal.approve"), workstreamIds: [], taskScope: "assigned", clientView: true, fieldOnly: false };
   }
   if (ctx.role === "VENDOR") {
@@ -101,15 +103,32 @@ export function computeProjectScope(ctx: ServiceContext, project: Project, membe
   };
 }
 
+/**
+ * Project-level records (milestones, deliverables, risks) need project-wide operate scope:
+ * freelancers operate only on the tasks assigned to them.
+ */
+export function operatesProject(scope: ProjectScope) {
+  return scope.operate && scope.taskScope === "all" && !scope.clientView && !scope.fieldOnly;
+}
+
 export function assertScope(cond: boolean): asserts cond {
   if (!cond) throw new ForbiddenError();
 }
 
-/** Prisma `where` fragment restricting projects to those the caller may see. */
+/** Clients, vendors and field agents: they use their own surfaces, never the agency workspace. */
+export function isExternalRole(role: ServiceContext["role"]) {
+  return isClientRole(role) || role === "VENDOR" || role === "FIELD_AGENT";
+}
+
+/**
+ * Prisma `where` fragment restricting projects to those the caller may see in the agency workspace
+ * (portfolio, boards, search, reports). External roles get nothing here: their portals read
+ * through dedicated, narrower services (portal, vendor portal, field deliveries).
+ */
 export function projectVisibilityWhere(ctx: ServiceContext) {
-  if (ctx.permissions.has("*") || (can(ctx, "project.viewAll") && !isClientRole(ctx.role) && !["VENDOR", "FIELD_AGENT"].includes(ctx.role))) {
-    return { organizationId: ctx.orgId };
-  }
+  if (ctx.permissions.has("*")) return { organizationId: ctx.orgId };
+  if (isExternalRole(ctx.role)) return { organizationId: ctx.orgId, id: { in: [] as string[] } };
+  if (can(ctx, "project.viewAll")) return { organizationId: ctx.orgId };
   return { organizationId: ctx.orgId, members: { some: { userId: ctx.userId } } };
 }
 

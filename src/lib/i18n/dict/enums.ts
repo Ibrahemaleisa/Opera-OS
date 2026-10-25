@@ -57,7 +57,7 @@ export const enums = defineMessages(
       PAVILION: "إنتاج البافيليون",
     },
     statusCategory: { TODO: "للتنفيذ", ACTIVE: "قيد العمل", BLOCKED: "محجوب", REVIEW: "مراجعة", DONE: "منجز", CANCELLED: "ملغى" },
-    approvalStatus: { PENDING: "بانتظار القرار", APPROVED: "معتمد", REJECTED: "مرفوض", CANCELLED: "ملغى" },
+    approvalStatus: { PENDING: "بانتظار القرار", APPROVED: "معتمد", REJECTED: "مرفوض", CANCELLED: "ملغى", SUPERSEDED: "لم يعد سارياً" },
     deliveryStatus: {
       PENDING: "معلّق",
       VALIDATING: "قيد التحقق",
@@ -235,7 +235,7 @@ export const enums = defineMessages(
       PAVILION: "Pavilion production",
     },
     statusCategory: { TODO: "To do", ACTIVE: "In progress", BLOCKED: "Blocked", REVIEW: "Review", DONE: "Done", CANCELLED: "Cancelled" },
-    approvalStatus: { PENDING: "Pending", APPROVED: "Approved", REJECTED: "Rejected", CANCELLED: "Cancelled" },
+    approvalStatus: { PENDING: "Pending", APPROVED: "Approved", REJECTED: "Rejected", CANCELLED: "Cancelled", SUPERSEDED: "No longer valid" },
     deliveryStatus: {
       PENDING: "Pending",
       VALIDATING: "Validating",

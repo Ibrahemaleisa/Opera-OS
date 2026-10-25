@@ -9,10 +9,11 @@ import { EmptyState, ProgressBar, Section } from "@/components/app/page";
 import { StatusBadge } from "@/components/app/status-badge";
 import { FormDialog, enumOptions } from "@/components/app/form-dialog";
 import { useAction } from "@/hooks/use-action";
-import { formatDate, formatMoney } from "@/lib/format";
+import { formatMoney } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/client";
 import type { listBooths } from "@/server/modules/booths/service";
 import { saveBoothAction } from "@/app/o/[org]/booths/actions";
+import { DateText } from "@/components/app/date-text";
 
 type D = Awaited<ReturnType<typeof listBooths>>;
 
@@ -30,10 +31,10 @@ export function BoothList({ orgSlug, projectId, data }: { orgSlug: string; proje
             {data.booths.map((b) => (
               <li key={b.id}>
                 <Link href={`/o/${orgSlug}/projects/${b.projectId}/production/${b.id}`} className="grid gap-2 px-4 py-3 hover:bg-muted/40 md:grid-cols-[1fr_200px_150px_130px_80px] md:items-center" data-testid="booth-link">
-                  <div><div className="text-[13px] font-medium">{b.name}</div><div className="ltr-nums text-[11px] text-muted-foreground">{b.project.code} · {t.kind[b.kind as keyof typeof t.kind]}{b.standNumber ? ` · ${b.standNumber}` : ""}</div></div>
+                  <div><div className="text-[13px] font-medium">{b.name}</div><div className="text-[11px] text-muted-foreground"><span className="ltr-nums">{b.project.code}</span> · {t.kind[b.kind as keyof typeof t.kind]}{b.standNumber ? <> · <span className="ltr-nums">{b.standNumber}</span></> : ""}</div></div>
                   <div><ProgressBar value={((b.stageIndex + 1) / 12) * 100} /><div className="mt-1 text-[11px]"><StatusBadge status={b.stageIndex >= 8 ? "DONE" : "IN_PROGRESS"} label={m.enums.boothStage[b.stage]} /></div></div>
                   <span className="tabular text-xs">{formatMoney(b.estimate, { ...fmt, compact: true })}{b.actual > 0 && <span className="text-muted-foreground"> / {formatMoney(b.actual, { ...fmt, compact: true })}</span>}</span>
-                  <span className="ltr-nums text-xs text-muted-foreground">{t.handover}: {b.handoverAt ? formatDate(b.handoverAt, fmt) : "—"}</span>
+                  <span className="text-xs text-muted-foreground">{t.handover}: <DateText value={b.handoverAt} /></span>
                   <span className={`text-xs ${b.openSnags ? "text-warning" : "text-muted-foreground"}`}>{t.openSnags}: {b.openSnags}</span>
                 </Link>
               </li>

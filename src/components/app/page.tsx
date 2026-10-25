@@ -77,14 +77,16 @@ export function EmptyState({ icon, title, body, action, className }: { icon?: Re
 
 export function Stat({ label, value, hint, tone, icon, href }: { label: React.ReactNode; value: React.ReactNode; hint?: React.ReactNode; tone?: "default" | "success" | "warning" | "danger"; icon?: React.ReactNode; href?: string }) {
   const body = (
-    <div className="surface flex h-full flex-col gap-1 px-4 py-3 transition-colors hover:border-input">
+    <div className="surface @container flex h-full flex-col gap-1 px-4 py-3 transition-colors hover:border-input">
       <div className="flex items-start justify-between gap-2 text-xs text-muted-foreground">
         <span className="line-clamp-2 leading-snug">{label}</span>
         {icon && <span className="shrink-0 opacity-70 [&_svg]:size-4">{icon}</span>}
       </div>
       <div
         className={cn(
-          "tabular mt-auto text-xl font-medium [overflow-wrap:anywhere] sm:text-2xl",
+          // figures never break mid-number: the size steps down with the tile instead, and a line
+          // may only wrap between the amount and its currency
+          "tabular mt-auto text-lg font-medium @[11rem]:text-xl @[14rem]:text-2xl",
           tone === "success" && "text-success",
           tone === "warning" && "text-warning",
           tone === "danger" && "text-danger",

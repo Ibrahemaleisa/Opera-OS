@@ -6,7 +6,7 @@ import { guardPage } from "@/server/page-guard";
 
 async function NotificationsPage({ params }: { params: Promise<{ org: string }> }) {
   const { org } = await params;
-  const ctx = await requirePageContext(org);
+  const ctx = await requirePageContext(org, "portal");
   const [{ items }, prefs] = await Promise.all([listNotifications(ctx, { take: 200 }), listPreferences(ctx)]);
   return <NotificationsView orgSlug={org} items={items} prefs={prefs} types={EXTERNAL_NOTIFICATION_TYPES} base="portal" />;
 }

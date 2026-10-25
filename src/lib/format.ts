@@ -61,17 +61,44 @@ export function formatDual(d: DateInput, o: FormatOpts): string {
 const BIDI_MARKS = /[\u200e\u200f\u061c]/g;
 const clean = (s: string) => s.replace(BIDI_MARKS, "");
 
+// Compact notation is not taken from ICU: builds disagree on it ("SAR 96K" in Node, "SAR 96k"
+// in Chromium), which broke hydration. The scale and suffix are applied here, deterministically,
+// and only standard (stable) number formatting comes from Intl.
+const COMPACT_UNITS: { size: number; en: string; ar: string }[] = [
+  { size: 1e9, en: "B", ar: " مليار" },
+  { size: 1e6, en: "M", ar: " مليون" },
+  { size: 1e3, en: "K", ar: " ألف" },
+];
+
+/** Splits a number into a scaled value (≤ 1 decimal) and its compact suffix, e.g. 102800 → 102.8 + K. */
+export function compactScale(n: number, locale: Locale): { value: number; suffix: string } {
+  const abs = Math.abs(n);
+  for (let i = 0; i < COMPACT_UNITS.length; i++) {
+    const u = COMPACT_UNITS[i];
+    if (abs < u.size) continue;
+    const scaled = Math.round((n / u.size) * 10) / 10;
+    // 999,960 rounds to 1000K: promote to the next unit up instead
+    if (Math.abs(scaled) >= 1000 && i > 0) {
+      const up = COMPACT_UNITS[i - 1];
+      return { value: Math.round((n / up.size) * 10) / 10, suffix: up[locale] };
+    }
+    return { value: scaled, suffix: u[locale] };
+  }
+  return { value: Math.round(n * 10) / 10, suffix: "" };
+}
+
 export function formatMoney(amount: number | string | { toString(): string } | null | undefined, o: FormatOpts & { currency?: string; compact?: boolean }): string {
   if (amount === null || amount === undefined || amount === "") return "—";
   const n = typeof amount === "number" ? amount : Number(amount.toString());
   if (!Number.isFinite(n)) return "—";
-  return clean(new Intl.NumberFormat(tag(o.locale), {
-    style: "currency",
-    currency: o.currency ?? "SAR",
-    maximumFractionDigits: o.compact ? 1 : 2,
-    minimumFractionDigits: o.compact ? 0 : 2,
-    notation: o.compact ? "compact" : "standard",
-  }).format(n));
+  if (!o.compact) {
+    return clean(new Intl.NumberFormat(tag(o.locale), { style: "currency", currency: o.currency ?? "SAR", maximumFractionDigits: 2, minimumFractionDigits: 2 }).format(n));
+  }
+  const { value, suffix } = compactScale(n, o.locale);
+  const parts = new Intl.NumberFormat(tag(o.locale), { style: "currency", currency: o.currency ?? "SAR", maximumFractionDigits: 1, minimumFractionDigits: 0 }).formatToParts(value);
+  let last = -1;
+  parts.forEach((p, i) => { if (p.type === "integer" || p.type === "fraction") last = i; });
+  return clean(parts.map((p, i) => (i === last ? p.value + suffix : p.value)).join(""));
 }
 
 export function formatNumber(n: number | null | undefined, o: FormatOpts & { maximumFractionDigits?: number } = { locale: "ar" }): string {

@@ -14,7 +14,7 @@ async function ApprovalsPage({ params }: { params: Promise<{ org: string; projec
   const [data, requests] = await Promise.all([listProjectApprovals(ctx, projectId), listChangeRequests(ctx, projectId)]);
   return (
     <div className="grid gap-4">
-      {data.approvals.length ? <ApprovalsList orgSlug={org} approvals={JSON.parse(JSON.stringify(data.approvals))} users={data.users} canDecide={data.scope.approve} /> : <Section><EmptyState title={m.common.emptyTitle} /></Section>}
+      {data.approvals.length ? <ApprovalsList orgSlug={org} approvals={JSON.parse(JSON.stringify(data.approvals))} users={data.users} /> : <Section><EmptyState title={m.common.emptyTitle} /></Section>}
       {requests.rows.length > 0 && <ChangeRequests orgSlug={org} rows={requests.rows} canRespond={requests.canRespond} />}
     </div>
   );

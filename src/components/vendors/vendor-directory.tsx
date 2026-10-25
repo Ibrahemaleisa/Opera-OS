@@ -42,10 +42,10 @@ export function VendorDirectory({ orgSlug, data }: { orgSlug: string; data: D })
     <>
       <Section title={`${t.title} (${rows.length})`} actions={data.canManage && <Button size="sm" onClick={() => setEdit("new")}><Plus /> {t.newVendor}</Button>}>
         <div className="flex flex-wrap gap-2 border-b px-4 py-2">
-          <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder={m.common.search} className="h-8 w-56" />
-          <NativeSelect value={cat} onChange={(e) => setCat(e.target.value)} className="h-8 w-44 text-xs"><option value="">{t.category}</option>{Object.entries(m.enums.vendorCategory).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</NativeSelect>
+          <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder={m.common.search} aria-label={m.common.search} className="h-8 w-56" />
+          <NativeSelect value={cat} onChange={(e) => setCat(e.target.value)} aria-label={t.category} className="h-8 w-44 text-xs"><option value="">{t.category}</option>{Object.entries(m.enums.vendorCategory).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</NativeSelect>
         </div>
-        <DataTable data={rows} columns={columns} getRowId={(r) => r.id} onRowClick={data.canManage ? (r) => setEdit(r) : undefined} />
+        <DataTable data={rows} columns={columns} getRowId={(r) => r.id} searchable={false} onRowClick={data.canManage ? (r) => setEdit(r) : undefined} />
       </Section>
       {edit && (
         <FormDialog
@@ -57,8 +57,8 @@ export function VendorDirectory({ orgSlug, data }: { orgSlug: string; data: D })
             { name: "nameEn", label: m.common.nameEn, ltr: true },
             { name: "category", label: t.category, type: "select", options: enumOptions(m.enums.vendorCategory) },
             { name: "status", label: m.common.status, type: "select", options: enumOptions(t.status) },
-            { name: "crNumber", label: t.cr, ltr: true, hint: "10" },
-            { name: "vatNumber", label: t.vat, ltr: true, hint: "3XXXXXXXXXXXXX3" },
+            { name: "crNumber", label: t.cr, type: "digits", hint: "10" },
+            { name: "vatNumber", label: t.vat, type: "digits", hint: "3XXXXXXXXXXXXX3" },
             { name: "email", label: m.common.email, type: "email" },
             { name: "phone", label: m.common.phone, type: "tel" },
             { name: "city", label: t.city },

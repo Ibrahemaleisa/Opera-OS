@@ -5,6 +5,7 @@ import { withTenant, type Tx } from "@/server/db/tenant";
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/server/errors";
 import { audit } from "@/server/modules/audit/audit";
 import { BUDGET_CATEGORIES, nextFinanceCode } from "@/server/modules/finance/codes";
+import { normalizeDigitsInput } from "@/lib/digits";
 
 export const VENDOR_CATEGORIES = ["FABRICATION", "AV", "PRINTING", "CATERING", "TRANSPORT", "FLORAL", "SECURITY", "STAFFING", "VENUE", "OTHER"] as const;
 export const VENDOR_STATUSES = ["ACTIVE", "PREFERRED", "ON_HOLD", "BLACKLISTED"] as const;
@@ -13,13 +14,16 @@ export const WO_STATUSES = ["ISSUED", "ACCEPTED", "IN_PROGRESS", "DELIVERED", "A
 const optText = (max = 500) => z.string().trim().max(max).nullish();
 const money = z.coerce.number().min(0).max(1e11);
 
+/** Registration numbers typed with Arabic-Indic digits or separators are normalised before validation. */
+const digitsOnly = (v: unknown) => (typeof v === "string" ? normalizeDigitsInput(v) : v);
+
 export const vendorSchema = z.object({
   id: z.string().optional(),
   name: z.string().trim().min(2).max(200),
   nameEn: optText(200),
   category: z.enum(VENDOR_CATEGORIES),
-  crNumber: z.string().trim().regex(/^\d{10}$/, "vendors.crInvalid").nullish().or(z.literal("").transform(() => null)),
-  vatNumber: z.string().trim().regex(/^3\d{13}3$/, "vendors.vatInvalid").nullish().or(z.literal("").transform(() => null)),
+  crNumber: z.preprocess(digitsOnly, z.string().regex(/^\d{10}$/, "vendors.crInvalid").nullish().or(z.literal("").transform(() => null))),
+  vatNumber: z.preprocess(digitsOnly, z.string().regex(/^3\d{13}3$/, "vendors.vatInvalid").nullish().or(z.literal("").transform(() => null))),
   email: z.string().trim().email().max(200).nullish().or(z.literal("").transform(() => null)),
   phone: optText(30),
   city: optText(100),

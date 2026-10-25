@@ -9,6 +9,7 @@ import { withTenant } from "@/server/db/tenant";
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/server/errors";
 import { audit } from "@/server/modules/audit/audit";
 import { emit } from "@/server/modules/automation/outbox";
+import { cancelPendingApprovalsTx } from "@/server/modules/approvals/service";
 import type { clientSchema, contactSchema, customFieldSchema, inviteSchema, orgSettingsSchema, roleSchema, teamSchema, venueSchema } from "./schemas";
 
 const INVITE_TTL_DAYS = 14;
@@ -148,25 +149,30 @@ export async function changeMemberRole(ctx: ServiceContext, input: { membershipI
     const role = await tx.role.findUnique({ where: { id: input.roleId } });
     if (!role) throw new NotFoundError();
     if (role.baseRole === "OWNER" && ctx.role !== "OWNER") throw new ForbiddenError();
-    const before = await tx.membership.findUnique({ where: { id: input.membershipId }, include: { role: true } });
+    const before = await tx.membership.findFirst({ where: { id: input.membershipId, organizationId: ctx.orgId }, include: { role: true } });
     if (!before) throw new NotFoundError();
+    if (before.userId === ctx.userId) throw new ForbiddenError(); // no self role change
+    if (before.role.baseRole === "OWNER" && ctx.role !== "OWNER") throw new ForbiddenError(); // only an owner changes an owner
     if (before.role.baseRole === "OWNER" && role.baseRole !== "OWNER") await assertNotLastOwner(tx, before.id);
-    await tx.membership.update({ where: { id: before.id }, data: { roleId: role.id, clientId: input.clientId ?? before.clientId, vendorId: input.vendorId ?? before.vendorId } });
-    await audit(tx, ctx, { action: "member.role_change", entityType: "MEMBERSHIP", entityId: before.id, before: { role: before.role.key }, after: { role: role.key }, meta: { userId: before.userId } });
+    const clientId = input.clientId ?? before.clientId;
+    const vendorId = input.vendorId ?? before.vendorId;
+    if (clientId && clientId !== before.clientId && !(await tx.client.findUnique({ where: { id: clientId }, select: { id: true } }))) throw new ValidationError("errors.validation", { clientId: ["errors.notFound"] });
+    if (vendorId && vendorId !== before.vendorId && !(await tx.vendor.findUnique({ where: { id: vendorId }, select: { id: true } }))) throw new ValidationError("errors.validation", { vendorId: ["errors.notFound"] });
+    await tx.membership.update({ where: { id: before.id }, data: { roleId: role.id, clientId, vendorId } });
+    await audit(tx, ctx, { action: "member.role_change", entityType: "MEMBERSHIP", entityId: before.id, before: { role: before.role.key, clientId: before.clientId, vendorId: before.vendorId }, after: { role: role.key, clientId, vendorId }, meta: { userId: before.userId } });
   });
 }
 
 export async function setMemberStatus(ctx: ServiceContext, input: { membershipId: string; status: "ACTIVE" | "SUSPENDED" | "REVOKED" }) {
   assertCan(ctx, "org.members.manage");
   const userId = await withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
-    const m = input.status === "ACTIVE" ? await tx.membership.findUnique({ where: { id: input.membershipId } }) : await assertNotLastOwner(tx, input.membershipId);
-    if (!m) throw new NotFoundError();
-    if (m.userId === ctx.userId && input.status !== "ACTIVE") throw new ForbiddenError();
+    const target = await tx.membership.findFirst({ where: { id: input.membershipId, organizationId: ctx.orgId }, include: { role: true } });
+    if (!target) throw new NotFoundError();
+    if (target.userId === ctx.userId) throw new ForbiddenError(); // nobody changes their own status
+    if (target.role.baseRole === "OWNER" && ctx.role !== "OWNER") throw new ForbiddenError(); // only an owner suspends an owner
+    const m = input.status === "ACTIVE" ? target : await assertNotLastOwner(tx, target.id);
     await tx.membership.update({ where: { id: m.id }, data: { status: input.status, revokedAt: input.status === "REVOKED" ? new Date() : null } });
-    if (input.status !== "ACTIVE") {
-      // remove from project assignments; unassign open deliveries
-      await tx.delivery.updateMany({ where: { agentId: m.userId, status: { in: ["ASSIGNED"] } }, data: { agentId: null, status: "READY" } });
-    }
+    if (input.status !== "ACTIVE") await releaseWorkOf(tx, ctx, m.userId);
     await audit(tx, ctx, { action: `member.${input.status.toLowerCase()}`, entityType: "MEMBERSHIP", entityId: m.id, meta: { userId: m.userId } });
     return m.userId;
   });
@@ -177,6 +183,30 @@ export async function setMemberStatus(ctx: ServiceContext, input: { membershipId
     const remaining = await listUserOrganizations(userId);
     if (!remaining.length) await revokeAllSessions(userId);
   }
+}
+
+/**
+ * When someone leaves (suspended / revoked): their not-yet-started deliveries go back to dispatch with
+ * history, deliveries already in their car are escalated to dispatch, and approvals waiting on them
+ * personally are withdrawn so they can be re-routed.
+ */
+async function releaseWorkOf(tx: Prisma.TransactionClient, ctx: ServiceContext, userId: string) {
+  const now = new Date();
+  const assigned = await tx.delivery.findMany({ where: { agentId: userId, status: "ASSIGNED" }, select: { id: true, version: true, status: true } });
+  for (const d of assigned) {
+    const r = await tx.delivery.updateMany({ where: { id: d.id, version: d.version }, data: { agentId: null, status: "READY", version: { increment: 1 } } });
+    if (!r.count) continue;
+    await tx.deliveryAssignment.updateMany({ where: { deliveryId: d.id, unassignedAt: null }, data: { unassignedAt: now, reason: "member_inactive" } });
+    await tx.deliveryEvent.create({ data: { organizationId: ctx.orgId, deliveryId: d.id, fromStatus: "ASSIGNED", toStatus: "READY", actorId: ctx.userId, reason: "MEMBER_INACTIVE", source: "WEB" } });
+  }
+  const inFlight = await tx.delivery.findMany({ where: { agentId: userId, status: { in: ["OUT_FOR_DELIVERY", "FAILED_ATTEMPT", "RESCHEDULED"] } }, select: { id: true, status: true, projectId: true, campaignId: true, trackingCode: true } });
+  for (const d of inFlight) {
+    await tx.delivery.update({ where: { id: d.id }, data: { escalatedAt: now, escalationNote: "agent_inactive", version: { increment: 1 } } });
+    await tx.deliveryEvent.create({ data: { organizationId: ctx.orgId, deliveryId: d.id, fromStatus: d.status, toStatus: d.status, actorId: ctx.userId, reason: "ESCALATED", note: "agent_inactive", source: "WEB" } });
+    await emit(tx, ctx, "delivery.failed", { deliveryId: d.id, projectId: d.projectId, campaignId: d.campaignId, code: d.trackingCode, reason: "agent_inactive", link: `/projects/${d.projectId}/delivery/cards/${d.id}`, entityType: "DELIVERY", entityId: d.id });
+  }
+  if (assigned.length || inFlight.length) await audit(tx, ctx, { action: "delivery.release_inactive_agent", entityType: "DELIVERY", summary: `${assigned.length} released, ${inFlight.length} escalated`, meta: { userId } });
+  await cancelPendingApprovalsTx(tx, ctx, { approverUserId: userId }, { reason: "designated approver is no longer active", revert: true, action: "approval.cancel_inactive_approver" });
 }
 
 // ── Roles ───────────────────────────────────────────────────────────────────

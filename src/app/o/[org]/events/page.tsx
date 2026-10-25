@@ -3,18 +3,18 @@ import { AlertTriangle, Radio } from "lucide-react";
 import { EmptyState, PageBody, PageHeader, ProgressBar, Section } from "@/components/app/page";
 import { StatusBadge } from "@/components/app/status-badge";
 import { AutoRefresh } from "@/components/app/auto-refresh";
-import { formatDateTime, formatTime } from "@/lib/format";
 import { getI18n } from "@/lib/i18n/server";
 import { commandCenter } from "@/server/modules/events/service";
 import { requirePageContext } from "@/server/request";
 import { guardPage } from "@/server/page-guard";
+import { DateText } from "@/components/app/date-text";
 
 export const dynamic = "force-dynamic";
 
 async function CommandCenterPage({ params }: { params: Promise<{ org: string }> }) {
   const { org } = await params;
   const ctx = await requirePageContext(org);
-  const { m, fmt } = await getI18n();
+  const { m } = await getI18n();
   const t = m.events;
   const data = await commandCenter(ctx);
   const b = `/o/${org}/projects`;
@@ -33,11 +33,11 @@ async function CommandCenterPage({ params }: { params: Promise<{ org: string }> 
                   <span className="font-medium">{e.name}</span>
                   <StatusBadge status={e.phase} label={m.enums.eventPhase[e.phase]} />
                   {live && <span className="flex items-center gap-1 rounded bg-danger-soft px-2 py-0.5 text-[11px] text-danger"><Radio className="size-3 animate-pulse" /> {t.live}</span>}
-                  <span className="ltr-nums ms-auto text-xs text-muted-foreground">{e.project.code} · {formatDateTime(e.startsAt, fmt)}</span>
+                  <span className="ms-auto text-xs text-muted-foreground"><span className="ltr-nums">{e.project.code}</span> · <DateText value={e.startsAt} format="datetime" /></span>
                 </div>
                 <div className="grid gap-3 text-xs sm:grid-cols-4">
                   <div><div className="mb-1 text-muted-foreground">{t.readiness} {e.readiness.ready}/{e.readiness.total}</div><ProgressBar value={e.readiness.total ? (e.readiness.ready / e.readiness.total) * 100 : 0} tone={e.readiness.issues ? "danger" : "brand"} /></div>
-                  <div><div className="text-muted-foreground">{t.nowLive}</div><div className="font-medium">{e.currentCue?.title ?? "—"}</div><div className="text-muted-foreground">{e.nextCue ? `${t.upNext}: ${formatTime(e.nextCue.startsAt, fmt)} ${e.nextCue.title}` : ""}</div></div>
+                  <div><div className="text-muted-foreground">{t.nowLive}</div><div className="font-medium">{e.currentCue?.title ?? "—"}</div><div className="text-muted-foreground">{e.nextCue ? <>{t.upNext}: <DateText value={e.nextCue.startsAt} format="time" /> {e.nextCue.title}</> : ""}</div></div>
                   <div><div className="text-muted-foreground">{t.staffOnSite}</div><div className="tabular font-medium">{e.staff.checkedIn}/{e.staff.due}{e.staff.noShow ? <span className="text-danger"> · {e.staff.noShow} {t.noShow}</span> : null}</div></div>
                   <div><div className="text-muted-foreground">{t.guestsArrived}</div><div className="tabular font-medium">{e.guests.arrived}/{e.guests.expected}</div>{e.incidents > 0 && <div className="flex items-center gap-1 text-danger"><AlertTriangle className="size-3" /> {e.incidents}</div>}</div>
                 </div>
@@ -52,7 +52,7 @@ async function CommandCenterPage({ params }: { params: Promise<{ org: string }> 
                 <li key={i.id}>
                   <Link href={`${b}/${i.projectId}/events${i.eventId ? `/${i.eventId}?tab=incidents` : ""}`} className="grid gap-1 px-4 py-2.5 hover:bg-muted/40">
                     <div className="flex items-center gap-2"><StatusBadge status={i.severity === "CRITICAL" || i.severity === "HIGH" ? "FAILED" : "WARNING"} label={m.enums.severity[i.severity]} /><span className="text-[13px] font-medium">{i.title}</span></div>
-                    <div className="ltr-nums text-[11px] text-muted-foreground">{i.project.code} · {m.enums.incidentStatus[i.status]} · {formatTime(i.createdAt, fmt)}</div>
+                    <div className="text-[11px] text-muted-foreground"><span className="ltr-nums">{i.project.code}</span> · {m.enums.incidentStatus[i.status]} · <DateText value={i.createdAt} format="time" /></div>
                   </Link>
                 </li>
               ))}

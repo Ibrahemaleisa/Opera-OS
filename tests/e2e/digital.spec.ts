@@ -95,19 +95,22 @@ test("digital campaign: approval gate → simulated send → RSVP → QR check-i
   await page.getByTestId("audience-add-all").click();
   await expect(page.getByTestId("audience-add-all")).toBeHidden();
   await expect(page.getByTestId("campaign-launch")).toHaveCount(0); // no launch before approval
+  // approver-set routing (F-08): a request needs someone eligible to decide it, so the director joins first
+  const director = await accept(browser, directorInvite, "مدير العمليات");
   await page.getByTestId("campaign-request-approval").click();
 
   // requester cannot approve their own bulk campaign: the decision buttons are not offered
   await page.reload();
   await expect(page.getByRole("button", { name: "اعتماد", exact: true })).toHaveCount(0);
 
-  const director = await accept(browser, directorInvite, "مدير العمليات");
   await director.goto(campaignPath);
   await director.getByRole("button", { name: "اعتماد", exact: true }).click();
   await expect(director.getByText("معتمد").first()).toBeVisible();
 
   await page.reload();
   await page.getByTestId("campaign-launch").click();
+  // launching sends to the whole audience: it is confirmed first
+  await page.getByTestId("campaign-launch-dialog-confirm").click();
   await expect(page.getByText("تم إطلاق الحملة")).toBeVisible();
   await page.reload();
   await expect(page.getByText("محاكاة").first()).toBeVisible();

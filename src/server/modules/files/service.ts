@@ -1,7 +1,8 @@
 import { createId } from "@/lib/id";
 import { sha256Hex } from "@/server/auth/crypto";
 import type { ServiceContext } from "@/server/authz/context";
-import { can, projectScope } from "@/server/authz/policy";
+import type { Prisma } from "@/generated/prisma/client";
+import { can, projectScope, taskVisibilityWhere } from "@/server/authz/policy";
 import { withTenant, type Tx } from "@/server/db/tenant";
 import { ForbiddenError, NotFoundError, ValidationError } from "@/server/errors";
 import { audit } from "@/server/modules/audit/audit";
@@ -74,6 +75,12 @@ export async function authorizeAttachment(ctx: ServiceContext, attachmentId: str
         const d = await tx.delivery.findUnique({ where: { id: att.entityId }, select: { agentId: true } });
         if (d?.agentId !== ctx.userId) throw new NotFoundError();
       }
+      if (att.entityType === "TASK") {
+        // a file is as visible as its task: own/collaborated tasks for task-scoped people, allowed workstreams, client-visible tasks for clients
+        const t = await tx.task.findFirst({ where: { ...(taskVisibilityWhere(ctx, scope) as Prisma.TaskWhereInput), id: att.entityId }, select: { id: true } });
+        if (!t) throw new NotFoundError();
+      }
+      if (att.entityType === "DELIVERY" && !scope.fieldOnly && !can(ctx, "delivery.view")) throw new NotFoundError();
       if (att.entityType === "EXPENSE" && !scope.finance && att.uploadedById !== ctx.userId) throw new ForbiddenError();
       if (att.entityType === "IMPORT" && !can(ctx, "recipient.import")) throw new ForbiddenError();
     } else if (att.entityType === "VENDOR" && !can(ctx, "vendor.view")) {

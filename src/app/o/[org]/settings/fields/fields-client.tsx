@@ -10,6 +10,8 @@ import { EmptyState, Section } from "@/components/app/page";
 import { useAction } from "@/hooks/use-action";
 import { formObject } from "@/lib/form";
 import { useI18n } from "@/lib/i18n/client";
+import { interpolate } from "@/lib/i18n";
+import { ConfirmAction } from "@/components/app/confirm-action";
 import { archiveCustomFieldAction, saveCustomFieldAction } from "../actions";
 
 interface Def { id: string; entityType: string; key: string; labelAr: string; labelEn: string; fieldType: string; options: string[]; required: boolean; projectId: string | null }
@@ -30,7 +32,13 @@ export function FieldsClient({ orgSlug, fields }: { orgSlug: string; fields: Def
                   <div className="text-sm font-medium">{locale === "ar" ? f.labelAr : f.labelEn} {f.required && <span className="text-danger">*</span>}</div>
                   <div className="ltr-nums text-xs text-muted-foreground">{f.entityType} · {f.key} · {f.fieldType}{f.options.length ? ` · ${f.options.join(", ")}` : ""}{f.projectId ? " · project" : ""}</div>
                 </div>
-                <Button variant="ghost" size="sm" onClick={() => archive.run({ id: f.id })}>{m.common.archive}</Button>
+                <ConfirmAction
+                  trigger={<Button variant="ghost" size="sm">{m.common.archive}</Button>}
+                  title={interpolate(m.common.confirmDialog.archiveFieldTitle, { name: locale === "ar" ? f.labelAr : f.labelEn })}
+                  description={m.common.confirmDialog.archiveFieldBody}
+                  confirmLabel={m.common.archive}
+                  onConfirm={() => archive.run({ id: f.id })}
+                />
               </li>
             ))}
           </ul>

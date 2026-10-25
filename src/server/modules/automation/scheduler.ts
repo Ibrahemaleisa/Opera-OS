@@ -1,8 +1,12 @@
 import { systemContext } from "@/server/authz/context";
 import { adminDb } from "@/server/db/admin";
 import { withTenant } from "@/server/db/tenant";
+import { dispatchDueCampaigns } from "@/server/modules/digital/sender";
 import { emit } from "./outbox";
 import { processOutbox } from "./engine";
+
+/** Archived or paused projects don't nag anyone: no reminders, escalations or "approaching" alerts. */
+export const QUIET_PROJECT_STATUSES = ["CLOSED", "CANCELLED", "COMPLETED", "ON_HOLD"] as const;
 
 /**
  * Time-based triggers. Emits each logical event once using a marker in the outbox payload
@@ -13,20 +17,24 @@ export async function schedulerTick(now = new Date()) {
   let emitted = 0;
   for (const org of orgs) {
     emitted += await withTenant({ orgId: org.id }, async (tx) => {
+      // one tick per org at a time: the dedupe read below then sees the other tick's events
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`scheduler:${org.id}`}))`;
       const ctx = systemContext(org.id, org.slug);
+      const live = { project: { status: { notIn: [...QUIET_PROJECT_STATUSES] } } };
       let n = 0;
       const dueSoon = await tx.task.findMany({
-        where: { statusCategory: { notIn: ["DONE", "CANCELLED"] }, dueAt: { gt: now, lte: new Date(now.getTime() + 24 * 3600_000) }, ownerId: { not: null } },
+        where: { ...live, statusCategory: { notIn: ["DONE", "CANCELLED"] }, dueAt: { gt: now, lte: new Date(now.getTime() + 24 * 3600_000) }, ownerId: { not: null } },
         select: { id: true, title: true, number: true, projectId: true, ownerId: true, dueAt: true, project: { select: { code: true } } },
         take: 500,
       });
       const overdue = await tx.task.findMany({
-        where: { statusCategory: { notIn: ["DONE", "CANCELLED"] }, dueAt: { lt: now } },
+        where: { ...live, statusCategory: { notIn: ["DONE", "CANCELLED"] }, dueAt: { lt: now } },
         select: { id: true, title: true, number: true, projectId: true, ownerId: true, dueAt: true, project: { select: { code: true } } },
         take: 500,
       });
+      const quiet = (await tx.project.findMany({ where: { status: { in: [...QUIET_PROJECT_STATUSES] } }, select: { id: true } })).map((p) => p.id);
       const events = await tx.event.findMany({
-        where: { phase: { in: ["PLANNING", "SETUP", "REHEARSAL"] }, startsAt: { gt: now, lte: new Date(now.getTime() + 3 * 86400_000) } },
+        where: { projectId: { notIn: quiet }, phase: { in: ["PLANNING", "SETUP", "REHEARSAL"] }, startsAt: { gt: now, lte: new Date(now.getTime() + 3 * 86400_000) } },
         select: { id: true, name: true, projectId: true, startsAt: true },
       });
       const day = now.toISOString().slice(0, 10);
@@ -49,6 +57,7 @@ export async function schedulerTick(now = new Date()) {
       return n;
     });
     if (emitted) await processOutbox(org.id);
+    await dispatchDueCampaigns(org.id, now);
   }
   return { orgs: orgs.length, emitted };
 }

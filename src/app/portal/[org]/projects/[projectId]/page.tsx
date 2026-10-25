@@ -7,7 +7,7 @@ import { guardPage } from "@/server/page-guard";
 
 async function PortalProjectPage({ params }: { params: Promise<{ org: string; projectId: string }> }) {
   const { org, projectId } = await params;
-  const ctx = await requirePageContext(org);
+  const ctx = await requirePageContext(org, "portal");
   const data = await portalProject(ctx, projectId).catch((e) => {
     if (e instanceof NotFoundError) notFound();
     throw e;

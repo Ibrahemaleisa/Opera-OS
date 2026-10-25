@@ -23,6 +23,8 @@ export function RegisterForm() {
   const fe = (k: string) => (errors[k]?.[0] ? tk(errors[k][0]) : undefined);
   return (
     <form
+      // POST so a submit before hydration never puts credentials in the URL.
+      method="post"
       className="mt-8 grid gap-4"
       onSubmit={(e) => {
         e.preventDefault();

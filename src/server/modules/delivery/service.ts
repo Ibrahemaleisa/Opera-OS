@@ -332,7 +332,12 @@ export async function updateDeliveryStatusTx(tx: Tx, ctx: ServiceContext, input:
       if (!existing) throw new ValidationError("delivery.evidenceRequired", { evidence: ["delivery.evidenceRequired"] });
     }
   }
-  const occurredAt = input.occurredAt && input.occurredAt <= new Date(Date.now() + 5 * 60_000) ? input.occurredAt : new Date();
+  // a further attempt beyond the campaign's limit is refused (return / reschedule / cancel stay possible)
+  if (input.to === "OUT_FOR_DELIVERY" && d.attemptsCount >= cfg.maxAttempts) throw new ValidationError("errors.maxAttemptsReached", { to: ["errors.maxAttemptsReached"] });
+  // offline replays keep their device time, but never before the card's previous state change (no back-dating)
+  const requested = input.occurredAt && input.occurredAt <= new Date(Date.now() + 5 * 60_000) ? input.occurredAt : new Date();
+  const lastEvent = await tx.deliveryEvent.findFirst({ where: { deliveryId: d.id }, orderBy: { createdAt: "desc" }, select: { createdAt: true } });
+  const occurredAt = new Date(Math.max(requested.getTime(), d.createdAt.getTime(), lastEvent?.createdAt.getTime() ?? 0));
   const outcome = ATTEMPT_OUTCOMES[input.to];
   const attemptNo = outcome ? d.attemptsCount + 1 : d.attemptsCount;
   const res = await tx.delivery.updateMany({
@@ -521,10 +526,22 @@ export async function anonymizeRecipients(ctx: ServiceContext, input: { projectI
     const scope = await projectScope(tx, ctx, input.projectId);
     if (!scope.manage) throw new ForbiddenError();
     const where: Prisma.RecipientWhereInput = { projectId: input.projectId, anonymizedAt: null, ...(input.recipientIds ? { id: { in: input.recipientIds } } : {}), ...(input.expiredOnly ? { retentionUntil: { lt: new Date() } } : {}) };
+    const ids = (await tx.recipient.findMany({ where, select: { id: true } })).map((x) => x.id);
     const r = await tx.recipient.updateMany({
-      where,
+      where: { id: { in: ids } },
       data: { nameAr: null, nameEn: null, honorific: null, jobTitle: null, mobile: null, mobileRaw: null, altPhone: null, email: null, address: null, mapsUrl: null, lat: null, lng: null, deliveryInstructions: null, notes: null, matchKey: null, externalRef: null, anonymizedAt: new Date() },
     });
+    if (ids.length) {
+      // erase the copies too: protocol guests, invitation addresses and rendered messages, RSVP notes,
+      // receiver names, and the raw spreadsheet rows they were imported from
+      await tx.guest.updateMany({ where: { recipientId: { in: ids } }, data: { nameAr: "—", nameEn: null, honorific: null, title: null, organizationName: null, mobile: null, specialInstructions: null, restrictedNotes: null } });
+      await tx.messageJob.updateMany({ where: { invitation: { recipientId: { in: ids } } }, data: { to: "", subject: null, body: "[erased]" } });
+      await tx.rSVP.updateMany({ where: { invitation: { recipientId: { in: ids } } }, data: { note: null, ip: null } });
+      await tx.digitalInvitation.updateMany({ where: { recipientId: { in: ids } }, data: { address: "", personalization: {} } });
+      await tx.delivery.updateMany({ where: { recipientId: { in: ids } }, data: { receivedByName: null, receivedByRelation: null, notes: null } });
+      await tx.deliveryAttempt.updateMany({ where: { delivery: { recipientId: { in: ids } } }, data: { receivedByName: null, notes: null, lat: null, lng: null } });
+      await tx.importRow.updateMany({ where: { recipientId: { in: ids } }, data: { raw: {}, normalized: {}, overrides: {} } });
+    }
     await audit(tx, ctx, { action: "recipient.anonymize", entityType: "RECIPIENT", projectId: input.projectId, summary: `${r.count} recipients anonymized`, meta: { expiredOnly: input.expiredOnly } });
     return { anonymized: r.count };
   });

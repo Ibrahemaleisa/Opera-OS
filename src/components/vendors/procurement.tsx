@@ -8,7 +8,9 @@ import { EmptyState, Section } from "@/components/app/page";
 import { StatusBadge } from "@/components/app/status-badge";
 import { FormDialog, enumOptions, type FieldDef } from "@/components/app/form-dialog";
 import { useAction } from "@/hooks/use-action";
-import { formatDate, formatMoney } from "@/lib/format";
+import { ConfirmAction } from "@/components/app/confirm-action";
+import { DateText } from "@/components/app/date-text";
+import { formatMoney } from "@/lib/format";
 import { interpolate } from "@/lib/i18n";
 import { useI18n } from "@/lib/i18n/client";
 import { cn } from "@/lib/utils";
@@ -87,7 +89,7 @@ export function Procurement({ orgSlug, projectId, currency, data }: { orgSlug: s
                     <span className="ltr-nums font-mono text-xs text-muted-foreground">{r.code}</span>
                     <span className="text-[13px] font-medium">{r.title}</span>
                     <StatusBadge status={r.status === "AWARDED" ? "DONE" : r.status} label={t.rfqStatus[r.status as keyof typeof t.rfqStatus]} />
-                    {r.dueAt && <span className="ltr-nums text-[11px] text-muted-foreground">{t.due}: {formatDate(r.dueAt, fmt)}</span>}
+                    {r.dueAt && <span className="text-[11px] text-muted-foreground">{t.due}: <DateText value={r.dueAt} /></span>}
                     {can && r.status === "OPEN" && <Button size="xs" variant="outline" className="ms-auto" onClick={() => setDlg({ kind: "quote", rfq: r })}><Plus /> {t.recordQuote}</Button>}
                   </div>
                   <div className="overflow-x-auto">
@@ -104,7 +106,7 @@ export function Procurement({ orgSlug, projectId, currency, data }: { orgSlug: s
                               <td className="tabular px-2 py-1.5">{q.status === "REQUESTED" ? "—" : money(q.vatAmount)}</td>
                               <td className="tabular px-2 py-1.5 font-medium">{q.status === "REQUESTED" ? "—" : money(total)}</td>
                               <td className="tabular px-2 py-1.5">{q.leadTimeDays ?? "—"}</td>
-                              <td className="ltr-nums px-2 py-1.5 text-xs">{q.validUntil ? formatDate(q.validUntil, fmt) : "—"}</td>
+                              <td className="px-2 py-1.5 text-xs"><DateText value={q.validUntil} /></td>
                               <td className="px-2 py-1.5"><StatusBadge status={q.status === "ACCEPTED" ? "DONE" : q.status === "REQUESTED" ? "PENDING" : q.status === "RECEIVED" ? "SUBMITTED" : q.status} label={m.enums.quoteStatus[q.status]} /></td>
                               <td className="px-2 py-1.5">{can && r.status === "OPEN" && ["RECEIVED", "SHORTLISTED"].includes(q.status) && <Button size="xs" onClick={() => setDlg({ kind: "award", rfq: r, quote: q })} data-testid="quote-award"><Award /> {t.award}</Button>}</td>
                             </tr>
@@ -126,12 +128,31 @@ export function Procurement({ orgSlug, projectId, currency, data }: { orgSlug: s
             {data.workOrders.map((w) => (
               <li key={w.id} className="grid gap-2 px-4 py-3 md:grid-cols-[1fr_160px_140px_auto] md:items-center" data-testid="work-order" data-status={w.status}>
                 <div><div className="text-[13px] font-medium">{w.title}</div><div className="text-[11px] text-muted-foreground">{vname(w.vendorId)}{w.scope ? ` · ${w.scope}` : ""}</div></div>
-                <span className="ltr-nums text-xs text-muted-foreground">{w.dueAt ? `${t.due}: ${formatDate(w.dueAt, fmt)}` : "—"}</span>
+                <span className="text-xs text-muted-foreground">{w.dueAt ? <>{t.due}: <DateText value={w.dueAt} /></> : "—"}</span>
                 <div className="grid gap-0.5"><StatusBadge status={w.status === "ACCEPTED_BY_AGENCY" ? "DONE" : w.status === "DELIVERED" ? "REVIEW" : w.status === "CANCELLED" ? "CANCELLED" : "IN_PROGRESS"} label={t.woStatus[w.status as keyof typeof t.woStatus]} />{w.rating && <span className="text-[10px] text-muted-foreground">★ {w.rating}{w.onTime === false ? " · ⏱" : ""}</span>}</div>
                 {can && (
                   <div className="flex flex-wrap gap-1">
-                    {w.status === "DELIVERED" && <Button size="xs" onClick={() => { const r = Number(window.prompt(t.ratingPrompt, "5")); if (r >= 1 && r <= 5) woStatus.run({ id: w.id, status: "ACCEPTED_BY_AGENCY", rating: r }); }} data-testid="wo-accept">{t.acceptDelivery}</Button>}
-                    {["ISSUED", "ACCEPTED", "IN_PROGRESS"].includes(w.status) && <Button size="xs" variant="ghost" className="text-danger" onClick={() => woStatus.run({ id: w.id, status: "CANCELLED" })}>{t.cancel}</Button>}
+                    {w.status === "DELIVERED" && (
+                      <ConfirmAction
+                        trigger={<Button size="sm" data-testid="wo-accept">{t.acceptDelivery}</Button>}
+                        title={m.common.confirmDialog.rateVendorTitle}
+                        description={`${w.title} · ${vname(w.vendorId)}`}
+                        field={{ type: "select", label: t.ratingPrompt, required: true, defaultValue: "5", options: ["5", "4", "3", "2", "1"].map((v) => ({ value: v, label: "★".repeat(Number(v)) + ` ${v}` })) }}
+                        confirmLabel={t.acceptDelivery}
+                        onConfirm={(rating) => woStatus.run({ id: w.id, status: "ACCEPTED_BY_AGENCY", rating: Number(rating) })}
+                        testId="wo-accept-dialog"
+                      />
+                    )}
+                    {["ISSUED", "ACCEPTED", "IN_PROGRESS"].includes(w.status) && (
+                      <ConfirmAction
+                        trigger={<Button size="sm" variant="ghost" className="text-danger">{t.cancel}</Button>}
+                        title={interpolate(m.common.confirmDialog.cancelWorkOrderTitle, { name: w.title })}
+                        description={m.common.confirmDialog.cancelWorkOrderBody}
+                        confirmLabel={t.cancel}
+                        destructive
+                        onConfirm={() => woStatus.run({ id: w.id, status: "CANCELLED" })}
+                      />
+                    )}
                   </div>
                 )}
               </li>

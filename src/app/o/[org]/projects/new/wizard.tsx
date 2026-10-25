@@ -15,6 +15,8 @@ import { useI18n } from "@/lib/i18n/client";
 import { cn } from "@/lib/utils";
 import { PROJECT_TYPES } from "@/server/modules/projects/schemas";
 import { createProjectAction } from "../actions";
+import { NumberInput } from "@/components/app/number-input";
+import { parseNumberInput } from "@/lib/digits";
 
 interface Tpl { id: string; key: string; name: string; description: string; category: string; isSystem: boolean; latestVersion: number; stats: { workstreams: number; tasks: number; milestones: number; subtasks: number } | null }
 
@@ -46,12 +48,18 @@ export function ProjectWizard({ orgSlug, clients, venues, managers, currentUserI
   const steps = [w.step1, w.step2, w.step3, w.step4];
   const canNext = step === 0 ? data.name.trim().length >= 2 : true;
 
+  // server errors for fields on earlier steps: go back to the first step that has one
+  const STEP_FIELDS: string[][] = [["name", "nameEn", "description", "clientId", "type", "priority", "contractRef", "budgetAmount", "managerId"], ["startDate", "deadline", "eventStartAt", "eventEndAt", "venueIds", "clientPortal"], ["templateIds"]];
   const submit = () =>
     run({
       name: data.name, nameEn: data.nameEn || null, description: data.description || null, clientId: data.clientId || null, type: data.type as never, priority: data.priority as never,
-      contractRef: data.contractRef || null, budgetAmount: data.budgetAmount ? Number(data.budgetAmount) : null, currency: "SAR",
+      contractRef: data.contractRef || null, budgetAmount: parseNumberInput(data.budgetAmount), currency: "SAR",
       startDate: parseRiyadhDate(data.startDate), deadline: parseRiyadhDate(data.deadline, "23:59"), eventStartAt: parseRiyadhDateTime(data.eventStartAt), eventEndAt: parseRiyadhDateTime(data.eventEndAt),
       venueIds, managerId: data.managerId || null, clientPortal: data.clientPortal, templateIds: selected,
+    }).then((r) => {
+      if (r.ok || !r.fieldErrors) return;
+      const target = STEP_FIELDS.findIndex((fields) => fields.some((f) => r.fieldErrors?.[f]?.length));
+      if (target >= 0) setStep(target);
     });
 
   return (
@@ -93,7 +101,7 @@ export function ProjectWizard({ orgSlug, clients, venues, managers, currentUserI
               <NativeSelect value={data.managerId} onChange={set("managerId")}>{managers.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</NativeSelect>
             </Field>
             <Field label={m.projects.contractRef}><Input value={data.contractRef} onChange={set("contractRef")} dir="ltr" /></Field>
-            <Field label={`${m.projects.budget} (${m.common.sar})`}><Input value={data.budgetAmount} onChange={set("budgetAmount")} type="number" min={0} step="1000" dir="ltr" /></Field>
+            <Field label={`${m.projects.budget} (${m.common.sar})`}><NumberInput value={data.budgetAmount} onChange={set("budgetAmount")} /></Field>
             <Field label={m.common.description} className="sm:col-span-2"><Textarea value={data.description} onChange={set("description")} rows={3} /></Field>
           </div>
         </Section>

@@ -15,6 +15,8 @@ export function AcceptForm({ token, existing, defaultName }: { token: string; ex
   const [pending, start] = useTransition();
   return (
     <form
+      // POST so a submit before hydration never puts credentials in the URL.
+      method="post"
       className="mt-6 grid gap-4"
       onSubmit={(e) => {
         e.preventDefault();

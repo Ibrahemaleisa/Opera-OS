@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { NumberInput } from "@/components/app/number-input";
 import { Textarea } from "@/components/ui/textarea";
 import { Attachments } from "@/components/app/attachments";
 import { CommentsThread } from "@/components/app/comments";
@@ -164,9 +165,9 @@ export function TaskDetail({ orgSlug, data }: { orgSlug: string; data: Detail })
               <div className="grid grid-cols-2 gap-2">
                 <Field label={m.common.startDate}><Input type="date" disabled={ro} defaultValue={toDateInput(t.startAt)} onChange={(e) => patch("startAt", parseRiyadhDate(e.target.value))} dir="ltr" /></Field>
                 <Field label={m.common.dueDate} error={overdue ? m.common.overdue : undefined}><Input type="date" disabled={ro} defaultValue={toDateInput(t.dueAt)} onChange={(e) => patch("dueAt", parseRiyadhDate(e.target.value, "17:00"))} dir="ltr" /></Field>
-                <Field label={m.tasks.estimate}><Input type="number" min={0} disabled={ro} defaultValue={t.estimateMinutes ?? ""} onBlur={(e) => patch("estimateMinutes", e.target.value ? Number(e.target.value) : null)} dir="ltr" /></Field>
-                <Field label={m.tasks.actual}><Input type="number" min={0} disabled={ro && t.ownerId === null} defaultValue={t.actualMinutes ?? ""} onBlur={(e) => patch("actualMinutes", e.target.value ? Number(e.target.value) : null)} dir="ltr" /></Field>
-                <Field label={m.tasks.sla}><Input type="number" min={1} disabled={ro} defaultValue={t.slaHours ?? ""} onBlur={(e) => patch("slaHours", e.target.value ? Number(e.target.value) : null)} dir="ltr" /></Field>
+                <Field label={m.tasks.estimate}><NumberInput decimal={false} disabled={ro} defaultValue={t.estimateMinutes ?? ""} onBlur={(e) => patch("estimateMinutes", e.target.value ? Number(e.target.value) : null)} /></Field>
+                <Field label={m.tasks.actual}><NumberInput decimal={false} disabled={ro && t.ownerId === null} defaultValue={t.actualMinutes ?? ""} onBlur={(e) => patch("actualMinutes", e.target.value ? Number(e.target.value) : null)} /></Field>
+                <Field label={m.tasks.sla}><NumberInput decimal={false} disabled={ro} defaultValue={t.slaHours ?? ""} onBlur={(e) => patch("slaHours", e.target.value ? Number(e.target.value) : null)} /></Field>
               </div>
               <Field label={m.tasks.tags}><Input disabled={ro} defaultValue={t.tags.join(", ")} onBlur={(e) => patch("tags", e.target.value.split(",").map((s) => s.trim()).filter(Boolean))} /></Field>
               {!data.scope.clientView && <label className="flex items-center gap-2 text-sm"><Checkbox disabled={ro} checked={t.clientVisible} onCheckedChange={(v) => patch("clientVisible", !!v)} /> {m.common.clientVisible}</label>}
@@ -189,7 +190,7 @@ export function TaskDetail({ orgSlug, data }: { orgSlug: string; data: Detail })
             </Section>
           )}
 
-          <ApprovalsBox orgSlug={orgSlug} approvals={data.approvals} canDecide={data.scope.approve} nameOf={nameOf} />
+          <ApprovalsBox orgSlug={orgSlug} approvals={data.approvals} canDecide nameOf={nameOf} />
 
           {!data.scope.clientView && (
             <Section title={m.common.history}>
@@ -205,12 +206,13 @@ export function TaskDetail({ orgSlug, data }: { orgSlug: string; data: Detail })
           )}
         </div>
       </div>
-      {approvalOpen && <RequestApprovalDialog orgSlug={orgSlug} projectId={t.project.id} entityId={t.id} title={t.title} members={data.members} onClose={() => setApprovalOpen(false)} />}
+      {approvalOpen && <RequestApprovalDialog orgSlug={orgSlug} projectId={t.project.id} entityId={t.id} title={t.title} members={data.members} eligible={data.eligibleApprovers} onClose={() => setApprovalOpen(false)} />}
     </div>
   );
 }
 
-export function ApprovalsBox({ orgSlug, approvals, canDecide, nameOf }: { orgSlug: string; approvals: Detail["approvals"]; canDecide: boolean; nameOf: (id: string | null) => string }) {
+/** `canDecide` gates the whole box; an approval's own `canDecide` (from the server's decide rule) narrows it per row. */
+export function ApprovalsBox({ orgSlug, approvals, canDecide, nameOf }: { orgSlug: string; approvals: (Omit<Detail["approvals"][number], "canDecide"> & { canDecide?: boolean })[]; canDecide: boolean; nameOf: (id: string | null) => string }) {
   const { m, fmt } = useI18n();
   const decide = useAction(decideApprovalAction, { orgSlug });
   const [comment, setComment] = useState("");
@@ -229,7 +231,7 @@ export function ApprovalsBox({ orgSlug, approvals, canDecide, nameOf }: { orgSlu
                 <li key={d.id}><span className="text-foreground">{nameOf(d.actorId)}</span> · {m.enums.approvalStatus[d.decision]}{d.comment && <span> — “{d.comment}”</span>} · <TimeAgo date={d.createdAt} /></li>
               ))}
             </ol>
-            {a.status === "PENDING" && canDecide && (
+            {a.status === "PENDING" && canDecide && a.canDecide !== false && (
               <div className="grid gap-2">
                 <Textarea value={comment} onChange={(e) => setComment(e.target.value)} placeholder={m.tasks.decisionComment} rows={2} />
                 <div className="flex gap-2">
@@ -245,11 +247,13 @@ export function ApprovalsBox({ orgSlug, approvals, canDecide, nameOf }: { orgSlu
   );
 }
 
-function RequestApprovalDialog({ orgSlug, projectId, entityId, title, members, onClose }: { orgSlug: string; projectId: string; entityId: string; title: string; members: { id: string; name: string; role: string }[]; onClose: () => void }) {
+function RequestApprovalDialog({ orgSlug, projectId, entityId, title, members, eligible, onClose }: { orgSlug: string; projectId: string; entityId: string; title: string; members: { id: string; name: string; role: string }[]; eligible: Record<"INTERNAL" | "CLIENT", string[]>; onClose: () => void }) {
   const { m } = useI18n();
   const [type, setType] = useState<"INTERNAL" | "CLIENT">("INTERNAL");
   const { run, pending } = useAction(requestApprovalAction, { orgSlug, onSuccess: onClose });
-  const candidates = members.filter((x) => (type === "CLIENT" ? x.role === "CLIENT_APPROVER" : !["CLIENT_VIEWER", "CLIENT_APPROVER", "VENDOR", "FIELD_AGENT"].includes(x.role)));
+  // Only people the server would let decide; "all eligible" routes it to every one of them.
+  const candidates = members.filter((x) => eligible[type].includes(x.id));
+  const nobody = eligible[type].length === 0;
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent>
@@ -259,9 +263,9 @@ function RequestApprovalDialog({ orgSlug, projectId, entityId, title, members, o
           <Field label={m.tasks.approverType}>
             <NativeSelect value={type} onChange={(e) => setType(e.target.value as never)}><option value="INTERNAL">{m.tasks.internalApproval}</option><option value="CLIENT">{m.tasks.clientApproval}</option></NativeSelect>
           </Field>
-          <Field label={m.tasks.approver}><NativeSelect name="approverUserId"><option value="">{m.common.all}</option>{candidates.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</NativeSelect></Field>
+          <Field label={m.tasks.approver} error={nobody ? m.errors.noEligibleApprover : undefined}><NativeSelect name="approverUserId" disabled={nobody}><option value="">{m.common.all}</option>{candidates.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</NativeSelect></Field>
           <Field label={m.common.description}><Textarea name="description" rows={2} /></Field>
-          <DialogFooter><Button type="submit" disabled={pending}>{m.tasks.requestApproval}</Button></DialogFooter>
+          <DialogFooter><Button type="submit" disabled={pending || nobody}>{m.tasks.requestApproval}</Button></DialogFooter>
         </form>
       </DialogContent>
     </Dialog>

@@ -14,6 +14,7 @@ VIP protocol, booth production, vendors, finance, and client and vendor portals.
 | [SECURITY.md](SECURITY.md) | implemented controls, PDPL notes, known gaps |
 | [ASSUMPTIONS.md](ASSUMPTIONS.md) | decisions made during the build |
 | [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) | phase status and precise remaining work |
+| [PRODUCT_AUDIT.md](PRODUCT_AUDIT.md) | five-agent product audit: findings register, evidence, execution plan, owner decisions |
 
 **Stack:** Next.js 16 (App Router, server actions), React 19, TypeScript, Tailwind v4 +
 Radix (shadcn-style), Prisma 7 on PostgreSQL 16 with row-level security, Redis + BullMQ
@@ -51,10 +52,10 @@ Password: `Operra-Demo-2026` (local demo only; override with `SEED_PASSWORD`).
 
 | Email | Role | Lands on |
 |---|---|---|
-| owner@operra.demo | Agency owner | `/o/demo` |
+| owner@operra.demo | Agency owner | `/o/demo` (Operations: decisions waiting, exceptions, next events) |
 | director@operra.demo | Ops director (approves campaigns and finance) | `/o/demo` |
-| pm@operra.demo | Project manager | `/o/demo` |
-| lead@operra.demo / staff@operra.demo | Team lead / employee | `/o/demo` |
+| pm@operra.demo | Project manager | `/o/demo` (scoped to their projects) |
+| lead@operra.demo / staff@operra.demo | Team lead / employee | `/o/demo/my-work` |
 | agent1@operra.demo / agent2@operra.demo | Field delivery agents | `/field/demo` (open on a phone) |
 | client@operra.demo | Client approver | `/portal/demo` |
 | vendor@operra.demo | Vendor | `/vendor/demo` |

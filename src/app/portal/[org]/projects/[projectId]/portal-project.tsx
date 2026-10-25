@@ -9,11 +9,12 @@ import { FormDialog } from "@/components/app/form-dialog";
 import { Breadcrumbs, EmptyState, ProgressBar, Section, Stat } from "@/components/app/page";
 import { StatusBadge } from "@/components/app/status-badge";
 import { useAction } from "@/hooks/use-action";
-import { formatDate, formatMoney, formatPercent } from "@/lib/format";
+import { formatMoney, formatPercent } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/client";
 import type { portalProject } from "@/server/modules/portal/service";
 import { decideApprovalAction } from "@/app/o/[org]/projects/actions";
 import { createChangeRequestAction } from "../../actions";
+import { DateText } from "@/components/app/date-text";
 
 type D = Awaited<ReturnType<typeof portalProject>>;
 
@@ -37,7 +38,7 @@ export function PortalProject({ orgSlug, data }: { orgSlug: string; data: D }) {
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Stat label={t.progress} value={formatPercent(data.progress.ratio, fmt)} hint={`${data.progress.done}/${data.progress.total} · ${t.progressHint}`} />
         <Stat label={t.pending} value={pendingMine.length} tone={pendingMine.length ? "warning" : "default"} />
-        <Stat label={t.event} value={p.eventStartAt ? <span className="ltr-nums text-base">{formatDate(p.eventStartAt, fmt)}</span> : "—"} />
+        <Stat label={t.event} value={p.eventStartAt ? <DateText value={p.eventStartAt} className="text-base" /> : "—"} />
         <Stat label={t.requests} value={data.requests.filter((r) => ["OPEN", "UNDER_REVIEW"].includes(r.status)).length} />
       </div>
 
@@ -69,7 +70,7 @@ export function PortalProject({ orgSlug, data }: { orgSlug: string; data: D }) {
           {data.milestones.length === 0 ? <EmptyState title={m.common.none} /> : (
             <ul className="grid gap-2 p-4">
               {data.milestones.map((x) => (
-                <li key={x.id} className="flex items-center gap-2 text-sm">{x.status === "DONE" ? <CheckCircle2 className="size-4 text-success" /> : <Circle className="size-4 text-muted-foreground" />}<span className="flex-1">{x.title}</span><span className="ltr-nums text-xs text-muted-foreground">{x.dueAt ? formatDate(x.dueAt, fmt) : ""}</span></li>
+                <li key={x.id} className="flex items-center gap-2 text-sm">{x.status === "DONE" ? <CheckCircle2 className="size-4 text-success" /> : <Circle className="size-4 text-muted-foreground" />}<span className="flex-1">{x.title}</span>{x.dueAt && <DateText value={x.dueAt} className="text-xs text-muted-foreground" />}</li>
               ))}
             </ul>
           )}

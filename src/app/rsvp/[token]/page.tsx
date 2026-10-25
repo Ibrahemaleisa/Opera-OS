@@ -40,7 +40,7 @@ export default async function RsvpPage({ params, searchParams }: { params: Promi
           <div className="mt-3 grid gap-1.5 text-sm">
             <p className="text-muted-foreground">{p.invited}</p>
             <p className="text-base font-medium">{data.event.name}</p>
-            <p className="flex items-center gap-1.5 text-muted-foreground"><CalendarDays className="size-4" /><span className="ltr-nums">{formatDateTime(data.event.startsAt, { locale })}</span></p>
+            <p className="flex items-center gap-1.5 text-muted-foreground"><CalendarDays className="size-4" /><time dateTime={data.event.startsAt.toISOString()} className="tabular [unicode-bidi:isolate]">{formatDateTime(data.event.startsAt, { locale })}</time></p>
             {data.event.venue && <p className="flex items-center gap-1.5 text-muted-foreground"><MapPin className="size-4" />{data.event.venue.name}{data.event.venue.city ? ` — ${data.event.venue.city}` : ""}</p>}
           </div>
         )}

@@ -9,7 +9,11 @@ import { StatusBadge } from "@/components/app/status-badge";
 import { NativeSelect } from "@/components/app/field";
 import { FormDialog, enumOptions, type FieldDef } from "@/components/app/form-dialog";
 import { useAction } from "@/hooks/use-action";
-import { formatDateTime, formatPercent, formatTime } from "@/lib/format";
+import { ActionButton } from "@/components/app/action-button";
+import { ConfirmAction } from "@/components/app/confirm-action";
+import { DateRangeText, DateText } from "@/components/app/date-text";
+import { interpolate } from "@/lib/i18n";
+import { formatPercent } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/client";
 import { cn } from "@/lib/utils";
 import type { getEventWorkspace } from "@/server/modules/events/service";
@@ -41,6 +45,7 @@ export function EventWorkspace({ orgSlug, data }: { orgSlug: string; data: W }) 
   const params = useSearchParams();
   const [tab, setTab] = useState<Tab>((TABS as readonly string[]).includes(params.get("tab") ?? "") ? (params.get("tab") as Tab) : "overview");
   const [dialog, setDialog] = useState<Dialog>(null);
+  const [issueFor, setIssueFor] = useState<{ id: string; label: string } | null>(null);
   const e = data.event;
   const close = () => setDialog(null);
   const people = useMemo(() => data.people.map((p) => ({ value: p.id, label: p.name })), [data.people]);
@@ -163,7 +168,7 @@ export function EventWorkspace({ orgSlug, data }: { orgSlug: string; data: W }) 
         <h2 className="text-lg font-medium">{e.name}</h2>
         <StatusBadge status={e.phase} label={m.enums.eventPhase[e.phase]} />
         {data.live && <span className="flex items-center gap-1 rounded bg-danger-soft px-2 py-0.5 text-xs text-danger"><Radio className="size-3 animate-pulse" /> {t.live}</span>}
-        <span className="ltr-nums text-xs text-muted-foreground">{formatDateTime(e.startsAt, fmt)} → {formatTime(e.endsAt, fmt)}</span>
+        <DateRangeText start={e.startsAt} end={e.endsAt} format="datetime" endFormat="time" className="text-xs text-muted-foreground" />
         <div className="ms-auto flex gap-2">
           {data.canReport && <Button size="sm" variant="outline" className="text-danger" onClick={() => setDialog({ kind: "incident" })} data-testid="report-incident"><AlertTriangle /> {t.reportIncident}</Button>}
           {can && <Button size="sm" variant="outline" onClick={() => setDialog({ kind: "event", values: e as unknown as Record<string, unknown> })}>{m.common.edit}</Button>}
@@ -191,7 +196,7 @@ export function EventWorkspace({ orgSlug, data }: { orgSlug: string; data: W }) 
             <Section title={t.tabs.runOfShow}>
               <div className="grid gap-2 p-4 text-sm">
                 <div className="rounded-lg border-s-4 border-danger bg-danger-soft/40 p-3"><div className="text-[11px] text-muted-foreground">{t.nowLive}</div><div className="font-medium" data-testid="cue-now">{data.current?.title ?? "—"}</div></div>
-                <div className="rounded-lg border-s-4 border-info bg-info-soft/40 p-3"><div className="text-[11px] text-muted-foreground">{t.upNext}</div><div className="font-medium">{data.next ? `${formatTime(data.next.startsAt, fmt)} · ${data.next.title}` : "—"}</div></div>
+                <div className="rounded-lg border-s-4 border-info bg-info-soft/40 p-3"><div className="text-[11px] text-muted-foreground">{t.upNext}</div><div className="font-medium">{data.next ? <><DateText value={data.next.startsAt} format="time" /> · {data.next.title}</> : "—"}</div></div>
               </div>
             </Section>
             <Section title={t.readiness}>
@@ -216,7 +221,7 @@ export function EventWorkspace({ orgSlug, data }: { orgSlug: string; data: W }) 
             <ul className="divide-y">
               {data.sessions.map((s) => (
                 <li key={s.id} className={cn("grid gap-1 px-4 py-3 md:grid-cols-[140px_1fr_140px_120px] md:items-center", can && "cursor-pointer hover:bg-muted/40")} onClick={() => can && setDialog({ kind: "session", values: s as unknown as Record<string, unknown> })}>
-                  <span className="ltr-nums text-xs text-muted-foreground">{formatTime(s.startsAt, fmt)} – {formatTime(s.endsAt, fmt)}</span>
+                  <DateRangeText start={s.startsAt} end={s.endsAt} format="time" className="text-xs text-muted-foreground" />
                   <div><div className="text-[13px] font-medium">{s.title}</div><div className="text-[11px] text-muted-foreground">{t.sessionKind[s.kind as keyof typeof t.sessionKind]}{s.speakerIds.length ? ` · ${s.speakerIds.map((id) => data.speakers.find((x) => x.id === id)?.name).filter(Boolean).join("، ")}` : ""}</div></div>
                   <span className="text-xs">{s.room ?? "—"}</span>
                   <StatusBadge status={s.status} label={t.sessionStatus[s.status as keyof typeof t.sessionStatus]} />
@@ -250,15 +255,15 @@ export function EventWorkspace({ orgSlug, data }: { orgSlug: string; data: W }) 
             <ul className="divide-y">
               {data.runOfShow.map((r) => (
                 <li key={r.id} data-status={r.status} className={cn("grid gap-2 px-4 py-3 md:grid-cols-[90px_1fr_140px_auto] md:items-center", r.status === "GO" && "bg-danger-soft/40", ["DONE", "SKIPPED"].includes(r.status) && "opacity-60")}>
-                  <span className="ltr-nums text-sm font-medium">{formatTime(r.startsAt, fmt)} <span className="text-[11px] text-muted-foreground">+{r.durationMin}′</span></span>
+                  <span className="text-sm font-medium"><DateText value={r.startsAt} format="time" /> <span className="tabular text-[11px] text-muted-foreground">+{r.durationMin}′</span></span>
                   <button className="text-start" onClick={() => can && setDialog({ kind: "cue", values: r as unknown as Record<string, unknown> })}><div className="text-[13px] font-medium">{r.title}</div>{r.cue && <div className="text-[11px] whitespace-pre-wrap text-muted-foreground">{r.cue}</div>}</button>
                   <span className="text-xs text-muted-foreground">{nameOf(r.ownerId)}{r.location ? ` · ${r.location}` : ""}</span>
                   <div className="flex items-center gap-1">
                     <StatusBadge status={r.status === "GO" ? "LIVE" : r.status === "STANDBY" ? "SCHEDULED" : r.status} label={t.runStatus[r.status as keyof typeof t.runStatus]} />
-                    {can && r.status === "PENDING" && <Button size="xs" variant="outline" onClick={() => cue.run({ id: r.id, status: "STANDBY", expected: r.status })}><TimerReset /> {t.standby}</Button>}
-                    {can && ["PENDING", "STANDBY"].includes(r.status) && <Button size="xs" onClick={() => cue.run({ id: r.id, status: "GO", expected: r.status })} data-testid={`cue-go-${r.id}`}>{t.go}</Button>}
-                    {can && r.status === "GO" && <Button size="xs" variant="outline" onClick={() => cue.run({ id: r.id, status: "DONE", expected: r.status })}><CheckCircle2 /> {t.done}</Button>}
-                    {can && ["PENDING", "STANDBY"].includes(r.status) && <Button size="xs" variant="ghost" onClick={() => cue.run({ id: r.id, status: "SKIPPED", expected: r.status })} title={t.skip}><SkipForward /></Button>}
+                    {can && r.status === "PENDING" && <ActionButton size="sm" variant="outline" action={() => cue.run({ id: r.id, status: "STANDBY", expected: r.status })}><TimerReset /> {t.standby}</ActionButton>}
+                    {can && ["PENDING", "STANDBY"].includes(r.status) && <ActionButton size="sm" action={() => cue.run({ id: r.id, status: "GO", expected: r.status })} data-testid={`cue-go-${r.id}`}>{t.go}</ActionButton>}
+                    {can && r.status === "GO" && <ActionButton size="sm" variant="outline" action={() => cue.run({ id: r.id, status: "DONE", expected: r.status })}><CheckCircle2 /> {t.done}</ActionButton>}
+                    {can && ["PENDING", "STANDBY"].includes(r.status) && <ActionButton size="icon-sm" variant="ghost" action={() => cue.run({ id: r.id, status: "SKIPPED", expected: r.status })} title={t.skip} aria-label={`${t.skip} — ${r.title}`}><SkipForward /></ActionButton>}
                   </div>
                 </li>
               ))}
@@ -275,11 +280,23 @@ export function EventWorkspace({ orgSlug, data }: { orgSlug: string; data: W }) 
                 <li key={s.id} className="grid gap-2 px-4 py-3 md:grid-cols-[1fr_1fr_160px_auto] md:items-center">
                   <button className="text-start" onClick={() => can && setDialog({ kind: "shift", values: s as unknown as Record<string, unknown> })}><div className="text-[13px] font-medium">{s.role}</div><div className="text-[11px] text-muted-foreground">{s.location ?? "—"}</div></button>
                   <span className="text-xs">{nameOf(s.userId)}</span>
-                  <span className="ltr-nums text-xs text-muted-foreground">{formatTime(s.startsAt, fmt)} – {formatTime(s.endsAt, fmt)}</span>
+                  <DateRangeText start={s.startsAt} end={s.endsAt} format="time" className="text-xs text-muted-foreground" />
                   <div className="flex items-center gap-1">
                     <StatusBadge status={s.status === "CHECKED_IN" ? "ACTIVE" : s.status === "NO_SHOW" ? "FAILED" : s.status} label={t.shiftStatus[s.status as keyof typeof t.shiftStatus]} />
-                    {can && s.status === "SCHEDULED" && <><Button size="xs" onClick={() => shift.run({ id: s.id, status: "CHECKED_IN" })}>{t.checkIn}</Button><Button size="xs" variant="ghost" className="text-danger" onClick={() => shift.run({ id: s.id, status: "NO_SHOW" })}>{t.noShow}</Button></>}
-                    {can && s.status === "CHECKED_IN" && <Button size="xs" variant="outline" onClick={() => shift.run({ id: s.id, status: "COMPLETED" })}>{t.complete}</Button>}
+                    {can && s.status === "SCHEDULED" && (
+                      <>
+                        <ActionButton size="sm" action={() => shift.run({ id: s.id, status: "CHECKED_IN" })}>{t.checkIn}</ActionButton>
+                        <ConfirmAction
+                          trigger={<Button size="sm" variant="ghost" className="text-danger">{t.noShow}</Button>}
+                          title={interpolate(m.common.confirmDialog.noShowTitle, { name: nameOf(s.userId) })}
+                          description={m.common.confirmDialog.noShowBody}
+                          confirmLabel={t.noShow}
+                          destructive
+                          onConfirm={() => shift.run({ id: s.id, status: "NO_SHOW" })}
+                        />
+                      </>
+                    )}
+                    {can && s.status === "CHECKED_IN" && <ActionButton size="sm" variant="outline" action={() => shift.run({ id: s.id, status: "COMPLETED" })}>{t.complete}</ActionButton>}
                   </div>
                 </li>
               ))}
@@ -302,9 +319,9 @@ export function EventWorkspace({ orgSlug, data }: { orgSlug: string; data: W }) 
                     aria-label={m.common.status}
                     onChange={(ev) => {
                       const status = ev.target.value as "PENDING" | "IN_PROGRESS" | "READY" | "ISSUE";
-                      const note = status === "ISSUE" && !r.note ? window.prompt(t.issueNotePrompt) : undefined;
-                      if (status === "ISSUE" && !r.note && !note) return;
-                      ready.run({ id: r.id, status, note });
+                      // an issue needs a note: ask for it in a dialog before saving
+                      if (status === "ISSUE" && !r.note) return setIssueFor({ id: r.id, label: r.label });
+                      ready.run({ id: r.id, status });
                     }}
                     className={cn("h-8 text-xs", r.status === "READY" && "text-success", r.status === "ISSUE" && "text-danger")}
                   >
@@ -340,11 +357,29 @@ export function EventWorkspace({ orgSlug, data }: { orgSlug: string; data: W }) 
                   </div>
                   {can && (
                     <div className="flex flex-wrap gap-1">
-                      {i.status === "OPEN" && <Button size="xs" variant="outline" onClick={() => incident.run({ id: i.id, status: "ACKNOWLEDGED" })}>{t.acknowledge}</Button>}
-                      {["OPEN", "ACKNOWLEDGED"].includes(i.status) && <Button size="xs" variant="outline" onClick={() => incident.run({ id: i.id, status: "IN_PROGRESS" })}>{t.startWork}</Button>}
-                      {!["RESOLVED", "CLOSED"].includes(i.status) && <Button size="xs" onClick={() => { const resolution = window.prompt(t.resolution); if (resolution?.trim()) incident.run({ id: i.id, status: "RESOLVED", resolution }); }} data-testid="incident-resolve">{t.resolve}</Button>}
-                      {!["RESOLVED", "CLOSED"].includes(i.status) && i.severity !== "CRITICAL" && <Button size="xs" variant="ghost" className="text-danger" onClick={() => incident.run({ id: i.id, escalate: true })}><ArrowUpCircle /> {t.escalate}</Button>}
-                      {i.status === "RESOLVED" && <><Button size="xs" variant="outline" onClick={() => incident.run({ id: i.id, status: "CLOSED" })}>{t.closeIncident}</Button><Button size="xs" variant="ghost" onClick={() => incident.run({ id: i.id, status: "IN_PROGRESS" })}>{t.reopen}</Button></>}
+                      {i.status === "OPEN" && <ActionButton size="sm" variant="outline" action={() => incident.run({ id: i.id, status: "ACKNOWLEDGED" })}>{t.acknowledge}</ActionButton>}
+                      {["OPEN", "ACKNOWLEDGED"].includes(i.status) && <ActionButton size="sm" variant="outline" action={() => incident.run({ id: i.id, status: "IN_PROGRESS" })}>{t.startWork}</ActionButton>}
+                      {!["RESOLVED", "CLOSED"].includes(i.status) && (
+                        <ConfirmAction
+                          trigger={<Button size="sm" data-testid="incident-resolve">{t.resolve}</Button>}
+                          title={interpolate(m.common.confirmDialog.resolveIncidentTitle, { name: i.title })}
+                          field={{ type: "textarea", label: t.resolution, required: true }}
+                          confirmLabel={t.resolve}
+                          onConfirm={(resolution) => incident.run({ id: i.id, status: "RESOLVED", resolution })}
+                          testId="incident-resolve-dialog"
+                        />
+                      )}
+                      {!["RESOLVED", "CLOSED"].includes(i.status) && i.severity !== "CRITICAL" && (
+                        <ConfirmAction
+                          trigger={<Button size="sm" variant="ghost" className="text-danger"><ArrowUpCircle /> {t.escalate}</Button>}
+                          title={interpolate(m.common.confirmDialog.escalateTitle, { name: i.title })}
+                          description={m.common.confirmDialog.escalateBody}
+                          confirmLabel={t.escalate}
+                          destructive
+                          onConfirm={() => incident.run({ id: i.id, escalate: true })}
+                        />
+                      )}
+                      {i.status === "RESOLVED" && <><ActionButton size="sm" variant="outline" action={() => incident.run({ id: i.id, status: "CLOSED" })}>{t.closeIncident}</ActionButton><ActionButton size="sm" variant="ghost" action={() => incident.run({ id: i.id, status: "IN_PROGRESS" })}>{t.reopen}</ActionButton></>}
                     </div>
                   )}
                 </li>
@@ -363,7 +398,7 @@ export function EventWorkspace({ orgSlug, data }: { orgSlug: string; data: W }) 
                   <div><div className="text-[13px] font-medium">{l.name}</div>{l.notes && <div className="text-[11px] text-muted-foreground">{l.notes}</div>}</div>
                   <span className="text-xs">{t.logisticsCategory[l.category as keyof typeof t.logisticsCategory] ?? l.category}</span>
                   <span className="tabular text-xs">×{l.quantity}</span>
-                  <span className="ltr-nums text-xs text-muted-foreground">{l.neededBy ? formatDateTime(l.neededBy, fmt) : "—"}</span>
+                  <DateText value={l.neededBy} format="datetime" className="text-xs text-muted-foreground" />
                   <StatusBadge status={l.status === "INSTALLED" || l.status === "DELIVERED" ? "DONE" : l.status === "ORDERED" ? "IN_PROGRESS" : l.status} label={t.logisticsStatus[l.status as keyof typeof t.logisticsStatus]} />
                 </li>
               ))}
@@ -371,6 +406,16 @@ export function EventWorkspace({ orgSlug, data }: { orgSlug: string; data: W }) 
           )}
         </Section>
       )}
+
+      <ConfirmAction
+        open={!!issueFor}
+        onOpenChange={(o) => !o && setIssueFor(null)}
+        title={issueFor?.label ?? ""}
+        field={{ type: "textarea", label: t.issueNotePrompt, required: true }}
+        confirmLabel={m.common.save}
+        onConfirm={(note) => (issueFor ? ready.run({ id: issueFor.id, status: "ISSUE", note }) : undefined)}
+        testId="readiness-issue-dialog"
+      />
 
       {dialog && (
         <FormDialog

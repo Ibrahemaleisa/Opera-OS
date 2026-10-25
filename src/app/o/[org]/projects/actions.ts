@@ -38,7 +38,8 @@ export const addCommentAction = orgAction(
 );
 export const bulkTasksAction = orgAction(tasks.bulkInput, tasks.bulkUpdateTasks);
 
-export const requestApprovalAction = orgAction(approvals.requestInput, (ctx, i) => approvals.requestApproval(ctx, i).then((a) => ({ id: a.id })));
+export const requestApprovalAction = orgAction(approvals.genericRequestInput, (ctx, i) => approvals.requestApproval(ctx, i).then((a) => ({ id: a.id })));
+export const withdrawApprovalAction = orgAction(approvals.withdrawInput, (ctx, i) => approvals.withdrawApproval(ctx, i).then((a) => ({ status: a.status })));
 export const decideApprovalAction = orgAction(approvals.decideInput, (ctx, i) => approvals.decideApproval(ctx, i).then((a) => ({ status: a.status })));
 
 export const fileUrlAction = orgAction(z.object({ attachmentId: z.string() }), (ctx, i) => signedUrlFor(ctx, i.attachmentId));

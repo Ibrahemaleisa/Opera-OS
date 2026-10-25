@@ -15,8 +15,12 @@ injection in exports; and accidental mass messaging.
 ## Implemented controls
 
 ### Tenant isolation (database-enforced)
-* PostgreSQL row-level security is enabled **and forced** on every table with an
-  `organizationId` column (`prisma/sql/rls.sql`, re-applied by `pnpm db:migrate`).
+* PostgreSQL row-level security is **enabled** on every table with an `organizationId`
+  column (`prisma/sql/rls.sql`, re-applied by `pnpm db:migrate`). It is deliberately *not*
+  `FORCE`d: the policies bind the runtime role, which is neither superuser, `BYPASSRLS` nor
+  the table owner (checked at start-up in production, `src/server/db/client.ts`). The owner
+  role — migrations, seed, test fixtures and the scheduler's cross-tenant discovery — is
+  exempt by design; forcing RLS would break those paths.
 * The application connects as `operra_app` — `NOSUPERUSER NOBYPASSRLS` (created by
   `docker/postgres/10-app-role.sh` in Compose). Migrations/seeding use the owner role.
 * Every tenant query runs in `withTenant()`, which sets `app.org_id` with transaction
@@ -43,16 +47,38 @@ injection in exports; and accidental mass messaging.
   (finance, VIP, export, approve) and workstream restriction; record scope (freelancers
   their tasks, field agents their deliveries, clients `clientVisible` records of
   projects they belong to and whose client matches their own, vendors their work orders).
-* Context is rebuilt per request, so role changes take effect on the next request.
+* Every page states its surface (`requirePageContext(slug, "workspace" | "portal" | "vendor" | "field")`);
+  a role that doesn't fit is sent to its own home. The gate is in the page, not only the layout,
+  because a layout redirect doesn't stop a page segment from rendering (RSC partial rendering).
+  Org-level boards (portfolio, command center, arrivals, dashboard, search, reports) also return
+  nothing to client, vendor and field roles (`projectVisibilityWhere`).
+* A client contact's project access requires the project's client to be their own client company;
+  re-assigning a project to another client ends the previous client's access.
+* Context is rebuilt per request, so role changes take effect on the next request. Only an owner
+  can change or suspend an owner, and nobody can change their own role or status.
 * Inaccessible records return **404, not 403**, to avoid confirming existence.
-* Four-eyes rules: bulk campaigns need `campaign.approve` by someone other than the
-  requester; POs at/above the org threshold (default SAR 50,000 incl. VAT), expenses and
-  change orders need `finance.approve` by someone other than the requester; snag
-  verification must be by someone other than the fixer.
+* Approvals (`src/server/modules/approvals/service.ts`, one rule `mayDecide` for deciding, the
+  approver list and "awaiting you"):
+  * the decider is never the requester; for POs, expenses and change orders also never the person
+    who created/submitted the spend;
+  * authority is by type — campaigns `campaign.approve`; POs at/above the org threshold (default
+    SAR 50,000 incl. VAT), expenses and change orders `finance.approve` with project finance scope;
+    tasks, deliverables, milestones and design revisions project approve scope; client approvals a
+    client approver of the project's client. Naming an approver narrows the set, never grants authority;
+  * at request time the eligible approver set is resolved and notified; an empty set refuses the request;
+  * decisions compare-and-set the entity's expected state (a changed entity makes the request stale);
+    a requester or project manager can withdraw a pending request (reason required, audited);
+    reopening approved work marks the approval SUPERSEDED, so it must be approved again;
+  * campaign content and audience are frozen from the approval request until sending: an edit voids
+    the approval and returns the campaign to draft. Scheduled campaigns are released by the scheduler
+    only when due (also without a worker).
+* Snag verification must be by someone other than the fixer.
 
 ### VIP data minimisation
-* Contact fields are masked (`•••1234`) unless the user has VIP scope; full values are
-  revealed through an explicit, audited action.
+* Contact fields are masked (`•••1234`) for users without VIP scope — registry, delivery
+  lists, import review and the import error report included; org-wide duplicate matches in
+  another project are reported without name, code or number. Users with VIP scope see contact
+  data in lists; explicit reveals and every export are audited (list views are not).
 * Protocol `restrictedNotes` are never returned by list queries; reading them requires
   `protocol.viewRestricted` **and** project VIP scope and writes an audit event per view.
 * Client portal, reports and RSVP pages return aggregates or the minimum needed (RSVP:
@@ -61,9 +87,11 @@ injection in exports; and accidental mass messaging.
   `restrictedNotes`.
 
 ### Links, files and webhooks
-* Invitation and RSVP tokens: random, stored hashed, single purpose, with expiry; RSVP
+* Invitation and RSVP tokens: random, stored hashed, single purpose, with enforced expiry
+  (RSVP: a week after the later of the RSVP deadline and the event end, 90 days if neither;
+  an expired link shows nothing and accepts no response, but still accepts an opt-out); RSVP
   pages are `noindex` with `Referrer-Policy: no-referrer`; opt-out needs a click (no
-  state change on GET).
+  state change on GET). Post-login redirects accept only same-origin relative paths.
 * Files: size limit, MIME detected from magic bytes against an allow-list, SHA-256
   stored, private storage; downloads go through a permission check and short-lived
   signed URLs (S3 presigned, or HMAC-signed local URLs); every access is audited.

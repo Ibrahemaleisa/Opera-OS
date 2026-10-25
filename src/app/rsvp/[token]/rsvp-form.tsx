@@ -3,9 +3,9 @@
 import { useRouter } from "next/navigation";
 import { useState, useTransition } from "react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Field } from "@/components/app/field";
+import { NumberInput } from "@/components/app/number-input";
 import { useI18n } from "@/lib/i18n/client";
 import { optOutAction, submitRsvpAction } from "./actions";
 
@@ -75,7 +75,7 @@ export function RsvpForm({ token, status, closed, suppressed, askOptOut }: { tok
             ))}
           </div>
           {response !== "DECLINED" && (
-            <Field label={p.guests} htmlFor="guestsCount"><Input id="guestsCount" name="guestsCount" type="number" min={1} max={10} defaultValue={1} dir="ltr" /></Field>
+            <Field label={p.guests} htmlFor="guestsCount"><NumberInput id="guestsCount" name="guestsCount" decimal={false} defaultValue={1} /></Field>
           )}
           <Field label={p.note} htmlFor="note"><Textarea id="note" name="note" rows={2} maxLength={500} /></Field>
           {error && <p className="text-sm text-danger">{error}</p>}

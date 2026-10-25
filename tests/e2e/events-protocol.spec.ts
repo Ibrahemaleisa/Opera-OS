@@ -60,6 +60,9 @@ test("event workspace, live cues, incidents, command center and protocol desk", 
   await page.getByTestId("event-link").first().click();
   await page.getByTestId("event-tab-incidents").click();
   await page.getByTestId("incident-resolve").click();
+  // resolution is mandatory: the confirm dialog requires it
+  await page.getByTestId("incident-resolve-dialog").locator("textarea").fill("Backup microphone deployed");
+  await page.getByTestId("incident-resolve-dialog-confirm").click();
   await expect(page.getByTestId("incident-row")).toContainText("Backup microphone deployed");
 
   // protocol: a guest with restricted notes, reveal is audited, arrival desk

@@ -50,6 +50,38 @@ async function readTable(batch: { storageKey: string; fileName: string; sheetNam
   return { sheets, sheet, ...extractTable(sheet.grid, batch.headerRow) };
 }
 
+// ── Masking (import review without VIP scope) ───────────────────────────────
+
+const SENSITIVE_FIELDS = new Set(["mobile", "mobileRaw", "altPhone", "email", "address", "mapsUrl", "lat", "lng", "deliveryInstructions"]);
+/** Any run of 7+ digits (phones written with spaces/dashes included). */
+const DIGIT_RUN = /\+?\d[\d\s\-().]{5,}\d/g;
+
+function maskText(v: unknown): unknown {
+  if (typeof v === "number") return String(Math.trunc(v)).length >= 7 ? "•••" : v;
+  if (typeof v !== "string") return v;
+  return v.replace(DIGIT_RUN, (m) => {
+    const d = m.replace(/\D/g, "");
+    return d.length >= 7 ? `•••${d.slice(-4)}` : m;
+  });
+}
+
+function maskNormalizedRow(n: unknown): unknown {
+  if (!n || typeof n !== "object") return n;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(n as Record<string, unknown>)) {
+    if (k === "custom" && v && typeof v === "object") out[k] = Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([ck, cv]) => [ck, maskText(cv)]));
+    else out[k] = SENSITIVE_FIELDS.has(k) ? (v == null || v === "" ? v : k === "lat" || k === "lng" || k === "mapsUrl" ? null : maskText(k === "address" || k === "deliveryInstructions" ? "•••" : v)) : maskText(v);
+  }
+  return out;
+}
+
+/** Raw sheet cells: columns mapped to contact fields are blanked, any other phone-like value is masked. */
+function maskRawRow(raw: unknown, mapping: Mapping): unknown {
+  if (!raw || typeof raw !== "object") return raw;
+  const sensitiveHeaders = new Set(Object.entries(mapping ?? {}).filter(([field]) => SENSITIVE_FIELDS.has(field)).map(([, header]) => header));
+  return Object.fromEntries(Object.entries(raw as Record<string, unknown>).map(([h, v]) => [h, sensitiveHeaders.has(h) && v != null && v !== "" ? "•••" : maskText(v)]));
+}
+
 // ── 1. Upload ───────────────────────────────────────────────────────────────
 
 export async function createImport(ctx: ServiceContext, input: { projectId: string; campaignId?: string | null; fileName: string; declaredType: string; body: Buffer }) {
@@ -141,10 +173,13 @@ export async function configureAndValidate(ctx: ServiceContext, input: z.output<
     const { batch } = await loadBatch(tx, ctx, input.batchId);
     if (!["PARSED", "VALIDATED", "FAILED"].includes(batch.status)) throw new ValidationError("errors.importState");
     if (!batch.sheetNames.includes(input.sheetName)) throw new ValidationError("errors.validation");
-    const updated = await tx.importBatch.update({
-      where: { id: batch.id },
+    // compare-and-set claim: a double-clicked "validate" starts one validation, the other gets a conflict
+    const claimed = await tx.importBatch.updateMany({
+      where: { id: batch.id, status: batch.status },
       data: { sheetName: input.sheetName, headerRow: input.headerRow, mapping: mapping as Prisma.InputJsonValue, options: { ...(batch.options as object), ...input.options } as Prisma.InputJsonValue, status: "VALIDATING", progress: 0, error: null },
     });
+    if (!claimed.count) throw new ConflictError();
+    const updated = await tx.importBatch.findUniqueOrThrow({ where: { id: batch.id } });
     if (input.saveMappingAs) {
       await tx.importMapping.create({ data: { organizationId: ctx.orgId, name: input.saveMappingAs, mapping: mapping as Prisma.InputJsonValue, headerSignature: headerSignature(batch.headers), createdById: ctx.userId } });
     }
@@ -285,13 +320,21 @@ export async function listImportRows(ctx: ServiceContext, batchId: string, filte
     const dupIds = [...new Set(rows.map((r) => r.duplicateOfRecipientId).filter((x): x is string => !!x))];
     const dups = await tx.recipient.findMany({ where: { id: { in: dupIds } }, select: { id: true, code: true, nameAr: true, nameEn: true, organizationName: true, projectId: true, mobile: true } });
     const campaign = batch.campaignId ? await tx.invitationCampaign.findUnique({ where: { id: batch.campaignId }, select: { id: true, name: true } }) : null;
+    const mapping = (batch.mapping ?? {}) as Mapping;
     return {
       batch,
       campaign,
-      rows,
+      rows: scope.vip ? rows : rows.map((r) => ({ ...r, raw: maskRawRow(r.raw, mapping) as Prisma.JsonValue, normalized: maskNormalizedRow(r.normalized) as Prisma.JsonValue, overrides: maskNormalizedRow(r.overrides) as Prisma.JsonValue })),
       total,
       counts: Object.fromEntries(counts.map((c) => [c.status, c._count])) as Record<string, number>,
-      duplicates: Object.fromEntries(dups.map((d) => [d.id, { ...d, mobile: scope.vip ? d.mobile : d.mobile ? `•••${d.mobile.slice(-4)}` : null }])),
+      // an org-wide match in another project only says "exists elsewhere": no name, code, project or number
+      duplicates: Object.fromEntries(
+        dups.map((d) =>
+          d.projectId === batch.projectId
+            ? [d.id, { ...d, mobile: scope.vip ? d.mobile : d.mobile ? `•••${d.mobile.slice(-4)}` : null }]
+            : [d.id, { id: d.id, code: "—", nameAr: null, nameEn: null, organizationName: null, projectId: "other", mobile: null }],
+        ),
+      ),
       history,
       vip: scope.vip,
     };
@@ -506,12 +549,14 @@ export async function rollbackImport(ctx: ServiceContext, batchId: string) {
     if (!scope.manage && !scope.operate) throw new ForbiddenError();
     if (!["COMMITTED", "PARTIALLY_COMMITTED"].includes(batch.status) || !batch.committedAt) throw new ValidationError("errors.importState");
     const safeUntil = new Date(batch.committedAt.getTime() + 5_000);
-    const [modifiedRecipients, progressedDeliveries, linkedElsewhere] = await Promise.all([
-      tx.recipient.count({ where: { importBatchId: batchId, updatedAt: { gt: safeUntil } } }),
-      tx.delivery.count({ where: { importBatchId: batchId, OR: [{ status: { notIn: ["PENDING", "VALIDATING", "READY"] } }, { attemptsCount: { gt: 0 } }, { agentId: { not: null } }, { batchId: { not: null } }] } }),
-      tx.delivery.count({ where: { recipient: { importBatchId: batchId }, importBatchId: { not: batchId } } }),
-    ]);
-    if (modifiedRecipients || progressedDeliveries || linkedElsewhere) throw new AppError("errors.rollbackUnsafe", "ROLLBACK_UNSAFE", 409, { blocked: [String(modifiedRecipients + progressedDeliveries + linkedElsewhere)] });
+    const modifiedRecipients = await tx.recipient.count({ where: { importBatchId: batchId, updatedAt: { gt: safeUntil } } });
+    const progressedDeliveries = await tx.delivery.count({ where: { importBatchId: batchId, OR: [{ status: { notIn: ["PENDING", "VALIDATING", "READY"] } }, { attemptsCount: { gt: 0 } }, { agentId: { not: null } }, { batchId: { not: null } }] } });
+    const linkedElsewhere = await tx.delivery.count({ where: { recipient: { importBatchId: batchId }, importBatchId: { not: batchId } } });
+    // recipients already used by a digital audience or the protocol guest list are not ours to delete
+    const ids = (await tx.recipient.findMany({ where: { importBatchId: batchId }, select: { id: true } })).map((r) => r.id);
+    const usedElsewhere = ids.length ? (await tx.digitalInvitation.count({ where: { recipientId: { in: ids } } })) + (await tx.guest.count({ where: { recipientId: { in: ids } } })) : 0;
+    const blocked = modifiedRecipients + progressedDeliveries + linkedElsewhere + usedElsewhere;
+    if (blocked) throw new AppError("errors.rollbackUnsafe", "ROLLBACK_UNSAFE", 409, { blocked: [String(blocked)] });
     const claimed = await tx.importBatch.updateMany({ where: { id: batchId, status: batch.status }, data: { status: "ROLLED_BACK", rolledBackAt: new Date(), rolledBackById: ctx.userId } });
     if (!claimed.count) throw new ConflictError();
     const d = await tx.delivery.deleteMany({ where: { importBatchId: batchId } });
@@ -543,8 +588,10 @@ export async function importReport(ctx: ServiceContext, batchId: string, kind: "
   const { batch, rows } = await withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
     const { batch, scope } = await loadBatch(tx, ctx, batchId);
     if (kind !== "errors" && !scope.vip && !scope.export) throw new ForbiddenError();
-    const rows = await tx.importRow.findMany({ where: { batchId, ...(kind === "errors" ? { status: { in: ["INVALID", "DUPLICATE", "WARNING", "SKIPPED"] } } : {}) }, orderBy: { rowNumber: "asc" } });
-    await audit(tx, ctx, { action: "export.import_report", entityType: "IMPORT", entityId: batchId, projectId: batch.projectId, meta: { kind, rows: rows.length } });
+    const found = await tx.importRow.findMany({ where: { batchId, ...(kind === "errors" ? { status: { in: ["INVALID", "DUPLICATE", "WARNING", "SKIPPED"] } } : {}) }, orderBy: { rowNumber: "asc" } });
+    // without VIP scope the report carries no contact data
+    const rows = scope.vip ? found : found.map((r) => ({ ...r, raw: maskRawRow(r.raw, (batch.mapping ?? {}) as Mapping) as Prisma.JsonValue, normalized: maskNormalizedRow(r.normalized) as Prisma.JsonValue }));
+    await audit(tx, ctx, { action: "export.import_report", entityType: "IMPORT", entityId: batchId, projectId: batch.projectId, meta: { kind, rows: rows.length, masked: !scope.vip } });
     return { batch, rows };
   });
   const wb = new ExcelJS.Workbook();

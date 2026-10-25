@@ -16,6 +16,9 @@ import { ApprovalsBox } from "@/app/o/[org]/tasks/[taskId]/task-detail";
 import { useAction } from "@/hooks/use-action";
 import { formatPercent, parseRiyadhDateTime, toDateTimeInput } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/client";
+import { interpolate } from "@/lib/i18n";
+import { ActionButton } from "@/components/app/action-button";
+import { ConfirmAction } from "@/components/app/confirm-action";
 import type { getDigitalCampaign } from "@/server/modules/digital/service";
 import { VARIABLES } from "@/lib/digital-vars";
 import { addAudienceAction, cancelCampaignAction, launchCampaignAction, requestCampaignApprovalAction, saveDigitalCampaignAction, simulateReceiptAction } from "@/app/o/[org]/digital/actions";
@@ -30,8 +33,12 @@ export function CampaignDetail({ orgSlug, projectId, data, currentUserId }: { or
   const c = data.campaign;
   const editable = ["DRAFT", "PENDING_APPROVAL", "APPROVED", "SCHEDULED"].includes(c.status) && data.scope.manage;
   const [body, setBody] = useState(c.bodyTemplate ?? "");
-  const save = useAction(saveDigitalCampaignAction, { orgSlug });
-  const add = useAction(addAudienceAction, { orgSlug, success: false, onSuccess: (r) => toast.success(`+${r.added}`) });
+  // an edit after the approval request voids the approval (the four-eyes check covers what is sent)
+  const voided = (r: { approvalInvalidated?: unknown }) => {
+    if (r.approvalInvalidated) toast.warning(dg.approvalVoided, { duration: 10_000 });
+  };
+  const save = useAction(saveDigitalCampaignAction, { orgSlug, onSuccess: (r) => voided(r) });
+  const add = useAction(addAudienceAction, { orgSlug, success: false, onSuccess: (r) => { toast.success(`+${r.added}`); voided(r); } });
   const request = useAction(requestCampaignApprovalAction, { orgSlug });
   const launch = useAction(launchCampaignAction, { orgSlug, success: dg.launched });
   const cancel = useAction(cancelCampaignAction, { orgSlug });
@@ -47,7 +54,7 @@ export function CampaignDetail({ orgSlug, projectId, data, currentUserId }: { or
     { accessorKey: "status", header: m.common.status, cell: ({ row }) => <span className="flex items-center gap-1"><StatusBadge status={row.original.status} label={m.enums.messageStatus[row.original.status as keyof typeof m.enums.messageStatus]} />{row.original.simulated && <span className="rounded bg-violet-soft px-1 text-[9px] text-violet">{m.common.simulation}</span>}</span> },
     { accessorKey: "rsvpStatus", header: dg.rsvp, cell: ({ row }) => row.original.rsvpStatus ? <StatusBadge status={row.original.rsvpStatus} label={m.enums.rsvp[row.original.rsvpStatus as keyof typeof m.enums.rsvp]} /> : <span className="text-xs text-muted-foreground">—</span> },
     { accessorKey: "checkedInAt", header: dg.checkedIn, cell: ({ row }) => row.original.checkedInAt ? <ShieldCheck className="size-4 text-success" /> : null },
-    { id: "err", header: "", cell: ({ row }) => row.original.lastError ? <span className="text-[11px] text-danger" title={row.original.lastError}><AlertTriangle className="inline size-3" /></span> : row.original.simulated && row.original.status === "SENT" && data.scope.manage ? <button className="text-[11px] text-violet hover:underline" onClick={(e) => { e.stopPropagation(); sim.run({ invitationId: row.original.id, status: "DELIVERED" }); }}><FlaskConical className="me-0.5 inline size-3" />{dg.simulateReceipt}</button> : null },
+    { id: "err", header: "", cell: ({ row }) => row.original.lastError ? <span className="text-[11px] text-danger" title={row.original.lastError}><AlertTriangle className="inline size-3" /></span> : row.original.simulated && row.original.status === "SENT" && data.scope.manage ? <ActionButton variant="link" size="xs" className="h-auto px-0 text-[11px] text-violet" onClick={(e) => e.stopPropagation()} action={() => sim.run({ invitationId: row.original.id, status: "DELIVERED" })}><FlaskConical className="me-0.5 inline size-3" />{dg.simulateReceipt}</ActionButton> : null },
     // eslint-disable-next-line react-hooks/exhaustive-deps
   ], [m]);
   const availCols = useMemo<ColumnDef<Avail, unknown>[]>(() => [
@@ -69,8 +76,27 @@ export function CampaignDetail({ orgSlug, projectId, data, currentUserId }: { or
           {c.qrEnabled && <Button asChild size="sm" variant="outline"><Link href={`/o/${orgSlug}/projects/${projectId}/digital/${c.id}/checkin`}><ScanLine /> {dg.checkInDesk}</Link></Button>}
           {data.scope.export && <Button asChild size="sm" variant="outline"><a href={`/api/o/${orgSlug}/exports/guests?campaignId=${c.id}`}><Download /> {dg.exportGuests}</a></Button>}
           {c.status === "DRAFT" && data.scope.manage && <Button size="sm" variant="outline" disabled={request.pending || !total} onClick={() => request.run({ campaignId: c.id })} data-testid="campaign-request-approval">{dg.requestApproval}</Button>}
-          {c.status === "APPROVED" && data.scope.send && <Button size="sm" disabled={launch.pending} onClick={() => launch.run({ campaignId: c.id })} data-testid="campaign-launch"><Rocket /> {dg.launch}</Button>}
-          {["SCHEDULED", "SENDING", "ACTIVE"].includes(c.status) && data.scope.manage && <Button size="sm" variant="ghost" className="text-danger" onClick={() => cancel.run({ campaignId: c.id })}><StopCircle /> {dg.cancel}</Button>}
+          {c.status === "APPROVED" && data.scope.send && (
+            <ConfirmAction
+              trigger={<Button size="sm" disabled={launch.pending} data-testid="campaign-launch"><Rocket /> {dg.launch}</Button>}
+              title={interpolate(m.common.confirmDialog.launchCampaignTitle, { name: c.name })}
+              description={interpolate(c.scheduledAt && new Date(c.scheduledAt) > new Date() ? m.common.confirmDialog.launchCampaignScheduledBody : m.common.confirmDialog.launchCampaignBody, { n: total, channel: c.channel ? m.enums.channel[c.channel] : "" })}
+              confirmLabel={dg.launch}
+              onConfirm={() => launch.run({ campaignId: c.id })}
+              testId="campaign-launch-dialog"
+            />
+          )}
+          {["SCHEDULED", "SENDING", "ACTIVE"].includes(c.status) && data.scope.manage && (
+            <ConfirmAction
+              trigger={<Button size="sm" variant="ghost" className="text-danger" data-testid="campaign-cancel"><StopCircle /> {dg.cancel}</Button>}
+              title={interpolate(m.common.confirmDialog.cancelCampaignTitle, { name: c.name })}
+              description={m.common.confirmDialog.cancelCampaignBody}
+              confirmLabel={dg.cancel}
+              destructive
+              onConfirm={() => cancel.run({ campaignId: c.id })}
+              testId="campaign-cancel-confirm"
+            />
+          )}
         </div>
       </div>
       <p className={`flex items-start gap-2 rounded-md px-3 py-2 text-xs ${data.providerMode === "LIVE" ? "bg-success-soft text-success" : "bg-violet-soft text-violet"}`}><FlaskConical className="mt-0.5 size-3.5 shrink-0" />{data.providerMode === "LIVE" ? dg.liveBanner : dg.simulationBanner}</p>
@@ -135,7 +161,7 @@ export function CampaignDetail({ orgSlug, projectId, data, currentUserId }: { or
             getRowId={(r) => r.id}
             selectable
             pageSize={25}
-            bulkActions={(rows, clear) => <button className="text-xs font-medium hover:underline" data-testid="audience-add" onClick={() => add.run({ campaignId: c.id, recipientIds: rows.map((r) => r.id) }).then(clear)}>{dg.addAudience}</button>}
+            bulkActions={(rows, clear) => <ActionButton variant="link" size="xs" className="h-auto px-0 text-xs font-medium text-primary" data-testid="audience-add" action={() => add.run({ campaignId: c.id, recipientIds: rows.map((r) => r.id) }).then((r) => r.ok && clear())}>{dg.addAudience}</ActionButton>}
           />
         </Section>
       )}

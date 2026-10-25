@@ -5,6 +5,7 @@ import { withTenant, type Tx } from "@/server/db/tenant";
 import { audit } from "@/server/modules/audit/audit";
 import { notify } from "@/server/modules/notifications/notify";
 import { nextTaskNumber } from "@/server/modules/tasks/numbering";
+import { DEFAULT_STATUSES, type StatusDef } from "@/server/modules/templates/definition";
 import { actionsSchema, conditionsSchema, matchesConditions, type AutomationAction } from "./rules";
 
 const MAX_EVENT_ATTEMPTS = 5;
@@ -40,21 +41,24 @@ async function processEvent(orgId: string, event: OutboxEvent): Promise<number> 
     const done = await withTenant({ orgId }, async (tx) => {
       const existing = await tx.automationExecution.findUnique({ where: { idempotencyKey: key } });
       if (existing && (existing.status === "SUCCEEDED" || existing.status === "SKIPPED")) return true;
-      if (!existing) await tx.automationExecution.create({ data: { organizationId: orgId, ruleId: rule.id, eventId: event.id, idempotencyKey: key, status: "PENDING" } });
+      // ON CONFLICT DO NOTHING: a concurrent drain may have created it a moment ago
+      if (!existing) await tx.automationExecution.createMany({ data: [{ organizationId: orgId, ruleId: rule.id, eventId: event.id, idempotencyKey: key, status: "PENDING" }], skipDuplicates: true });
       return false;
     });
     if (done) continue;
     const conditions = conditionsSchema.safeParse(rule.conditions);
     if (conditions.success && !matchesConditions(conditions.data, payload)) {
-      await withTenant({ orgId }, (tx) => tx.automationExecution.update({ where: { idempotencyKey: key }, data: { status: "SKIPPED", finishedAt: new Date() } }));
+      await withTenant({ orgId }, (tx) => tx.automationExecution.updateMany({ where: { idempotencyKey: key, status: { in: ["PENDING", "FAILED"] } }, data: { status: "SKIPPED", finishedAt: new Date() } }));
       continue;
     }
     const actions = actionsSchema.safeParse(rule.actions);
     try {
       if (!actions.success) throw new Error("Invalid rule actions");
-      // Actions + execution status commit together: a crash mid-way replays the whole rule.
+      // Claim + actions + final status commit together: a crash mid-way rolls back to PENDING and is
+      // replayed; a concurrent drain blocks on the row lock, then finds it SUCCEEDED and runs nothing.
       const result = await withTenant({ orgId, userId: event.actorId }, async (tx) => {
-        await tx.automationExecution.update({ where: { idempotencyKey: key }, data: { status: "RUNNING", startedAt: new Date(), attempts: { increment: 1 } } });
+        const claim = await tx.automationExecution.updateMany({ where: { idempotencyKey: key, status: { in: ["PENDING", "FAILED"] } }, data: { status: "RUNNING", startedAt: new Date(), attempts: { increment: 1 } } });
+        if (!claim.count) return null;
         const results: unknown[] = [];
         for (const action of actions.data) results.push(await runAction(tx, orgId, event, payload, action));
         await tx.automationExecution.update({
@@ -63,7 +67,7 @@ async function processEvent(orgId: string, event: OutboxEvent): Promise<number> 
         });
         return results;
       });
-      count += result.length ? 1 : 0;
+      count += result?.length ? 1 : 0;
     } catch (err) {
       await withTenant({ orgId }, (tx) =>
         tx.automationExecution.update({ where: { idempotencyKey: key }, data: { status: "FAILED", error: (err as Error).message.slice(0, 1000), finishedAt: new Date() } }),
@@ -74,15 +78,31 @@ async function processEvent(orgId: string, event: OutboxEvent): Promise<number> 
   return count;
 }
 
-async function projectManagers(tx: Tx, projectId: unknown): Promise<string[]> {
-  if (typeof projectId !== "string") return orgAdmins(tx);
+/** Active project managers; when none is active (left / suspended), the org's owners and ops directors. */
+async function projectManagers(tx: Tx, orgId: string, projectId: unknown): Promise<string[]> {
+  if (typeof projectId !== "string") return orgAdmins(tx, orgId);
   const pms = await tx.projectMember.findMany({ where: { projectId, role: "MANAGER" }, select: { userId: true } });
-  return pms.length ? pms.map((p) => p.userId) : orgAdmins(tx);
+  const active = await activeOnly(tx, orgId, pms.map((p) => p.userId));
+  return active.length ? active : orgAdmins(tx, orgId);
 }
 
-async function orgAdmins(tx: Tx): Promise<string[]> {
-  const admins = await tx.membership.findMany({ where: { status: "ACTIVE", role: { baseRole: { in: ["OWNER", "OPS_DIRECTOR"] } } }, select: { userId: true } });
+async function orgAdmins(tx: Tx, orgId: string): Promise<string[]> {
+  const admins = await tx.membership.findMany({ where: { organizationId: orgId, status: "ACTIVE", role: { baseRole: { in: ["OWNER", "OPS_DIRECTOR"] } } }, select: { userId: true } });
   return admins.map((a) => a.userId);
+}
+
+/** Drops users without an ACTIVE membership in this org (suspended / revoked people get no work or alerts). */
+async function activeOnly(tx: Tx, orgId: string, userIds: (string | null | undefined)[]): Promise<string[]> {
+  const ids = [...new Set(userIds.filter((x): x is string => !!x && x !== "system"))];
+  if (!ids.length) return [];
+  const rows = await tx.membership.findMany({ where: { organizationId: orgId, userId: { in: ids }, status: "ACTIVE" }, select: { userId: true } });
+  const ok = new Set(rows.map((r) => r.userId));
+  return ids.filter((id) => ok.has(id));
+}
+
+function statusesOf(ws: { statuses: unknown } | null | undefined): StatusDef[] {
+  const s = ws?.statuses as StatusDef[] | undefined;
+  return Array.isArray(s) && s.length ? s : DEFAULT_STATUSES;
 }
 
 function str(v: unknown): string | null {
@@ -97,15 +117,22 @@ async function runAction(tx: Tx, orgId: string, event: OutboxEvent, p: Record<st
         if (to === "assignee" || to === "owner") ids.push(...[str(p.ownerId), str(p.agentId)].filter((x): x is string => !!x));
         if (to === "actor" && event.actorId) ids.push(event.actorId);
         if (to === "mentioned" && Array.isArray(p.mentions)) ids.push(...(p.mentions as string[]));
-        if (to === "approver" && str(p.approverUserId)) ids.push(p.approverUserId as string);
+        if (to === "approver") {
+          if (Array.isArray(p.approverUserIds)) ids.push(...(p.approverUserIds as string[]));
+          else if (str(p.approverUserId)) ids.push(p.approverUserId as string);
+        }
         if (to === "requester" && str(p.requestedById)) ids.push(p.requestedById as string);
-        if (to === "project_managers") ids.push(...(await projectManagers(tx, p.projectId)));
-        if (to === "org_admins") ids.push(...(await orgAdmins(tx)));
+        if (to === "project_managers") ids.push(...(await projectManagers(tx, orgId, p.projectId)));
+        if (to === "org_admins") ids.push(...(await orgAdmins(tx, orgId)));
       }
       const exclude = action.to.includes("actor") ? null : event.actorId;
+      let recipients = await activeOnly(tx, orgId, ids);
+      // everyone addressed by an actionable alert has left: it still has to reach someone who can act
+      const actionable = action.to.some((t) => ["assignee", "owner", "project_managers", "approver"].includes(t));
+      if (actionable && ids.length && !recipients.filter((u) => u !== exclude).length) recipients = await projectManagers(tx, orgId, p.projectId);
       const n = await notify(tx, {
         orgId,
-        userIds: ids,
+        userIds: recipients,
         type: event.type,
         titleKey: action.titleKey,
         params: { title: str(p.title), code: str(p.code), count: typeof p.count === "number" ? p.count : null, name: str(p.name) },
@@ -119,7 +146,7 @@ async function runAction(tx: Tx, orgId: string, event: OutboxEvent, p: Record<st
     case "create_task": {
       const projectId = str(p.projectId);
       if (!projectId) return { skipped: "no project" };
-      const pm = action.assignTo === "project_manager" ? (await projectManagers(tx, projectId))[0] : action.assignTo === "actor" ? event.actorId : null;
+      const pm = action.assignTo === "project_manager" ? (await projectManagers(tx, orgId, projectId))[0] : action.assignTo === "actor" ? (await activeOnly(tx, orgId, [event.actorId]))[0] ?? null : null;
       const number = await nextTaskNumber(tx, projectId);
       const task = await tx.task.create({
         data: {
@@ -127,7 +154,8 @@ async function runAction(tx: Tx, orgId: string, event: OutboxEvent, p: Record<st
           projectId,
           workstreamId: str(p.workstreamId),
           number,
-          title: `${action.titleKey === "auto.followUpDelivery" ? "متابعة توصيل" : "متابعة"}: ${str(p.title) ?? str(p.code) ?? ""}`.trim(),
+          // a delivery follow-up names the card, not the VIP: task titles are visible to every project member
+          title: action.titleKey === "auto.followUpDelivery" ? `متابعة توصيل: ${str(p.code) ?? ""}`.trim() : `متابعة: ${str(p.title) ?? str(p.code) ?? ""}`.trim(),
           description: str(p.reason) ?? undefined,
           priority: action.priority,
           ownerId: pm ?? null,
@@ -147,16 +175,33 @@ async function runAction(tx: Tx, orgId: string, event: OutboxEvent, p: Record<st
       const entityType = str(p.entityType);
       const entityId = str(p.entityId);
       if (entityType === "TASK" && entityId) {
-        await tx.task.updateMany({ where: { id: entityId }, data: { status: "in_progress", statusCategory: "ACTIVE", completedAt: null } });
+        // status keys come from each task's own workstream workflow; version bump makes stale edits conflict
+        const sys = systemContext(orgId);
+        const task = await tx.task.findUnique({ where: { id: entityId }, include: { workstream: true } });
+        const active = statusesOf(task?.workstream).find((s) => s.category === "ACTIVE");
+        let reopened = 0;
+        if (task && active && ["REVIEW", "DONE"].includes(task.statusCategory)) {
+          reopened = (await tx.task.updateMany({ where: { id: task.id, statusCategory: task.statusCategory }, data: { status: active.key, statusCategory: "ACTIVE", completedAt: null, version: { increment: 1 } } })).count;
+          if (reopened) await audit(tx, sys, { action: "automation.task_reopened", entityType: "TASK", entityId: task.id, projectId: task.projectId, before: { status: task.status }, after: { status: active.key }, summary: "approval rejected" });
+        }
         // Dependents that were started on the assumption of approval go back to blocked.
-        const deps = await tx.taskDependency.findMany({ where: { dependsOnId: entityId }, select: { taskId: true } });
-        if (deps.length)
-          await tx.task.updateMany({ where: { id: { in: deps.map((d) => d.taskId) }, statusCategory: { in: ["ACTIVE", "REVIEW"] } }, data: { statusCategory: "BLOCKED", status: "blocked", blockedReason: "approval_rejected" } });
-        return { reopened: entityId, dependents: deps.length };
+        const deps = await tx.taskDependency.findMany({ where: { dependsOnId: entityId, task: { statusCategory: { in: ["ACTIVE", "REVIEW"] } } }, include: { task: { include: { workstream: true } } } });
+        let blocked = 0;
+        for (const d of deps) {
+          const b = statusesOf(d.task.workstream).find((s) => s.category === "BLOCKED");
+          if (!b) continue;
+          const r = await tx.task.updateMany({ where: { id: d.taskId, statusCategory: d.task.statusCategory }, data: { statusCategory: "BLOCKED", status: b.key, blockedReason: "approval_rejected", version: { increment: 1 } } });
+          if (r.count) {
+            blocked++;
+            await audit(tx, sys, { action: "automation.task_blocked", entityType: "TASK", entityId: d.taskId, projectId: d.task.projectId, before: { status: d.task.status }, after: { status: b.key }, summary: "upstream approval rejected" });
+          }
+        }
+        return { reopened: reopened ? entityId : null, dependents: blocked };
       }
       if (entityType === "DELIVERABLE" && entityId) {
-        await tx.deliverable.updateMany({ where: { id: entityId }, data: { status: "IN_PROGRESS" } });
-        return { reopened: entityId };
+        const r = await tx.deliverable.updateMany({ where: { id: entityId, status: "REJECTED" }, data: { status: "IN_PROGRESS" } });
+        if (r.count) await audit(tx, systemContext(orgId), { action: "automation.deliverable_reopened", entityType: "DELIVERABLE", entityId, projectId: str(p.projectId), summary: "approval rejected" });
+        return { reopened: r.count ? entityId : null };
       }
       if (entityType === "DESIGN_REVISION" && entityId) return { reopened: entityId };
       return { skipped: true };
@@ -177,7 +222,7 @@ async function runAction(tx: Tx, orgId: string, event: OutboxEvent, p: Record<st
       if (!projectId) return { skipped: true };
       const existing = await tx.task.findFirst({ where: { projectId, templateKey: "closeout" } });
       if (existing) return { existing: existing.id };
-      const pm = (await projectManagers(tx, projectId))[0] ?? null;
+      const pm = (await projectManagers(tx, orgId, projectId))[0] ?? null;
       const number = await nextTaskNumber(tx, projectId);
       const task = await tx.task.create({
         data: {

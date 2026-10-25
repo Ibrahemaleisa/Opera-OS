@@ -5,8 +5,10 @@ import { enums } from "./dict/enums";
 import { errors } from "./dict/errors";
 import { nav } from "./dict/nav";
 import { modules } from "./dict/modules";
+import { ops } from "./dict/operations";
+import { audit } from "./dict/audit";
 
-const parts = { common, errors, nav, auth, enums, ...modules };
+const parts = { common, errors, nav, auth, enums, ...modules, ops, audit };
 type Parts = typeof parts;
 
 export type Messages = { [K in keyof Parts]: Parts[K]["ar"] };

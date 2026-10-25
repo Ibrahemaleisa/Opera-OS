@@ -5,6 +5,8 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Field, NativeSelect } from "@/components/app/field";
+import { DigitsInput, NumberInput } from "@/components/app/number-input";
+import { normalizeDigitsInput, parseNumberInput, toAsciiDigits } from "@/lib/digits";
 import { parseRiyadhDateTime, toDateTimeInput } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/client";
 import { cn } from "@/lib/utils";
@@ -12,7 +14,7 @@ import { cn } from "@/lib/utils";
 export type FieldDef = {
   name: string;
   label: string;
-  type?: "text" | "textarea" | "number" | "datetime" | "select" | "email" | "tel" | "checkbox";
+  type?: "text" | "textarea" | "number" | "integer" | "digits" | "datetime" | "select" | "email" | "tel" | "checkbox";
   options?: { value: string; label: string }[];
   required?: boolean;
   hint?: string;
@@ -26,7 +28,11 @@ export type FieldDef = {
 
 type Values = Record<string, unknown>;
 
-/** Reads a form into typed values: datetimes are parsed in Asia/Riyadh, empty strings become null. */
+/**
+ * Reads a form into typed values: datetimes are parsed in Asia/Riyadh, numbers and digit codes are
+ * normalised from Arabic-Indic digits, empty strings become null (an unparsable number is NaN, which
+ * the server's schema rejects with a translated message).
+ */
 export function readForm(form: HTMLFormElement, fields: FieldDef[]): Values {
   const fd = new FormData(form);
   const out: Values = {};
@@ -38,7 +44,9 @@ export function readForm(form: HTMLFormElement, fields: FieldDef[]): Values {
     const raw = fd.get(f.name);
     const v = typeof raw === "string" ? raw.trim() : "";
     if (f.type === "datetime") out[f.name] = v ? parseRiyadhDateTime(v) : null;
-    else if (f.type === "number") out[f.name] = v === "" ? null : Number(v);
+    else if (f.type === "number" || f.type === "integer") out[f.name] = parseNumberInput(v);
+    else if (f.type === "digits") out[f.name] = v === "" ? null : normalizeDigitsInput(v);
+    else if (f.type === "tel") out[f.name] = v === "" ? null : toAsciiDigits(v);
     else out[f.name] = v === "" ? null : v;
   }
   return out;
@@ -99,7 +107,7 @@ export function FormDialog({
           <div className="grid gap-3 sm:grid-cols-2">
             {fields.map((f) => {
               const dv = defaultFor(f, values?.[f.name]);
-              const common = { name: f.name, id: `fd-${f.name}`, required: f.required, defaultValue: dv, dir: f.ltr || ["datetime", "number", "email", "tel"].includes(f.type ?? "") ? ("ltr" as const) : undefined };
+              const common = { name: f.name, id: `fd-${f.name}`, required: f.required, defaultValue: dv, dir: f.ltr || ["datetime", "number", "integer", "digits", "email", "tel"].includes(f.type ?? "") ? ("ltr" as const) : undefined };
               return (
                 <Field key={f.name} label={f.type === "checkbox" ? undefined : f.label} required={f.required} hint={f.hint} error={errorFor?.(f.name)} htmlFor={common.id} className={cn((f.wide || f.type === "textarea") && "sm:col-span-2")}>
                   {f.type === "textarea" ? (
@@ -112,7 +120,11 @@ export function FormDialog({
                       ))}
                     </NativeSelect>
                   ) : f.type === "checkbox" ? (
-                    <label className="flex items-center gap-2 text-sm"><input type="checkbox" name={f.name} defaultChecked={!!values?.[f.name]} /> {f.label}</label>
+                    <label className="flex min-h-9 items-center gap-2 text-sm"><input type="checkbox" name={f.name} defaultChecked={!!values?.[f.name]} className="size-4" /> {f.label}</label>
+                  ) : f.type === "number" || f.type === "integer" ? (
+                    <NumberInput {...common} decimal={f.type === "number"} />
+                  ) : f.type === "digits" || f.type === "tel" ? (
+                    <DigitsInput {...common} kind={f.type === "tel" ? "tel" : "digits"} />
                   ) : (
                     <Input {...common} type={f.type === "datetime" ? "datetime-local" : f.type ?? "text"} min={f.min} max={f.max} />
                   )}

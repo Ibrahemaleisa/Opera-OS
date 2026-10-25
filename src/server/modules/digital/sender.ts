@@ -5,7 +5,7 @@ import { withTenant } from "@/server/db/tenant";
 import { audit } from "@/server/modules/audit/audit";
 import { enqueue } from "@/server/jobs/dispatch";
 import { ProviderError, resolveProvider } from "./providers";
-import { issueRsvpToken, personalization, renderTemplate } from "./service";
+import { issueRsvpToken, personalization, renderTemplate, rsvpTokenExpiry } from "./service";
 
 const APP = appBaseUrl;
 
@@ -13,12 +13,25 @@ const APP = appBaseUrl;
  * Creates one MessageJob per queued invitation (idempotency key campaign:invitation:initial)
  * and enqueues each send. Safe to re-run: existing jobs are not duplicated.
  */
+/** Grace for clock skew between the scheduler / delayed job and the stored scheduledAt. */
+const DUE_TOLERANCE_MS = 60_000;
+
 export async function dispatchCampaign(orgId: string, actorId: string, campaignId: string) {
   const ctx = { ...systemContext(orgId), userId: actorId };
   const { jobIds, campaign } = await withTenant({ orgId }, async (tx) => {
+    const none = { jobIds: [] as string[], campaign: null };
     const c = await tx.invitationCampaign.findUnique({ where: { id: campaignId } });
-    if (!c || !["SENDING", "SCHEDULED"].includes(c.status) || !c.channel) return { jobIds: [] as string[], campaign: c };
-    if (c.status === "SCHEDULED") await tx.invitationCampaign.update({ where: { id: c.id }, data: { status: "SENDING" } });
+    if (!c || !["SENDING", "SCHEDULED"].includes(c.status) || !c.channel) return none;
+    // a scheduled campaign is never sent before its time (early delayed job, inline fallback, manual call)
+    if (c.status === "SCHEDULED" && c.scheduledAt && c.scheduledAt.getTime() > Date.now() + DUE_TOLERANCE_MS) return none;
+    const project = await tx.project.findUnique({ where: { id: c.projectId }, select: { status: true } });
+    if (!project || ["CLOSED", "CANCELLED", "COMPLETED"].includes(project.status)) return none;
+    // the approval must still stand (an edit after approval supersedes it and returns the campaign to DRAFT)
+    if (!(await tx.approval.findFirst({ where: { entityType: "CAMPAIGN", entityId: c.id, status: "APPROVED" }, select: { id: true } }))) return none;
+    if (c.status === "SCHEDULED") {
+      const claimed = await tx.invitationCampaign.updateMany({ where: { id: c.id, status: "SCHEDULED" }, data: { status: "SENDING" } });
+      if (!claimed.count) return none;
+    }
     const cfg = await tx.providerConfig.findUnique({ where: { organizationId_channel: { organizationId: orgId, channel: c.channel } } });
     const provider = resolveProvider(c.channel, cfg?.mode ?? "SIMULATION");
     const event = c.eventId ? await tx.event.findUnique({ where: { id: c.eventId } }) : await tx.event.findFirst({ where: { projectId: c.projectId }, orderBy: { startsAt: "asc" } });
@@ -33,8 +46,13 @@ export async function dispatchCampaign(orgId: string, actorId: string, campaignI
         await tx.digitalInvitation.update({ where: { id: inv.id }, data: { status: "SUPPRESSED" } });
         continue;
       }
-      const r = recipients.find((x) => x.id === inv.recipientId)!;
-      const token = c.rsvpEnabled ? await issueRsvpToken(tx, orgId, inv, c.rsvpDeadline ?? (event ? new Date(event.endsAt.getTime() + 86400_000) : null)) : null;
+      const r = recipients.find((x) => x.id === inv.recipientId);
+      if (!r) {
+        // recipient removed (e.g. import rolled back): never send, never crash the whole dispatch
+        await tx.digitalInvitation.update({ where: { id: inv.id }, data: { status: "FAILED" } });
+        continue;
+      }
+      const token = c.rsvpEnabled ? await issueRsvpToken(tx, orgId, inv, rsvpTokenExpiry(c.rsvpDeadline, event?.endsAt ?? null)) : null;
       const vars = personalization(r, { locale, eventName: event?.name, eventDate: event?.startsAt, rsvpLink: token ? `${APP()}/rsvp/${token}` : "", optOutLink: token ? `${APP()}/rsvp/${token}?optout=1` : "" });
       const body = renderTemplate(c.bodyTemplate ?? "", vars);
       const job = await tx.messageJob.upsert({
@@ -47,6 +65,7 @@ export async function dispatchCampaign(orgId: string, actorId: string, campaignI
     }
     return { jobIds: ids, campaign: c };
   }, { timeout: 120_000 });
+  if (!campaign) return { queued: 0 };
   for (const id of jobIds) await enqueue("message.send", { orgId, messageJobId: id }, { jobId: `msg-${id}`, attempts: 3, backoff: { type: "exponential", delay: 5000 } });
   await withTenant({ orgId, userId: actorId }, async (tx) => {
     const remaining = await tx.messageJob.count({ where: { invitation: { campaignId }, status: { in: ["QUEUED", "SENDING"] } } });
@@ -59,8 +78,16 @@ export async function dispatchCampaign(orgId: string, actorId: string, campaignI
 /** Sends one message. Idempotent via status compare-and-set; retryable failures throw for BullMQ backoff. */
 export async function sendMessageJob(orgId: string, messageJobId: string) {
   const claimed = await withTenant({ orgId }, async (tx) => {
-    const job = await tx.messageJob.findUnique({ where: { id: messageJobId } });
+    const job = await tx.messageJob.findUnique({ where: { id: messageJobId }, include: { invitation: { select: { campaignId: true } } } });
     if (!job || !["QUEUED", "SENDING"].includes(job.status)) return null;
+    if (job.invitation) {
+      // a campaign cancelled while its dispatch was in flight sends nothing more
+      const c = await tx.invitationCampaign.findUnique({ where: { id: job.invitation.campaignId }, select: { status: true } });
+      if (!c || c.status === "CANCELLED") {
+        await tx.messageJob.updateMany({ where: { id: job.id, status: job.status }, data: { status: "CANCELLED" } });
+        return null;
+      }
+    }
     if (job.invitationId) {
       const s = await tx.suppressionEntry.findUnique({ where: { organizationId_channel_address: { organizationId: orgId, channel: job.channel, address: job.to } } });
       if (s) {
@@ -99,6 +126,19 @@ export async function sendMessageJob(orgId: string, messageJobId: string) {
     if (process.env.JOBS_MODE === "inline") return sendMessageJob(orgId, messageJobId);
     throw e;
   }
+}
+
+/**
+ * Scheduler step: sends SCHEDULED campaigns whose time has come. Idempotent — dispatchCampaign claims
+ * each campaign with a SCHEDULED → SENDING compare-and-set, so overlapping ticks send once.
+ */
+export async function dispatchDueCampaigns(orgId: string, now = new Date()) {
+  const due = await withTenant({ orgId }, (tx) =>
+    tx.invitationCampaign.findMany({ where: { type: "DIGITAL", status: "SCHEDULED", OR: [{ scheduledAt: null }, { scheduledAt: { lte: now } }] }, select: { id: true, approvedById: true, createdById: true }, take: 20 }),
+  );
+  let sent = 0;
+  for (const c of due) sent += (await dispatchCampaign(orgId, c.approvedById ?? c.createdById, c.id)).queued;
+  return { campaigns: due.length, queued: sent };
 }
 
 async function finishCampaignIfDone(orgId: string, invitationId: string | null) {

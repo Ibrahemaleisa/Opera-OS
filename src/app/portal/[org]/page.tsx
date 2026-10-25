@@ -10,7 +10,7 @@ import { guardPage } from "@/server/page-guard";
 
 async function PortalHome({ params }: { params: Promise<{ org: string }> }) {
   const { org } = await params;
-  const ctx = await requirePageContext(org);
+  const ctx = await requirePageContext(org, "portal");
   const { m, fmt } = await getI18n();
   const t = m.portal;
   const data = await portalHome(ctx);
@@ -22,7 +22,7 @@ async function PortalHome({ params }: { params: Promise<{ org: string }> }) {
           {data.projects.map((p) => (
             <Link key={p.id} href={`/portal/${org}/projects/${p.id}`} className="grid gap-3 rounded-xl border bg-card p-5 hover:border-primary/40" data-testid="portal-project">
               <div className="flex items-start justify-between gap-2"><div><div className="font-medium">{p.name}</div><div className="ltr-nums text-xs text-muted-foreground">{p.code}</div></div><StatusBadge status={p.status} label={m.enums.projectStatus[p.status]} /></div>
-              {p.eventStartAt && <div className="flex items-center gap-1.5 text-xs text-muted-foreground"><CalendarDays className="size-3.5" /> <span className="ltr-nums">{formatDate(p.eventStartAt, fmt)}</span></div>}
+              {p.eventStartAt && <div className="flex items-center gap-1.5 text-xs text-muted-foreground"><CalendarDays className="size-3.5" /> <time dateTime={new Date(p.eventStartAt).toISOString()} className="tabular [unicode-bidi:isolate]">{formatDate(p.eventStartAt, fmt)}</time></div>}
               <div><div className="mb-1 flex justify-between text-xs"><span>{t.progress}</span><span className="tabular">{formatPercent(p.progress.ratio, fmt)}</span></div><ProgressBar value={(p.progress.ratio ?? 0) * 100} /></div>
               {p.pendingApprovals > 0 && <span className="w-fit rounded bg-warning-soft px-2 py-0.5 text-xs text-warning">{t.pending}: {p.pendingApprovals}</span>}
             </Link>

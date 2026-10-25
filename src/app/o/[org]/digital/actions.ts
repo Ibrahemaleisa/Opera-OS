@@ -8,7 +8,8 @@ import { assertCan } from "@/server/authz/policy";
 import { withTenant } from "@/server/db/tenant";
 import { NotFoundError } from "@/server/errors";
 
-export const saveDigitalCampaignAction = orgAction(dg.digitalCampaignSchema, (ctx, i) => dg.saveDigitalCampaign(ctx, i).then((c) => ({ id: c.id })));
+// approvalInvalidated: the edit voided a pending/given approval and returned the campaign to DRAFT (UI should say so)
+export const saveDigitalCampaignAction = orgAction(dg.digitalCampaignSchema, (ctx, i) => dg.saveDigitalCampaign(ctx, i).then((c) => ({ id: c.id, approvalInvalidated: "approvalInvalidated" in c ? c.approvalInvalidated : false })));
 export const addAudienceAction = orgAction(z.object({ campaignId: z.string(), recipientIds: z.array(z.string()).min(1).max(5000) }), dg.addAudience);
 export const removeAudienceAction = orgAction(z.object({ campaignId: z.string(), invitationIds: z.array(z.string()).min(1) }), dg.removeAudience);
 export const requestCampaignApprovalAction = orgAction(z.object({ campaignId: z.string() }), (ctx, i) => dg.requestCampaignApproval(ctx, i.campaignId).then(() => null));

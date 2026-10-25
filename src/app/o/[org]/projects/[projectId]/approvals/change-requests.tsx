@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
+import { ActionButton } from "@/components/app/action-button";
 import { Textarea } from "@/components/ui/textarea";
 import { Section } from "@/components/app/page";
 import { StatusBadge } from "@/components/app/status-badge";
@@ -29,7 +30,7 @@ export function ChangeRequests({ orgSlug, rows, canRespond }: { orgSlug: string;
               <div className="grid gap-2">
                 <Textarea rows={2} value={text[r.id] ?? ""} onChange={(e) => setText((x) => ({ ...x, [r.id]: e.target.value }))} placeholder={t.response} />
                 <div className="flex gap-2">
-                  {r.status === "OPEN" && <Button size="xs" variant="outline" onClick={() => respond.run({ id: r.id, status: "UNDER_REVIEW", response: text[r.id] || null })}>{t.review}</Button>}
+                  {r.status === "OPEN" && <ActionButton size="xs" variant="outline" disabled={respond.pending} action={() => respond.run({ id: r.id, status: "UNDER_REVIEW", response: text[r.id] || null })}>{t.review}</ActionButton>}
                   <Button size="xs" disabled={!text[r.id]?.trim() || respond.pending} onClick={() => respond.run({ id: r.id, status: "ACCEPTED", response: text[r.id] })}>{t.accept}</Button>
                   <Button size="xs" variant="ghost" disabled={!text[r.id]?.trim() || respond.pending} onClick={() => respond.run({ id: r.id, status: "DECLINED", response: text[r.id] })}>{t.decline}</Button>
                 </div>

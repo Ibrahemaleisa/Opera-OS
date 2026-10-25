@@ -3,7 +3,11 @@ import { z } from "zod";
 import type { ServiceContext } from "@/server/authz/context";
 import { AppError } from "@/server/errors";
 import { requireActionContext } from "@/server/request";
-import { kickOutbox } from "@/server/jobs/dispatch";
+import { kickOutboxAfterResponse } from "@/server/jobs/dispatch";
+import { zodI18nError } from "@/lib/zod-i18n";
+
+// Validation messages become i18n keys (common.validation.*), so field errors read in the user's language.
+z.config({ customError: zodI18nError });
 
 export type ActionResult<T> =
   | { ok: true; data: T }
@@ -41,7 +45,7 @@ export function orgAction<S extends z.ZodType, R>(schema: S, handler: (ctx: Serv
       const parsed = schema.safeParse(input);
       if (!parsed.success) return { ok: false, code: "VALIDATION", error: "errors.validation", fieldErrors: zodFieldErrors(parsed.error) };
       const data = await handler(ctx, parsed.data);
-      void kickOutbox(ctx.orgId);
+      kickOutboxAfterResponse(ctx.orgId);
       return { ok: true, data };
     } catch (err) {
       return toActionError(err);

@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { NumberInput } from "@/components/app/number-input";
 import { DataTable } from "@/components/app/data-table";
 import { Field, NativeSelect } from "@/components/app/field";
 import { ProgressBar, Section } from "@/components/app/page";
@@ -276,7 +277,7 @@ function CreateTaskDialog({ orgSlug, projectId, workstreams, members, defaultWs,
             <Field label={m.common.assignee} error={errorFor("ownerId")}><NativeSelect name="ownerId"><option value="">{m.common.unassigned}</option>{members.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</NativeSelect></Field>
             <Field label={m.common.priority}><NativeSelect name="priority" defaultValue="MEDIUM">{Object.entries(m.enums.priority).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</NativeSelect></Field>
             <Field label={m.common.dueDate}><Input type="date" name="dueAt" dir="ltr" /></Field>
-            <Field label={m.tasks.estimate}><Input type="number" name="estimateMinutes" min={0} dir="ltr" /></Field>
+            <Field label={m.tasks.estimate}><NumberInput name="estimateMinutes" decimal={false} /></Field>
             <Field label={m.tasks.recurrence}><NativeSelect name="recurrence"><option value="">{m.tasks.recurNone}</option><option value="DAILY">{m.tasks.recurDaily}</option><option value="WEEKLY">{m.tasks.recurWeekly}</option><option value="MONTHLY">{m.tasks.recurMonthly}</option></NativeSelect></Field>
           </div>
           <Field label={m.tasks.tags}><Input name="tags" placeholder="vip, print" /></Field>

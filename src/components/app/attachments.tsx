@@ -5,14 +5,17 @@ import { useRef, useState } from "react";
 import { FileText, ImageIcon, Paperclip, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { formatRelative } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/client";
 import { TimeAgo } from "@/components/app/time-ago";
 import { fileUrlAction } from "@/app/o/[org]/projects/actions";
 
 export interface AttachmentRow { id: string; fileName: string; mimeType: string; size: number; version: number; createdAt: string | Date; clientVisible: boolean; kind?: string }
 
-export async function uploadFile(orgSlug: string, form: { file: File; entityType: string; entityId: string; kind?: string; clientVisible?: boolean; previousId?: string }) {
+/**
+ * Uploads one file. Never throws: a network failure, an oversized body rejected by a proxy
+ * (413 with an HTML page) or any non-JSON answer resolves as { ok: false, error: <i18n key> }.
+ */
+export async function uploadFile(orgSlug: string, form: { file: File; entityType: string; entityId: string; kind?: string; clientVisible?: boolean; previousId?: string }): Promise<{ ok: boolean; error?: string; data?: { id: string } }> {
   const fd = new FormData();
   fd.set("file", form.file);
   fd.set("entityType", form.entityType);
@@ -20,12 +23,22 @@ export async function uploadFile(orgSlug: string, form: { file: File; entityType
   if (form.kind) fd.set("kind", form.kind);
   if (form.clientVisible) fd.set("clientVisible", "true");
   if (form.previousId) fd.set("previousId", form.previousId);
-  const res = await fetch(`/api/o/${orgSlug}/upload`, { method: "POST", body: fd });
-  return (await res.json()) as { ok: boolean; error?: string; data?: { id: string } };
+  let res: Response;
+  try {
+    res = await fetch(`/api/o/${orgSlug}/upload`, { method: "POST", body: fd });
+  } catch {
+    return { ok: false, error: "common.net.uploadFailed" };
+  }
+  if (res.status === 413) return { ok: false, error: "common.net.fileTooLarge" };
+  try {
+    return (await res.json()) as { ok: boolean; error?: string; data?: { id: string } };
+  } catch {
+    return { ok: false, error: "common.net.uploadFailed" };
+  }
 }
 
 export function Attachments({ orgSlug, entityType, entityId, items, canUpload, allowClientVisible }: { orgSlug: string; entityType: string; entityId: string; items: AttachmentRow[]; canUpload: boolean; allowClientVisible?: boolean }) {
-  const { m, tk, fmt } = useI18n();
+  const { m, tk } = useI18n();
   const router = useRouter();
   const input = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
@@ -56,13 +69,17 @@ export function Attachments({ orgSlug, entityType, entityId, items, canUpload, a
             type="file"
             className="hidden"
             onChange={async (e) => {
-              const file = e.target.files?.[0];
+              const input = e.currentTarget;
+              const file = input.files?.[0];
               if (!file) return;
               setBusy(true);
-              const r = await uploadFile(orgSlug, { file, entityType, entityId, clientVisible });
-              setBusy(false);
-              e.target.value = "";
-              if (r.ok) { toast.success(m.common.saved); router.refresh(); } else toast.error(tk(r.error ?? "errors.unexpected"));
+              try {
+                const r = await uploadFile(orgSlug, { file, entityType, entityId, clientVisible });
+                if (r.ok) { toast.success(m.common.saved); router.refresh(); } else toast.error(tk(r.error ?? "errors.unexpected"));
+              } finally {
+                setBusy(false);
+                input.value = "";
+              }
             }}
           />
           <Button size="sm" variant="outline" disabled={busy} onClick={() => input.current?.click()}><Upload /> {busy ? m.tasks.uploading : m.tasks.upload}</Button>

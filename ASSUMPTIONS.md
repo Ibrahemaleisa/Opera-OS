@@ -60,7 +60,12 @@ Decisions made autonomously; each can be revisited.
     *including* VAT) — below it they are approved directly and the decision is audited.
 23. **Contract value** (revenue) is a separate field from the project budget (cost plan).
     Margin = (contract + approved change-order amounts) − forecast cost, where forecast per
-    budget line = max(committed POs + expenses not tied to a PO, actual expenses).
+    budget line = max(planned, committed POs + expenses not tied to a PO, actual expenses), and
+    the cost side of approved change orders is added on top (it is planned cost outside the
+    budget lines until the budget is edited). The plan is the floor until spend proves
+    otherwise, so a plan above the contract always reads as a negative margin; before this rule
+    an un-procured project showed ~100 % margin. The UI also shows the *planned* margin
+    (contract − plan) and how much of the plan is covered by commitments.
 24. **Awarding a quote that is not the lowest** requires a written justification; awarding
     creates a *draft* PO that still follows the PO approval rule.
 25. **Booth stage gates** are cumulative: moving forward checks every gate up to the target
@@ -80,3 +85,22 @@ Decisions made autonomously; each can be revisited.
 32. **Reports** never include recipient or guest personal data; personal-data exports stay
     in-project (delivery export, guest list) behind export and VIP scope.
 33. Notification email/digest preferences are stored but **not sent** yet (in-app only).
+34. **Project health v2** (`projects/health.ts`) is one computation shared by the portfolio, the
+    project overview and the Operations board. The schedule is anchored on the event start
+    (falling back to the deadline): expected progress = share of top-level tasks whose due
+    date has passed, compared with the share done, weighted ×1.5 within 21 days and ×2 within
+    7 days of the anchor. Deductions (capped): overdue work (priority- and client-visibility
+    weighted), unowned tasks due within 7 days, internal approvals past due, overdue or blocked
+    milestones, events within 7 days below 80 % ready, forecast above plan or above contract,
+    open HIGH+ incidents, blocked tasks, high risks. Client-owed approvals past due are shown
+    as "client delay" with no deduction. Good ≥ 75, watch ≥ 50, else critical; a blocker
+    (critical incident, overdue critical task, event readiness, forecast above contract) caps
+    the level at watch and sets `atRisk`, as does a score below 60. Finance reasons count for
+    every viewer but are worded without detail for viewers without finance scope.
+35. **Operations board ("Today")** lists exceptions only from projects that are not closed,
+    cancelled, completed or on hold, scoped like the portfolio (PMs see their projects).
+    An approval without its own due date is due 48 h after the request. Unowned work shows
+    when due within 14 days (within 3 days it is highlighted). Deliveries are an exception
+    when not yet out with less than 48 h to the campaign deadline. Money exceptions appear only
+    for projects the viewer has finance scope on. Team leads, employees and freelancers land
+    on My work instead of the board.

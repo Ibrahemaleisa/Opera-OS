@@ -6,6 +6,7 @@ import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@
 import { audit } from "@/server/modules/audit/audit";
 import { requestApprovalTx } from "@/server/modules/approvals/service";
 import { BUDGET_CATEGORIES, nextFinanceCode } from "./codes";
+import { COMMITTED_PO_STATUSES, loadFinanceSummaries } from "./forecast";
 
 export { BUDGET_CATEGORIES };
 
@@ -18,7 +19,7 @@ export const expenseSchema = z.object({ projectId: z.string(), budgetCategory: z
 export const changeOrderSchema = z.object({ projectId: z.string(), title: z.string().trim().min(3).max(200), description: optText(4000), amountDelta: z.coerce.number().min(-1e11).max(1e11), costDelta: z.coerce.number().min(-1e11).max(1e11).default(0), clientVisible: z.boolean().default(true) });
 
 /** PO statuses that count as committed spend. */
-const COMMITTED = ["APPROVED", "ISSUED", "PARTIALLY_RECEIVED", "RECEIVED", "CLOSED"] as const;
+const COMMITTED = COMMITTED_PO_STATUSES;
 const scoped = (ctx: ServiceContext) => ({ orgId: ctx.orgId, userId: ctx.userId });
 const n = (d: unknown) => Number(d ?? 0);
 
@@ -38,41 +39,12 @@ async function threshold(tx: Tx, orgId: string) {
   return Number((org.settings as { financeApprovalThreshold?: number } | null)?.financeApprovalThreshold ?? 50000);
 }
 
-/** Planned vs committed vs actual per budget category, computed from records (never stored aggregates). */
-async function computeSummary(tx: Tx, projectIds: string[]) {
-  const [budgets, pos, expenses, cos, projects] = await Promise.all([
-    tx.budget.findMany({ where: { projectId: { in: projectIds } } }),
-    tx.purchaseOrder.findMany({ where: { projectId: { in: projectIds }, status: { in: [...COMMITTED] } }, select: { projectId: true, budgetCategory: true, amount: true } }),
-    tx.expense.findMany({ where: { projectId: { in: projectIds }, status: { in: ["APPROVED", "PAID"] } }, select: { projectId: true, budgetCategory: true, amount: true, purchaseOrderId: true } }),
-    tx.changeOrder.findMany({ where: { projectId: { in: projectIds }, status: "APPROVED" }, select: { projectId: true, amountDelta: true, costDelta: true } }),
-    tx.project.findMany({ where: { id: { in: projectIds } }, select: { id: true, contractValue: true, budgetAmount: true } }),
-  ]);
-  return projectIds.map((pid) => {
-    const cats = new Set<string>([...budgets.filter((b) => b.projectId === pid).map((b) => b.category), ...pos.filter((p) => p.projectId === pid).map((p) => p.budgetCategory), ...expenses.filter((e) => e.projectId === pid).map((e) => e.budgetCategory)]);
-    const lines = [...cats].map((category) => {
-      const planned = n(budgets.find((b) => b.projectId === pid && b.category === category)?.planned);
-      const committed = pos.filter((p) => p.projectId === pid && p.budgetCategory === category).reduce((a, p) => a + n(p.amount), 0);
-      const actual = expenses.filter((e) => e.projectId === pid && e.budgetCategory === category).reduce((a, e) => a + n(e.amount), 0);
-      // expenses billed against a PO are part of that commitment, others add to it
-      const unbackedActual = expenses.filter((e) => e.projectId === pid && e.budgetCategory === category && !e.purchaseOrderId).reduce((a, e) => a + n(e.amount), 0);
-      const forecast = Math.max(committed + unbackedActual, actual);
-      return { category, planned, committed, actual, forecast, variance: planned - forecast, overBudget: planned > 0 ? forecast > planned : forecast > 0 };
-    });
-    lines.sort((a, b) => BUDGET_CATEGORIES.indexOf(a.category as never) - BUDGET_CATEGORIES.indexOf(b.category as never));
-    const sum = (k: "planned" | "committed" | "actual" | "forecast") => lines.reduce((a, l) => a + l[k], 0);
-    const p = projects.find((x) => x.id === pid)!;
-    const co = cos.filter((c) => c.projectId === pid);
-    const contract = p.contractValue === null ? null : n(p.contractValue) + co.reduce((a, c) => a + n(c.amountDelta), 0);
-    const forecast = sum("forecast");
-    return {
-      projectId: pid,
-      lines,
-      totals: { planned: sum("planned") + co.reduce((a, c) => a + n(c.costDelta), 0), committed: sum("committed"), actual: sum("actual"), forecast },
-      contract: { original: p.contractValue === null ? null : n(p.contractValue), revised: contract, changeOrders: co.reduce((a, c) => a + n(c.amountDelta), 0) },
-      margin: contract === null ? null : { amount: contract - forecast, ratio: contract ? (contract - forecast) / contract : null },
-    };
-  });
-}
+/**
+ * Planned vs committed vs actual per budget category, computed from records (never stored
+ * aggregates). The forecast rule lives in ./forecast so the health score and the operations
+ * board use the same numbers.
+ */
+const computeSummary = (tx: Tx, projectIds: string[]) => loadFinanceSummaries(tx, projectIds);
 
 // ── Queries ─────────────────────────────────────────────────────────────────
 

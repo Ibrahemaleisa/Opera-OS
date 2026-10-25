@@ -11,13 +11,13 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { useI18n } from "@/lib/i18n/client";
 import { TimeAgo } from "@/components/app/time-ago";
-import { formatRelative } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { OperaWordmark } from "@/components/brand/logo";
 import { logoutAction, setCalendarAction, setLocaleAction } from "@/app/actions/session";
 import { markReadAction, notificationsAction } from "@/app/actions/shell";
 import { CommandPalette } from "./command-palette";
 import { SidebarNav, type NavSection } from "./sidebar";
+import { SkipLink } from "./skip-link";
 
 export interface ShellProps {
   org: { slug: string; name: string; brandColor: string };
@@ -82,6 +82,7 @@ export function AppShell({ org, user, orgs, nav, unread, children }: ShellProps)
 
   return (
     <div className="flex min-h-dvh">
+      <SkipLink />
       <aside className="no-print sticky top-0 hidden h-dvh w-60 shrink-0 bg-sidebar text-sidebar-foreground lg:block">{sidebar}</aside>
       <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
         <SheetContent side={locale === "ar" ? "right" : "left"} className="w-72 border-sidebar-border bg-sidebar p-0 text-sidebar-foreground [&>button]:text-sidebar-foreground">
@@ -108,7 +109,7 @@ export function AppShell({ org, user, orgs, nav, unread, children }: ShellProps)
             <UserMenu user={user} />
           </div>
         </header>
-        <main className="min-w-0 flex-1">{children}</main>
+        <main id="main-content" tabIndex={-1} className="min-w-0 flex-1 outline-none">{children}</main>
       </div>
       <CommandPalette orgSlug={org.slug} open={paletteOpen} onOpenChange={setPaletteOpen} nav={nav} />
     </div>
@@ -128,6 +129,7 @@ function PreferenceButtons() {
         size="sm"
         className="h-8 gap-1.5 px-2 text-xs"
         title={m.common.language}
+        aria-label={m.shell.switchLanguage}
         onClick={() => start(async () => { await setLocaleAction(locale === "ar" ? "en" : "ar"); router.refresh(); })}
       >
         <Globe className="size-3.5" />
@@ -160,7 +162,7 @@ interface NotificationItem {
 }
 
 function NotificationBell({ orgSlug, initialUnread }: { orgSlug: string; initialUnread: number }) {
-  const { m, tk, fmt } = useI18n();
+  const { m, tk } = useI18n();
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState<NotificationItem[]>([]);
   const [unread, setUnread] = useState(initialUnread);

@@ -75,15 +75,15 @@ export function DataTable<T>({
       enableHiding: false,
       header: ({ table }) => (
         <Checkbox
-          aria-label="select all"
+          aria-label={m.common.a11y.selectAll}
           checked={table.getIsAllPageRowsSelected() ? true : table.getIsSomePageRowsSelected() ? "indeterminate" : false}
           onCheckedChange={(v) => table.toggleAllPageRowsSelected(!!v)}
         />
       ),
-      cell: ({ row }) => <Checkbox aria-label="select row" checked={row.getIsSelected()} onCheckedChange={(v) => row.toggleSelected(!!v)} onClick={(e) => e.stopPropagation()} />,
+      cell: ({ row }) => <Checkbox aria-label={m.common.a11y.selectRow} checked={row.getIsSelected()} onCheckedChange={(v) => row.toggleSelected(!!v)} onClick={(e) => e.stopPropagation()} />,
     };
     return [select, ...columns];
-  }, [columns, selectable]);
+  }, [columns, selectable, m]);
 
   const table = useReactTable({
     data,

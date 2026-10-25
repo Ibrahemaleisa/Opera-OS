@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getI18n } from "@/lib/i18n/server";
-import { getSession } from "@/server/request";
+import { getSession, safeNextPath } from "@/server/request";
 import { LoginForm } from "./login-form";
 
 export const metadata = { title: "Sign in" };
@@ -9,7 +9,7 @@ export const metadata = { title: "Sign in" };
 export default async function LoginPage({ searchParams }: { searchParams: Promise<{ next?: string }> }) {
   const session = await getSession();
   const { next } = await searchParams;
-  if (session) redirect(next && next.startsWith("/") && !next.startsWith("//") ? next : "/select-org");
+  if (session) redirect(safeNextPath(next) ?? "/select-org");
   const { m } = await getI18n();
   return (
     <div>

@@ -51,7 +51,8 @@ test("Operra acceptance scenario", async ({ page, browser }) => {
   test.setTimeout(420_000);
   // 1. Agency admin creates organization
   await register(page, slug, `owner-${stamp}@example.test`);
-  await expect(page.getByRole("heading", { name: "لوحة القيادة" })).toBeVisible();
+  // the workspace home is now the Operations home (Milestone 1, F-10)
+  await expect(page.getByRole("heading", { name: "العمليات", level: 1 })).toBeVisible();
 
   // 2. Admin invites a project manager and delivery agents
   const pmInvite = await invite(page, `pm-${stamp}@example.test`, "مدير مشروع");

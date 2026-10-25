@@ -7,7 +7,7 @@ import { guardPage } from "@/server/page-guard";
 
 async function VendorHome({ params }: { params: Promise<{ org: string }> }) {
   const { org } = await params;
-  const ctx = await requirePageContext(org);
+  const ctx = await requirePageContext(org, "vendor");
   const { m } = await getI18n();
   if (!ctx.vendorId) return <EmptyState title={m.vendors.noWork} />;
   const data = await vendorPortal(ctx);

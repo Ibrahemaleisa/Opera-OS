@@ -3,13 +3,16 @@
 import { useState } from "react";
 import { Paperclip, Plus, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ActionButton } from "@/components/app/action-button";
 import { Attachments } from "@/components/app/attachments";
+import { ConfirmAction } from "@/components/app/confirm-action";
+import { DateText } from "@/components/app/date-text";
 import { EmptyState, Section, Stat } from "@/components/app/page";
 import { StatusBadge } from "@/components/app/status-badge";
 import { FormDialog, enumOptions, type FieldDef } from "@/components/app/form-dialog";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useAction } from "@/hooks/use-action";
-import { formatDate, formatMoney, formatPercent } from "@/lib/format";
+import { formatMoney, formatPercent } from "@/lib/format";
 import { interpolate } from "@/lib/i18n";
 import { useI18n } from "@/lib/i18n/client";
 import { cn } from "@/lib/utils";
@@ -152,7 +155,21 @@ export function ProjectFinance({ orgSlug, data }: { orgSlug: string; data: D }) 
                 {can && (
                   <div className="flex flex-wrap gap-1">
                     {p.status === "DRAFT" && <Button size="xs" onClick={() => submitPo.run({ id: p.id })} disabled={submitPo.pending} data-testid="po-submit"><Send /> {t.submit}</Button>}
-                    {PO_NEXT[p.status]?.map((n) => <Button key={n.to} size="xs" variant={n.to === "CANCELLED" ? "ghost" : "outline"} className={n.to === "CANCELLED" ? "text-danger" : undefined} onClick={() => poStatus.run({ id: p.id, status: n.to })}>{t[n.key]}</Button>)}
+                    {PO_NEXT[p.status]?.map((n) =>
+                      n.to === "CANCELLED" ? (
+                        <ConfirmAction
+                          key={n.to}
+                          trigger={<Button size="xs" variant="ghost" className="text-danger">{t[n.key]}</Button>}
+                          title={interpolate(m.common.confirmDialog.cancelPoTitle, { name: p.code })}
+                          description={m.common.confirmDialog.cancelPoBody}
+                          confirmLabel={t[n.key]}
+                          destructive
+                          onConfirm={() => poStatus.run({ id: p.id, status: n.to })}
+                        />
+                      ) : (
+                        <ActionButton key={n.to} size="xs" variant="outline" action={() => poStatus.run({ id: p.id, status: n.to })}>{t[n.key]}</ActionButton>
+                      ),
+                    )}
                   </div>
                 )}
               </li>
@@ -168,12 +185,12 @@ export function ProjectFinance({ orgSlug, data }: { orgSlug: string; data: D }) 
               <li key={e.id} className="grid gap-2 px-4 py-3 md:grid-cols-[1fr_130px_120px_110px_auto] md:items-center" data-testid="expense-row" data-status={e.status}>
                 <div><div className="text-[13px] font-medium">{e.description}</div><div className="text-[11px] text-muted-foreground">{m.enums.budgetCategory[e.budgetCategory as keyof typeof m.enums.budgetCategory]}{e.vendorName ? ` · ${e.vendorName}` : ""}</div></div>
                 <span className="tabular text-xs">{money(e.amount + e.vatAmount)}</span>
-                <span className="ltr-nums text-xs text-muted-foreground">{formatDate(e.incurredAt, fmt)}</span>
+                <DateText value={e.incurredAt} className="text-xs text-muted-foreground" />
                 <button className={cn("flex items-center gap-1 text-xs hover:underline", e.evidenceCount ? "text-success" : "text-warning")} onClick={() => setEvidenceFor(e)} data-testid="expense-evidence"><Paperclip className="size-3.5" /> {e.evidenceCount || t.attachEvidence}</button>
                 <div className="flex flex-wrap items-center gap-1">
                   <StatusBadge status={e.status === "SUBMITTED" && e.approval?.status === "PENDING" ? "PENDING_APPROVAL" : e.status} label={e.status === "SUBMITTED" && e.approval?.status === "PENDING" ? m.enums.poStatus.PENDING_APPROVAL : m.enums.expenseStatus[e.status]} />
                   {["SUBMITTED", "REJECTED"].includes(e.status) && e.approval?.status !== "PENDING" && <Button size="xs" variant="outline" disabled={reqExp.pending || !e.evidenceCount} title={e.evidenceCount ? undefined : t.evidenceRequired} onClick={() => reqExp.run({ id: e.id })} data-testid="expense-request">{t.requestApproval}</Button>}
-                  {can && e.status === "APPROVED" && <Button size="xs" variant="outline" onClick={() => paid.run({ id: e.id })}>{t.markPaid}</Button>}
+                  {can && e.status === "APPROVED" && <ActionButton size="xs" variant="outline" action={() => paid.run({ id: e.id })}>{t.markPaid}</ActionButton>}
                 </div>
               </li>
             ))}
@@ -191,7 +208,7 @@ export function ProjectFinance({ orgSlug, data }: { orgSlug: string; data: D }) 
                 <span className="tabular text-xs text-muted-foreground">{t.costDelta}: {money(c.costDelta)}</span>
                 <div className="flex flex-wrap items-center gap-1">
                   <StatusBadge status={c.status === "PENDING" && !c.approvalId ? "DRAFT" : c.status} label={c.status === "PENDING" && !c.approvalId ? m.enums.poStatus.DRAFT : m.enums.approvalStatus[c.status]} />
-                  {can && c.status === "PENDING" && !c.approvalId && <><Button size="xs" variant="outline" onClick={() => submitCo.run({ id: c.id, approverType: "INTERNAL" })}>{t.toInternal}</Button>{c.clientVisible && <Button size="xs" onClick={() => submitCo.run({ id: c.id, approverType: "CLIENT" })}>{t.toClient}</Button>}</>}
+                  {can && c.status === "PENDING" && !c.approvalId && <><ActionButton size="xs" variant="outline" action={() => submitCo.run({ id: c.id, approverType: "INTERNAL" })}>{t.toInternal}</ActionButton>{c.clientVisible && <ActionButton size="xs" action={() => submitCo.run({ id: c.id, approverType: "CLIENT" })}>{t.toClient}</ActionButton>}</>}
                 </div>
               </li>
             ))}

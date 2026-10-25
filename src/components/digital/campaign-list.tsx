@@ -31,7 +31,7 @@ export function CampaignList({ orgSlug, projectId, campaigns, canCreate }: { org
             {campaigns.map((c) => (
               <li key={c.id}>
                 <Link href={`/o/${orgSlug}/projects/${c.projectId}/digital/${c.id}`} className="grid gap-2 px-4 py-3 hover:bg-muted/40 md:grid-cols-[1fr_140px_200px_120px] md:items-center">
-                  <div><div className="text-[13px] font-medium">{c.name}</div><div className="ltr-nums text-[11px] text-muted-foreground">{c.project.code} · {c.channel ? m.enums.channel[c.channel as keyof typeof m.enums.channel] : "—"}</div></div>
+                  <div><div className="text-[13px] font-medium">{c.name}</div><div className="text-[11px] text-muted-foreground"><span className="ltr-nums">{c.project.code}</span> · {c.channel ? m.enums.channel[c.channel as keyof typeof m.enums.channel] : "—"}</div></div>
                   <StatusBadge status={c.status} label={m.enums.campaignStatus[c.status as keyof typeof m.enums.campaignStatus]} />
                   <div><ProgressBar value={c.total ? (c.sent / c.total) * 100 : 0} /><div className="tabular mt-1 text-[11px] text-muted-foreground">{dg.sent}: {c.sent}/{c.total}</div></div>
                   <div className="tabular text-xs">{dg.attending}: {c.attending} <span className="text-muted-foreground">({formatPercent(c.sent ? c.responded / c.sent : null, fmt)})</span></div>

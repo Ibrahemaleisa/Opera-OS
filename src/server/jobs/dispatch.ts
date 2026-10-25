@@ -1,5 +1,6 @@
 import { getQueue, jobsMode, type JobName, type JobPayloads } from "./queue";
 import type { JobsOptions } from "bullmq";
+import { after } from "next/server";
 
 /**
  * Enqueue a job, or run it in-process when JOBS_MODE=inline or Redis is unavailable.
@@ -29,11 +30,27 @@ export async function kickOutbox(orgId: string) {
     if (jobsMode() === "inline") {
       const { processOutbox } = await import("@/server/modules/automation/engine");
       await processOutbox(orgId);
+      // no worker in inline mode: requests also release scheduled campaigns that have become due
+      const { dispatchDueCampaigns } = await import("@/server/modules/digital/sender");
+      await dispatchDueCampaigns(orgId);
       return;
     }
     const bucket = Math.floor(Date.now() / 1000);
     await enqueue("outbox", { orgId }, { jobId: `outbox-${orgId}-${bucket}`, attempts: 1 });
   } catch (err) {
     console.warn("[jobs] kickOutbox failed (worker sweep will retry)", (err as Error).message);
+  }
+}
+
+/**
+ * Runs kickOutbox after the response is sent, inside the request's lifetime (`after` → waitUntil on
+ * serverless), so the work isn't frozen with the function. Outside a request scope (scripts, worker,
+ * tests) it simply runs detached.
+ */
+export function kickOutboxAfterResponse(orgId: string) {
+  try {
+    after(() => kickOutbox(orgId));
+  } catch {
+    void kickOutbox(orgId);
   }
 }

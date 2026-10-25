@@ -18,6 +18,7 @@ import { interpolate } from "@/lib/i18n";
 import { useI18n } from "@/lib/i18n/client";
 import type { listRecipients, MaskedRecipient } from "@/server/modules/delivery/service";
 import { anonymizeAction, generateDeliveriesAction, revealRecipientAction, updateRecipientAction } from "@/app/o/[org]/delivery/actions";
+import { ActionButton } from "@/components/app/action-button";
 
 type Row = Awaited<ReturnType<typeof listRecipients>>["rows"][number];
 
@@ -42,7 +43,7 @@ export function RecipientRegistry({ orgSlug, rows, vip, campaigns, projectId, ca
       header: m.common.phone,
       cell: ({ row }) => {
         const rv = revealed[row.original.id];
-        return <span className="ltr-nums text-xs">{rv?.mobile ?? row.original.mobile ?? "—"}{row.original.masked && vip && !rv && row.original.mobile && <button className="ms-1 text-primary" title={m.delivery.revealAudited} onClick={(e) => { e.stopPropagation(); reveal.run({ recipientId: row.original.id }); }}><Eye className="inline size-3" /></button>}</span>;
+        return <span className="ltr-nums text-xs">{rv?.mobile ?? row.original.mobile ?? "—"}{row.original.masked && vip && !rv && row.original.mobile && <ActionButton variant="ghost" size="icon-xs" className="ms-1 text-primary" title={m.delivery.revealAudited} aria-label={m.delivery.revealAudited} onClick={(e) => e.stopPropagation()} action={() => reveal.run({ recipientId: row.original.id })}><Eye className="size-3" /></ActionButton>}</span>;
       },
     },
     { id: "area", accessorFn: (x) => `${x.city ?? ""} ${x.district ?? ""}`, header: m.common.city, cell: ({ row }) => <span className="text-xs">{[row.original.city, row.original.district].filter(Boolean).join(" · ")}</span> },

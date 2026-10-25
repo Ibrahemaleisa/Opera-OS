@@ -30,6 +30,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useI18n } from "@/lib/i18n/client";
 
 export const ICONS: Record<string, LucideIcon> = {
   dashboard: LayoutDashboard,
@@ -70,6 +71,7 @@ export interface NavSection {
 }
 
 export function SidebarNav({ sections, onNavigate }: { sections: NavSection[]; onNavigate?: () => void }) {
+  const { m } = useI18n();
   const pathname = usePathname();
   // longest-prefix match so /o/x/projects/123 highlights Projects, not Dashboard
   const all = sections.flatMap((s) => s.items);
@@ -77,7 +79,7 @@ export function SidebarNav({ sections, onNavigate }: { sections: NavSection[]; o
     .filter((i) => pathname === i.href || pathname.startsWith(i.href + "/"))
     .sort((a, b) => b.href.length - a.href.length)[0]?.href;
   return (
-    <nav className="flex flex-col gap-4 px-2 pt-2 pb-4">
+    <nav aria-label={m.common.a11y.mainNav} className="flex flex-col gap-4 px-2 pt-2 pb-4">
       {sections.map((s) => (
         <div key={s.label}>
           <div className="eyebrow mb-1 px-2 !text-sidebar-muted">{s.label}</div>

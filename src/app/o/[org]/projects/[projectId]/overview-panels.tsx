@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { MoreHorizontal, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -10,28 +10,49 @@ import { Textarea } from "@/components/ui/textarea";
 import { Field, NativeSelect } from "@/components/app/field";
 import { EmptyState, Section } from "@/components/app/page";
 import { StatusBadge } from "@/components/app/status-badge";
+import { ConfirmAction } from "@/components/app/confirm-action";
 import { useAction } from "@/hooks/use-action";
 import { formObject } from "@/lib/form";
 import { formatDate, parseRiyadhDate, toDateInput } from "@/lib/format";
+import { interpolate } from "@/lib/i18n";
 import { useI18n } from "@/lib/i18n/client";
 import { FormDialog, enumOptions, type FieldDef } from "@/components/app/form-dialog";
 import { saveDeliverableAction, saveMilestoneAction, saveRiskAction, setProjectStatusAction, updateProjectAction } from "../actions";
 
 const MS_STATUS = { PENDING: "PENDING", IN_PROGRESS: "IN_PROGRESS", BLOCKED: "BLOCKED", DONE: "DONE" } as const;
 
+/** Statuses that archive the project (reminders stop, approvals and launches are refused): confirm first. */
+const ARCHIVING = new Set(["COMPLETED", "CLOSED", "CANCELLED"]);
+
 export function ProjectStatusMenu({ orgSlug, projectId, status }: { orgSlug: string; projectId: string; status: string }) {
   const { m } = useI18n();
   const { run, pending } = useAction(setProjectStatusAction, { orgSlug });
+  const [confirmTo, setConfirmTo] = useState<string | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const labels = m.enums.projectStatus as Record<string, string>;
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild><Button variant="ghost" size="sm" disabled={pending}>{m.projects.changeStatus} <MoreHorizontal /></Button></DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        <DropdownMenuLabel className="text-xs">{m.projects.changeStatus}</DropdownMenuLabel>
-        {Object.entries(m.enums.projectStatus).filter(([k]) => k !== status).map(([k, v]) => (
-          <DropdownMenuItem key={k} onSelect={() => run({ id: projectId, status: k as never })}>{v}</DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild><Button ref={triggerRef} variant="ghost" size="sm" disabled={pending}>{m.projects.changeStatus} <MoreHorizontal /></Button></DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuLabel className="text-xs">{m.projects.changeStatus}</DropdownMenuLabel>
+          {Object.entries(labels).filter(([k]) => k !== status).map(([k, v]) => (
+            <DropdownMenuItem key={k} onSelect={() => (ARCHIVING.has(k) ? setConfirmTo(k) : run({ id: projectId, status: k as never }))}>{v}</DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <ConfirmAction
+        open={confirmTo !== null}
+        onOpenChange={(o) => !o && setConfirmTo(null)}
+        returnFocusTo={() => triggerRef.current}
+        title={interpolate(m.common.confirmDialog.projectStatusTitle, { status: confirmTo ? labels[confirmTo] : "" })}
+        description={m.common.confirmDialog.projectArchiveBody}
+        confirmLabel={confirmTo ? labels[confirmTo] : ""}
+        destructive={confirmTo === "CANCELLED"}
+        onConfirm={() => run({ id: projectId, status: confirmTo as never })}
+        testId="project-status-dialog"
+      />
+    </>
   );
 }
 

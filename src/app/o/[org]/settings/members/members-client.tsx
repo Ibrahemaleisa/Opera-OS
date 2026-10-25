@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import type { ColumnDef } from "@tanstack/react-table";
 import { Copy, MailPlus, MoreHorizontal, ShieldPlus } from "lucide-react";
 import { toast } from "sonner";
@@ -15,9 +15,11 @@ import { Section } from "@/components/app/page";
 import { StatusBadge } from "@/components/app/status-badge";
 import { useAction } from "@/hooks/use-action";
 import { formObject } from "@/lib/form";
-import { formatDate, formatRelative } from "@/lib/format";
+import { formatDate } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/client";
 import { TimeAgo } from "@/components/app/time-ago";
+import { ConfirmAction } from "@/components/app/confirm-action";
+import { interpolate } from "@/lib/i18n";
 import { changeRoleAction, inviteMemberAction, revokeInvitationAction, saveRoleAction, setMemberStatusAction } from "../actions";
 
 interface Member { id: string; userId: string; name: string; nameEn: string; email: string; status: string; roleId: string; baseRole: string; lastLoginAt: string | null; clientId: string | null; vendorId: string | null }
@@ -47,6 +49,13 @@ export function MembersClient(p: Props) {
   const changeRole = useAction(changeRoleAction, { orgSlug: p.orgSlug });
   const setStatus = useAction(setMemberStatusAction, { orgSlug: p.orgSlug });
   const revokeInv = useAction(revokeInvitationAction, { orgSlug: p.orgSlug });
+  // suspend / revoke are confirmed first; focus goes back to the row's actions button afterwards
+  const [statusAsk, setStatusAsk] = useState<{ member: Member; status: "SUSPENDED" | "REVOKED" } | null>(null);
+  const askedFor = useRef<string | null>(null);
+  const ask = (member: Member, status: "SUSPENDED" | "REVOKED") => {
+    askedFor.current = member.id;
+    setStatusAsk({ member, status });
+  };
 
   const columns = useMemo<ColumnDef<Member, unknown>[]>(
     () => [
@@ -90,15 +99,15 @@ export function MembersClient(p: Props) {
           p.canManage && row.original.userId !== p.currentUserId ? (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="ghost" size="icon-sm" aria-label={m.common.actions}><MoreHorizontal /></Button>
+                <Button variant="ghost" size="icon-sm" aria-label={`${m.common.actions} — ${locale === "ar" ? row.original.name : row.original.nameEn}`} data-member-actions={row.original.id}><MoreHorizontal /></Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
                 {row.original.status === "ACTIVE" ? (
-                  <DropdownMenuItem onSelect={() => setStatus.run({ membershipId: row.original.id, status: "SUSPENDED" })}>{m.org.suspend}</DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => ask(row.original, "SUSPENDED")}>{m.org.suspend}</DropdownMenuItem>
                 ) : (
                   <DropdownMenuItem onSelect={() => setStatus.run({ membershipId: row.original.id, status: "ACTIVE" })}>{m.org.activate}</DropdownMenuItem>
                 )}
-                <DropdownMenuItem variant="destructive" onSelect={() => setStatus.run({ membershipId: row.original.id, status: "REVOKED" })}>{m.org.revokeAccess}</DropdownMenuItem>
+                <DropdownMenuItem variant="destructive" onSelect={() => ask(row.original, "REVOKED")}>{m.org.revokeAccess}</DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
           ) : null,
@@ -116,6 +125,17 @@ export function MembersClient(p: Props) {
       >
         <DataTable data={p.members} columns={columns} getRowId={(r) => r.id} />
       </Section>
+      <ConfirmAction
+        open={!!statusAsk}
+        onOpenChange={(o) => !o && setStatusAsk(null)}
+        returnFocusTo={() => document.querySelector<HTMLElement>(`[data-member-actions="${askedFor.current}"]`)}
+        title={statusAsk ? interpolate(statusAsk.status === "REVOKED" ? m.common.confirmDialog.revokeMemberTitle : m.common.confirmDialog.suspendMemberTitle, { name: locale === "ar" ? statusAsk.member.name : statusAsk.member.nameEn }) : ""}
+        description={statusAsk?.status === "REVOKED" ? m.common.confirmDialog.revokeMemberBody : m.common.confirmDialog.suspendMemberBody}
+        confirmLabel={statusAsk?.status === "REVOKED" ? m.org.revokeAccess : m.org.suspend}
+        destructive
+        onConfirm={() => (statusAsk ? setStatus.run({ membershipId: statusAsk.member.id, status: statusAsk.status }) : undefined)}
+        testId="member-status-confirm"
+      />
 
       {p.invitations.length > 0 && (
         <Section title={`${m.org.pendingInvites} (${p.invitations.length})`}>
@@ -126,7 +146,16 @@ export function MembersClient(p: Props) {
                   <div className="ltr-nums text-sm">{i.email}</div>
                   <div className="text-xs text-muted-foreground">{roleName(i.roleId)} · {formatDate(i.expiresAt, fmt)}</div>
                 </div>
-                {p.canManage && <Button variant="ghost" size="sm" onClick={() => revokeInv.run({ id: i.id })}>{m.org.revokeInvite}</Button>}
+                {p.canManage && (
+                  <ConfirmAction
+                    trigger={<Button variant="ghost" size="sm" className="text-danger">{m.org.revokeInvite}</Button>}
+                    title={interpolate(m.common.confirmDialog.revokeInviteTitle, { email: i.email })}
+                    description={m.common.confirmDialog.revokeInviteBody}
+                    confirmLabel={m.org.revokeInvite}
+                    destructive
+                    onConfirm={() => revokeInv.run({ id: i.id })}
+                  />
+                )}
               </li>
             ))}
           </ul>

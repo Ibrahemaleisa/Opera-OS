@@ -14,6 +14,7 @@ import { useAction } from "@/hooks/use-action";
 import { formObject } from "@/lib/form";
 import { useI18n } from "@/lib/i18n/client";
 import { saveVenueAction } from "../actions";
+import { NumberInput } from "@/components/app/number-input";
 
 interface Venue { id: string; name: string; nameEn: string | null; city: string; district: string | null; address: string | null; mapsUrl: string | null; capacity: number | null; notes: string | null; projects: number }
 
@@ -44,7 +45,7 @@ export function VenuesClient({ orgSlug, venues }: { orgSlug: string; venues: Ven
               <Field label={m.common.nameEn}><Input name="nameEn" defaultValue={current?.nameEn ?? ""} dir="ltr" /></Field>
               <Field label={m.common.city} required error={save.errorFor("city")}><Input name="city" defaultValue={current?.city} required /></Field>
               <Field label={m.common.district}><Input name="district" defaultValue={current?.district ?? ""} /></Field>
-              <Field label={m.org.capacity}><Input name="capacity" type="number" min={0} defaultValue={current?.capacity ?? ""} dir="ltr" /></Field>
+              <Field label={m.org.capacity}><NumberInput name="capacity" decimal={false} defaultValue={current?.capacity ?? ""} /></Field>
               <Field label={m.org.mapsUrl} error={save.errorFor("mapsUrl")}><Input name="mapsUrl" type="url" defaultValue={current?.mapsUrl ?? ""} dir="ltr" /></Field>
             </div>
             <Field label={m.common.address}><Input name="address" defaultValue={current?.address ?? ""} /></Field>

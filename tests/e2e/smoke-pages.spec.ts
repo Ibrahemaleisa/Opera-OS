@@ -14,7 +14,7 @@ test("org pages render and report export downloads", async ({ page }) => {
   await page.click("button[type=submit]");
   await page.waitForURL(`**/o/${slug}`);
   const pages: [string, RegExp][] = [
-    ["", /لوحة القيادة/], ["/projects", /المشاريع/], ["/my-work", /مهامي|أعمالي/], ["/templates", /القوالب/], ["/delivery", /توصيل/], ["/recipients", /سجل/], ["/dispatch", /التوزيع/],
+    ["", /العمليات/], ["/projects", /المشاريع/], ["/my-work", /مهامي|أعمالي/], ["/templates", /القوالب/], ["/delivery", /توصيل/], ["/recipients", /سجل/], ["/dispatch", /التوزيع/],
     ["/digital", /الدعوات الرقمية/], ["/events", /مركز القيادة/], ["/protocol", /لوحة الوصول/], ["/booths", /الأجنحة/], ["/vendors", /الموردون/], ["/resources", /الموارد/],
     ["/finance", /المالية/], ["/reports", /التقارير/], ["/notifications", /الإشعارات/], ["/settings", /عام/], ["/settings/automation", /قواعد الأتمتة/], ["/settings/providers", /مزودو الإرسال/], ["/settings/audit", /التدقيق/],
   ];

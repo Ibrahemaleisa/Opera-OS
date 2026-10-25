@@ -15,6 +15,8 @@ export function LoginForm({ next }: { next?: string }) {
   const [pending, start] = useTransition();
   return (
     <form
+      // POST so a submit before hydration never puts credentials in the URL.
+      method="post"
       className="mt-8 grid gap-4"
       onSubmit={(e) => {
         e.preventDefault();

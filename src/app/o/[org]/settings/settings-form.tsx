@@ -8,6 +8,7 @@ import { useAction } from "@/hooks/use-action";
 import { formObject } from "@/lib/form";
 import { useI18n } from "@/lib/i18n/client";
 import { updateOrgAction } from "./actions";
+import { DigitsInput, NumberInput } from "@/components/app/number-input";
 
 export function OrgSettingsForm({ orgSlug, initial }: { orgSlug: string; initial: Record<string, string | number> }) {
   const { m } = useI18n();
@@ -26,17 +27,17 @@ export function OrgSettingsForm({ orgSlug, initial }: { orgSlug: string; initial
           <Field label={m.common.nameEn}><Input name="nameEn" defaultValue={initial.nameEn} dir="ltr" /></Field>
           <Field label={m.org.legalName}><Input name="legalName" defaultValue={initial.legalName} /></Field>
           <Field label={m.common.city}><Input name="city" defaultValue={initial.city} /></Field>
-          <Field label={m.org.crNumber}><Input name="crNumber" defaultValue={initial.crNumber} dir="ltr" inputMode="numeric" /></Field>
-          <Field label={m.org.vatNumber}><Input name="vatNumber" defaultValue={initial.vatNumber} dir="ltr" inputMode="numeric" /></Field>
+          <Field label={m.org.crNumber}><DigitsInput name="crNumber" defaultValue={initial.crNumber} /></Field>
+          <Field label={m.org.vatNumber}><DigitsInput name="vatNumber" defaultValue={initial.vatNumber} /></Field>
           <Field label={m.common.email} error={errorFor("email")}><Input name="email" type="email" defaultValue={initial.email} dir="ltr" /></Field>
-          <Field label={m.common.phone}><Input name="phone" defaultValue={initial.phone} dir="ltr" /></Field>
+          <Field label={m.common.phone}><DigitsInput kind="tel" name="phone" defaultValue={initial.phone} /></Field>
         </div>
       </Section>
       <Section title={m.org.branding}>
         <div className="grid gap-4 p-4 sm:grid-cols-3">
-          <Field label={m.org.brandColor} error={errorFor("brandColor")}>
+          <Field label={m.org.brandColor} error={errorFor("brandColor")} htmlFor="org-brand-color">
             <div className="flex gap-2">
-              <input type="color" name="brandColor" defaultValue={String(initial.brandColor)} className="h-9 w-12 cursor-pointer rounded-md border bg-card p-1" />
+              <input id="org-brand-color" type="color" name="brandColor" defaultValue={String(initial.brandColor)} className="h-9 w-12 cursor-pointer rounded-md border bg-card p-1" />
             </div>
           </Field>
           <Field label={m.org.defaultLocale}>
@@ -55,8 +56,8 @@ export function OrgSettingsForm({ orgSlug, initial }: { orgSlug: string; initial
       </Section>
       <Section title={m.nav.finance}>
         <div className="grid gap-4 p-4 sm:grid-cols-2">
-          <Field label={m.org.financeThreshold} hint={m.org.financeThresholdHint}><Input name="financeApprovalThreshold" type="number" min={0} step="100" defaultValue={initial.financeApprovalThreshold} dir="ltr" /></Field>
-          <Field label={m.org.retentionDays} hint={m.org.retentionHint}><Input name="recipientRetentionDays" type="number" min={30} max={3650} defaultValue={initial.recipientRetentionDays} dir="ltr" /></Field>
+          <Field label={m.org.financeThreshold} hint={m.org.financeThresholdHint}><NumberInput name="financeApprovalThreshold" defaultValue={initial.financeApprovalThreshold} /></Field>
+          <Field label={m.org.retentionDays} hint={m.org.retentionHint}><NumberInput name="recipientRetentionDays" decimal={false} defaultValue={initial.recipientRetentionDays} /></Field>
         </div>
       </Section>
       <div><Button type="submit" disabled={pending}>{pending ? m.common.saving : m.common.save}</Button></div>

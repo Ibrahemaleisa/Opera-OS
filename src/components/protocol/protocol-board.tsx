@@ -12,11 +12,12 @@ import { FormDialog, enumOptions, type FieldDef } from "@/components/app/form-di
 import { ProgressBar, Section, Stat } from "@/components/app/page";
 import { StatusBadge } from "@/components/app/status-badge";
 import { useAction } from "@/hooks/use-action";
-import { formatTime } from "@/lib/format";
 import { interpolate } from "@/lib/i18n";
 import { useI18n } from "@/lib/i18n/client";
 import type { listGuests } from "@/server/modules/protocol/service";
 import { assignSeatAction, importGuestsAction, revealRestrictedAction, saveAssignmentAction, saveGuestAction, saveZoneAction, setAttendanceAction } from "@/app/o/[org]/protocol/actions";
+import { ActionButton } from "@/components/app/action-button";
+import { DateText } from "@/components/app/date-text";
 
 type D = Awaited<ReturnType<typeof listGuests>>;
 type G = D["guests"][number];
@@ -31,7 +32,7 @@ const NEXT: Record<string, { to: string; key: "markArrived" | "markSeated" | "ma
 };
 
 export function ProtocolBoard({ orgSlug, projectId, data }: { orgSlug: string; projectId: string; data: D }) {
-  const { m, fmt } = useI18n();
+  const { m } = useI18n();
   const t = m.protocol;
   const [q, setQ] = useState("");
   const [att, setAtt] = useState("");
@@ -74,7 +75,7 @@ export function ProtocolBoard({ orgSlug, projectId, data }: { orgSlug: string; p
     { accessorKey: "category", header: t.category, cell: ({ getValue }) => <span className="text-xs">{t.guestCategory[getValue() as keyof typeof t.guestCategory] ?? (getValue() as string)}</span> },
     { id: "seat", header: t.seat, cell: ({ row: { original: g } }) => <button className="text-xs hover:underline disabled:no-underline" disabled={!can} onClick={(e) => { e.stopPropagation(); setDlg({ kind: "seat", guest: g }); }}>{g.seatZoneId ? `${zoneName(g.seatZoneId)}${g.seatLabel ? ` · ${g.seatLabel}` : ""}` : <span className="text-muted-foreground">{can ? t.assignSeat : "—"}</span>}</button> },
     { id: "escort", header: t.escort, cell: ({ row: { original: g } }) => { const a = g.assignments[0]; return <button className="text-start text-xs hover:underline disabled:no-underline" disabled={!can} onClick={(e) => { e.stopPropagation(); setDlg({ kind: "assignment", guest: g }); }}>{a ? <><div>{person(a.escortId) ?? "—"}{a.checkpoint ? ` · ${a.checkpoint}` : ""}</div><div className="text-[10px] text-muted-foreground">{t.assignmentStatus[a.status as keyof typeof t.assignmentStatus]}</div></> : <span className="text-muted-foreground">{can ? "+" : "—"}</span>}</button>; } },
-    { accessorKey: "arrivalAt", header: t.arrivalAt, cell: ({ row: { original: g } }) => <span className="ltr-nums text-xs text-muted-foreground">{g.arrivalAt ? formatTime(g.arrivalAt, fmt) : "—"}{g.arrivalPoint ? ` · ${g.arrivalPoint}` : ""}</span> },
+    { accessorKey: "arrivalAt", header: t.arrivalAt, cell: ({ row: { original: g } }) => <span className="text-xs text-muted-foreground"><DateText value={g.arrivalAt} format="time" />{g.arrivalPoint ? ` · ${g.arrivalPoint}` : ""}</span> },
     {
       accessorKey: "attendance",
       header: m.common.status,
@@ -82,7 +83,7 @@ export function ProtocolBoard({ orgSlug, projectId, data }: { orgSlug: string; p
         <div className="flex flex-wrap items-center gap-1" data-testid={`guest-${g.id}`} data-attendance={g.attendance}>
           <StatusBadge status={g.attendance === "ARRIVED" || g.attendance === "SEATED" ? "DELIVERED" : g.attendance === "NO_SHOW" ? "FAILED" : g.attendance} label={m.enums.attendance[g.attendance]} />
           {can && NEXT[g.attendance]?.map((n) => <Button key={n.to} size="xs" variant={n.to === "ARRIVED" ? "default" : "outline"} disabled={attend.pending} onClick={(e) => { e.stopPropagation(); attend.run({ guestId: g.id, attendance: n.to as never, expected: g.attendance }); }}>{t[n.key]}</Button>)}
-          {data.scope.restricted && g.hasRestricted && !revealed[g.id] && <Button size="xs" variant="ghost" title={t.reveal} onClick={(e) => { e.stopPropagation(); reveal.run({ guestId: g.id }).then((r) => r.ok && setRevealed((x) => ({ ...x, [g.id]: r.data }))); }} data-testid="reveal-restricted"><Eye /></Button>}
+          {data.scope.restricted && g.hasRestricted && !revealed[g.id] && <ActionButton size="icon-xs" variant="ghost" title={t.reveal} aria-label={t.reveal} onClick={(e) => e.stopPropagation()} action={() => reveal.run({ guestId: g.id }).then((r) => r.ok && setRevealed((x) => ({ ...x, [g.id]: r.data })))} data-testid="reveal-restricted"><Eye /></ActionButton>}
         </div>
       ),
     },

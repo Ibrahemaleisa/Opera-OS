@@ -1,9 +1,11 @@
 import Link from "next/link";
-import { AlertTriangle, CheckCircle2, ClipboardCheck, Clock, Gauge } from "lucide-react";
-import { KV, Section, Stat } from "@/components/app/page";
+import { KV, Section } from "@/components/app/page";
 import { StatusBadge } from "@/components/app/status-badge";
-import { HealthPill } from "@/components/app/health";
 import { StatusRing } from "@/components/brand/status-ring";
+import { GapMark } from "@/components/brand/gap-mark";
+import { HealthWord, ReasonList } from "@/components/operations/health";
+import { relativeDay } from "@/components/operations/primitives";
+import { describeAudit } from "@/components/operations/describe-audit";
 import { formatDate, formatDual, formatMoney, formatPercent, formatRelative } from "@/lib/format";
 import { interpolate } from "@/lib/i18n";
 import { getI18n } from "@/lib/i18n/server";
@@ -18,20 +20,38 @@ async function ProjectOverviewPage({ params }: { params: Promise<{ org: string; 
   const ctx = await requirePageContext(org);
   const { m, fmt, locale } = await getI18n();
   const o = await getProjectOverview(ctx, projectId);
+  // health v2 comes with the overview: the same computation as the portfolio and the operations board
+  const { health } = o;
+  const financeVisible = o.scope.finance;
+  const now = new Date();
   const clients = o.scope.manage ? (await listClients(ctx)).map((c) => ({ id: c.id, name: c.name })) : [];
   const b = `/o/${org}/projects/${projectId}`;
   const p = o.project;
-  const progress = o.tasks.total ? o.tasks.done / o.tasks.total : 0;
+  const anchor = p.eventStartAt ?? p.deadline;
   const plain = JSON.parse(JSON.stringify(o)) as typeof o;
   return (
     <div className="grid gap-5">
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-        <Stat label={m.projects.health} value={<HealthPill health={o.health} />} icon={<Gauge />} hint={Object.entries(o.health.factors).filter(([, v]) => v).map(([k, v]) => `${k} −${v}`).join(" · ") || "—"} />
-        <Stat label={m.projects.progress} value={formatPercent(progress, fmt)} icon={<CheckCircle2 />} hint={interpolate(m.projects.tasksDone, { done: o.tasks.done, total: o.tasks.total })} />
-        <Stat label={m.projects.overdueTasks} value={o.tasks.overdue} tone={o.tasks.overdue ? "danger" : "default"} icon={<Clock />} href={`${b}/tasks?overdue=1`} />
-        <Stat label={m.projects.blockedTasks} value={o.tasks.blocked} tone={o.tasks.blocked ? "warning" : "default"} icon={<AlertTriangle />} href={`${b}/tasks?category=BLOCKED`} />
-        <Stat label={m.projects.pendingApprovals} value={o.approvals.length} icon={<ClipboardCheck />} href={`${b}/approvals`} />
-      </div>
+      <section aria-labelledby="project-health" className="surface grid gap-x-8 gap-y-3 p-4 md:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
+        <div className="flex flex-col gap-2">
+          <h2 id="project-health" className="eyebrow">{m.ops.health.title}</h2>
+          <div className="flex items-center gap-3">
+            <StatusRing state={health.progress.total > 0 && health.progress.done >= health.progress.total ? "complete" : health.level === "critical" ? "late" : health.level === "watch" ? "awaiting" : health.progress.done > 0 ? "inProgress" : "notStarted"} value={health.progress.total ? health.progress.done / health.progress.total : 0} size={32} />
+            <div>
+              <HealthWord health={health} m={m} className="text-base" />
+              <div className="tabular mt-0.5 text-xs text-muted-foreground">{interpolate(m.projects.tasksDone, { done: health.progress.done, total: health.progress.total })}</div>
+            </div>
+          </div>
+          <div className="text-xs text-muted-foreground">
+            {anchor ? (
+              <span className="font-medium text-foreground">{interpolate(p.eventStartAt ? m.ops.health.anchorEvent : m.ops.health.anchorDeadline, { when: relativeDay(anchor, now, fmt.locale) })}</span>
+            ) : (
+              <span className="inline-flex items-center gap-1 text-warning"><GapMark size={12} />{m.ops.health.noAnchor}</span>
+            )}
+            {health.schedule.expected !== null && <div className="tabular mt-0.5">{interpolate(m.ops.health.expected, { expected: formatPercent(health.schedule.expected, fmt), actual: formatPercent(health.schedule.actual, fmt) })}</div>}
+          </div>
+        </div>
+        <ReasonList health={health} m={m} financeVisible={financeVisible} projectHref={b} className="md:border-s md:ps-6" />
+      </section>
 
       <div className="grid gap-5 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
         <div className="grid content-start gap-5">
@@ -98,13 +118,16 @@ async function ProjectOverviewPage({ params }: { params: Promise<{ org: string; 
           {!o.scope.clientView && (
             <Section title={m.projects.activity} actions={<Link href={`${b}/activity`} className="text-xs text-primary">{m.common.view}</Link>}>
               <ul className="divide-y">
-                {o.activity.slice(0, 10).map((a) => (
-                  <li key={a.id} className="px-4 py-2 text-xs">
-                    <span className="font-medium">{a.actorName}</span> <span className="ltr-nums font-mono text-muted-foreground">{a.action}</span>
-                    {a.summary && <div className="truncate text-muted-foreground">{a.summary}</div>}
-                    <div className="text-[10px] text-muted-foreground">{formatRelative(a.createdAt, fmt)}</div>
-                  </li>
-                ))}
+                {o.activity.slice(0, 6).map((a) => {
+                  const d = describeAudit(a, m, fmt.locale);
+                  return (
+                    <li key={a.id} className="px-4 py-2 text-xs">
+                      <span className="font-medium"><bdi>{d.actor}</bdi></span> <span className="text-muted-foreground">· {d.title}</span>
+                      {d.detail && <div className="truncate text-muted-foreground"><bdi>{d.detail}</bdi></div>}
+                      <div className="text-[11px] text-muted-foreground">{formatRelative(a.createdAt, fmt)}</div>
+                    </li>
+                  );
+                })}
               </ul>
             </Section>
           )}

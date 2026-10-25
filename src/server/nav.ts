@@ -3,6 +3,9 @@ import type { ServiceContext } from "@/server/authz/context";
 import { can, canAny } from "@/server/authz/policy";
 import type { NavSection } from "@/components/app/sidebar";
 
+/** Roles whose home is My work: the org-wide Operations board is not their starting point. */
+const MY_WORK_HOME = new Set(["TEAM_LEAD", "EMPLOYEE", "FREELANCER"]);
+
 /** Navigation is derived from permissions — but every page re-checks server-side. */
 export function buildNav(ctx: ServiceContext, m: Messages, badges: { notifications?: number } = {}): NavSection[] {
   const b = `/o/${ctx.orgSlug}`;
@@ -11,9 +14,8 @@ export function buildNav(ctx: ServiceContext, m: Messages, badges: { notificatio
     {
       label: n.sectionOperate,
       items: [
-        { key: "dashboard", label: n.dashboard, href: b },
+        ...(MY_WORK_HOME.has(ctx.role) ? [{ key: "myWork", label: n.myWork, href: `${b}/my-work` }] : [{ key: "dashboard", label: n.dashboard, href: b }, { key: "myWork", label: n.myWork, href: `${b}/my-work` }]),
         { key: "projects", label: n.projects, href: `${b}/projects` },
-        { key: "myWork", label: n.myWork, href: `${b}/my-work` },
         ...(can(ctx, "template.manage") ? [{ key: "templates", label: n.templates, href: `${b}/templates` }] : []),
       ],
     },

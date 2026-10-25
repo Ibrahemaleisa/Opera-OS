@@ -10,7 +10,11 @@ import { Breadcrumbs, EmptyState, KV, Section, Stat } from "@/components/app/pag
 import { StatusBadge } from "@/components/app/status-badge";
 import { FormDialog, enumOptions, type FieldDef } from "@/components/app/form-dialog";
 import { useAction } from "@/hooks/use-action";
-import { formatDate, formatDateTime, formatMoney, formatNumber } from "@/lib/format";
+import { ActionButton } from "@/components/app/action-button";
+import { ConfirmAction } from "@/components/app/confirm-action";
+import { DateText } from "@/components/app/date-text";
+import { interpolate } from "@/lib/i18n";
+import { formatMoney, formatNumber } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/client";
 import { cn } from "@/lib/utils";
 import type { getBooth } from "@/server/modules/booths/service";
@@ -140,7 +144,14 @@ export function BoothWorkspace({ orgSlug, data }: { orgSlug: string; data: D }) 
           </div>
           <div className="ms-auto flex gap-2">
             {idx > 0 && (
-              <Button size="sm" variant="ghost" onClick={() => { const reason = window.prompt(t.reasonPrompt); if (reason?.trim()) stage.run({ boothId: b.id, stage: STAGES[idx - 1], reason }); }} title={t.moveBack}><ChevronLeft className="rtl:rotate-180" /></Button>
+              <ConfirmAction
+                trigger={<Button size="sm" variant="ghost" title={t.moveBack} aria-label={t.moveBack}><ChevronLeft className="rtl:rotate-180" /></Button>}
+                title={interpolate(m.common.confirmDialog.moveBackTitle, { name: m.enums.boothStage[STAGES[idx - 1]] })}
+                field={{ type: "textarea", label: t.reasonPrompt, required: true }}
+                confirmLabel={t.moveBack}
+                onConfirm={(reason) => stage.run({ boothId: b.id, stage: STAGES[idx - 1], reason })}
+                testId="booth-move-back"
+              />
             )}
             <Button size="sm" disabled={stage.pending || data.nextGates.length > 0} onClick={() => stage.run({ boothId: b.id, stage: data.nextStage! })} data-testid="booth-advance">{t.advance}: {m.enums.boothStage[data.nextStage]}</Button>
           </div>
@@ -174,10 +185,10 @@ export function BoothWorkspace({ orgSlug, data }: { orgSlug: string; data: D }) 
               <KV label={t.exhibition}>{b.exhibition ?? "—"}</KV>
               <KV label={t.size}><span className="ltr-nums">{[b.widthM, b.depthM, b.heightM].map((x) => x ?? "—").join(" × ")}</span></KV>
               <KV label={t.permit}><StatusBadge status={b.permitStatus === "APPROVED" ? "APPROVED" : b.permitStatus === "REJECTED" ? "REJECTED" : b.permitStatus === "SUBMITTED" ? "SUBMITTED" : "PENDING"} label={t.permitStatus[b.permitStatus as keyof typeof t.permitStatus]} /></KV>
-              <KV label={t.siteAccess}><span className="ltr-nums">{b.siteAccessAt ? formatDateTime(b.siteAccessAt, fmt) : "—"}</span></KV>
-              <KV label={t.buildStart}><span className="ltr-nums">{b.buildStartAt ? formatDateTime(b.buildStartAt, fmt) : "—"}</span></KV>
-              <KV label={t.handover}><span className="ltr-nums">{b.handoverAt ? formatDateTime(b.handoverAt, fmt) : "—"}</span></KV>
-              <KV label={t.dismantle}><span className="ltr-nums">{b.dismantleAt ? formatDateTime(b.dismantleAt, fmt) : "—"}</span></KV>
+              <KV label={t.siteAccess}><DateText value={b.siteAccessAt} format="datetime" /></KV>
+              <KV label={t.buildStart}><DateText value={b.buildStartAt} format="datetime" /></KV>
+              <KV label={t.handover}><DateText value={b.handoverAt} format="datetime" /></KV>
+              <KV label={t.dismantle}><DateText value={b.dismantleAt} format="datetime" /></KV>
             </dl>
           </Section>
         </div>
@@ -228,7 +239,18 @@ export function BoothWorkspace({ orgSlug, data }: { orgSlug: string; data: D }) 
                       <td className="tabular px-3 py-2">{money(x.committedCost)}</td>
                       <td className={cn("tabular px-3 py-2", x.actualCost > x.total && "text-danger")}>{money(x.actualCost)}</td>
                       <td className="px-3 py-2"><StatusBadge status={x.status === "INSTALLED" ? "DONE" : x.status === "PLANNED" ? "PLANNED" : "IN_PROGRESS"} label={t.boqStatus[x.status as keyof typeof t.boqStatus]} /></td>
-                      <td className="px-2 py-2">{can && x.committedCost === 0 && x.actualCost === 0 && <button className="text-muted-foreground hover:text-danger" onClick={(e) => { e.stopPropagation(); if (window.confirm(m.common.confirmDelete)) delBoq.run({ id: x.id, boothId: b.id }); }} aria-label={m.common.delete}><Trash2 className="size-3.5" /></button>}</td>
+                      <td className="px-2 py-2" onClick={(e) => e.stopPropagation()}>
+                        {can && x.committedCost === 0 && x.actualCost === 0 && (
+                          <ConfirmAction
+                            trigger={<Button variant="ghost" size="icon-sm" className="text-muted-foreground hover:text-danger" aria-label={`${m.common.delete} — ${x.description}`}><Trash2 className="size-3.5" /></Button>}
+                            title={interpolate(m.common.confirmDialog.deleteItemTitle, { name: x.description })}
+                            description={m.common.confirmDialog.irreversible}
+                            confirmLabel={m.common.delete}
+                            destructive
+                            onConfirm={() => delBoq.run({ id: x.id, boothId: b.id })}
+                          />
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -248,7 +270,7 @@ export function BoothWorkspace({ orgSlug, data }: { orgSlug: string; data: D }) 
                   <span className="text-[13px] font-medium">{t.inspectionType[i.type as keyof typeof t.inspectionType] ?? i.type}</span>
                   <StatusBadge status={i.result === "PASS" ? "DONE" : i.result === "FAIL" ? "FAILED" : "WARNING"} label={t.result[i.result as keyof typeof t.result]} />
                   <span className="text-xs text-muted-foreground">{i.notes}</span>
-                  <span className="ltr-nums text-[11px] text-muted-foreground">{person(i.inspectedById)} · {formatDateTime(i.inspectedAt, fmt)}</span>
+                  <span className="text-[11px] text-muted-foreground">{person(i.inspectedById)} · <DateText value={i.inspectedAt} format="datetime" /></span>
                 </li>
               ))}
             </ul>
@@ -267,8 +289,8 @@ export function BoothWorkspace({ orgSlug, data }: { orgSlug: string; data: D }) 
                   <StatusBadge status={s.status === "VERIFIED" ? "DONE" : s.status === "FIXED" ? "REVIEW" : s.status} label={t.snagStatus[s.status as keyof typeof t.snagStatus]} />
                   {can && (
                     <div className="flex gap-1">
-                      {["OPEN", "IN_PROGRESS"].includes(s.status) && <Button size="xs" variant="outline" onClick={() => snag.run({ id: s.id, status: "FIXED" })}>{t.markFixed}</Button>}
-                      {s.status === "FIXED" && <><Button size="xs" onClick={() => snag.run({ id: s.id, status: "VERIFIED" })}><Check /> {t.verify}</Button><Button size="xs" variant="ghost" onClick={() => snag.run({ id: s.id, status: "OPEN" })}>{t.reopen}</Button></>}
+                      {["OPEN", "IN_PROGRESS"].includes(s.status) && <ActionButton size="sm" variant="outline" action={() => snag.run({ id: s.id, status: "FIXED" })}>{t.markFixed}</ActionButton>}
+                      {s.status === "FIXED" && <><ActionButton size="sm" action={() => snag.run({ id: s.id, status: "VERIFIED" })}><Check /> {t.verify}</ActionButton><ActionButton size="sm" variant="ghost" action={() => snag.run({ id: s.id, status: "OPEN" })}>{t.reopen}</ActionButton></>}
                     </div>
                   )}
                 </li>
@@ -289,7 +311,7 @@ export function BoothWorkspace({ orgSlug, data }: { orgSlug: string; data: D }) 
               ))}
             </ul>
             {b.handoverSignedAt ? (
-              <p className="flex items-center gap-2 rounded-md bg-success-soft px-3 py-2 text-sm text-success"><FileSignature className="size-4" /> {t.signed}: {b.handoverSignedBy} · <span className="ltr-nums">{formatDate(b.handoverSignedAt, fmt)}</span></p>
+              <p className="flex items-center gap-2 rounded-md bg-success-soft px-3 py-2 text-sm text-success"><FileSignature className="size-4" /> {t.signed}: {b.handoverSignedBy} · <DateText value={b.handoverSignedAt} /></p>
             ) : can && (
               <form className="flex flex-wrap items-end gap-2" onSubmit={(e) => { e.preventDefault(); sign.run({ boothId: b.id, signedBy }); }}>
                 <label className="grid gap-1 text-xs">{t.signedBy}<Input value={signedBy} onChange={(e) => setSignedBy(e.target.value)} required minLength={2} className="w-64" /></label>

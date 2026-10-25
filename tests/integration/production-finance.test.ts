@@ -117,7 +117,11 @@ describe("vendors, procurement and finance controls", () => {
     expect(f.summary.totals.actual).toBe(1500);
     expect(f.summary.totals.committed).toBe(122000);
     expect(f.summary.contract.revised).toBe(230000);
-    expect(f.summary.margin?.amount).toBe(230000 - (120000 + 2000 + 1500));
+    // forecast per line = max(planned, committed + unbacked, actual): PRODUCTION 120,000 (over its
+    // 110,000 plan), PRINTING 5,000 (plan is the floor over the 2,000 PO), LOGISTICS 1,500; plus the
+    // approved change order's 18,000 cost (ASSUMPTIONS #23)
+    expect(f.summary.totals.forecast).toBe(120000 + 5000 + 1500 + 18000);
+    expect(f.summary.margin?.amount).toBe(230000 - (120000 + 5000 + 1500 + 18000));
     expect(f.purchaseOrders.find((p) => p.id === award.purchaseOrderId)?.status).toBe("ISSUED");
 
     // finance is hidden from members without finance scope; overview only lists accessible projects

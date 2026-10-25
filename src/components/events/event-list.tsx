@@ -9,14 +9,14 @@ import { EmptyState, ProgressBar, Section } from "@/components/app/page";
 import { StatusBadge } from "@/components/app/status-badge";
 import { FormDialog } from "@/components/app/form-dialog";
 import { useAction } from "@/hooks/use-action";
-import { formatDateTime } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/client";
 import { createEventAction } from "@/app/o/[org]/events/actions";
+import { DateText } from "@/components/app/date-text";
 
 interface E { id: string; name: string; phase: string; startsAt: Date; endsAt: Date; readiness: { ready: number; total: number }; openIncidents: number }
 
 export function EventList({ orgSlug, projectId, events, canManage }: { orgSlug: string; projectId: string; events: E[]; canManage: boolean }) {
-  const { m, fmt } = useI18n();
+  const { m } = useI18n();
   const t = m.events;
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -29,7 +29,7 @@ export function EventList({ orgSlug, projectId, events, canManage }: { orgSlug: 
             {events.map((e) => (
               <li key={e.id}>
                 <Link href={`/o/${orgSlug}/projects/${projectId}/events/${e.id}`} className="grid gap-2 px-4 py-3 hover:bg-muted/40 md:grid-cols-[1fr_120px_200px_100px] md:items-center" data-testid="event-link">
-                  <div><div className="text-[13px] font-medium">{e.name}</div><div className="ltr-nums text-[11px] text-muted-foreground">{formatDateTime(e.startsAt, fmt)}</div></div>
+                  <div><div className="text-[13px] font-medium">{e.name}</div><div className="text-[11px] text-muted-foreground"><DateText value={e.startsAt} format="datetime" /></div></div>
                   <StatusBadge status={e.phase} label={m.enums.eventPhase[e.phase as keyof typeof m.enums.eventPhase]} />
                   <div><ProgressBar value={e.readiness.total ? (e.readiness.ready / e.readiness.total) * 100 : 0} /><div className="tabular mt-1 text-[11px] text-muted-foreground">{t.readiness}: {e.readiness.ready}/{e.readiness.total}</div></div>
                   <span className={`flex items-center gap-1 text-xs ${e.openIncidents ? "text-danger" : "text-muted-foreground"}`}><AlertTriangle className="size-3.5" /> {e.openIncidents}</span>

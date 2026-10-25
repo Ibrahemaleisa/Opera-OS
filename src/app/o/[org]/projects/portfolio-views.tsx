@@ -10,6 +10,7 @@ import { DataTable } from "@/components/app/data-table";
 import { EmptyState, Section } from "@/components/app/page";
 import { PriorityMark, StatusBadge } from "@/components/app/status-badge";
 import { HealthPill } from "@/components/app/health";
+import { HealthCell } from "@/components/operations/health";
 import { StatusRing, type RingState } from "@/components/brand/status-ring";
 import { formatDate, formatMoney, TIMEZONE } from "@/lib/format";
 import { interpolate } from "@/lib/i18n";
@@ -18,6 +19,9 @@ import { cn } from "@/lib/utils";
 import type { PortfolioProject } from "@/server/modules/projects/service";
 
 type P = PortfolioProject;
+
+/** Health v2 rows carry their reasons; finance reasons stay redacted unless the list says the viewer has finance. */
+const financeVisible = (p: P) => Boolean((p as P & { financeVisible?: boolean }).financeVisible);
 
 function projectRingState(p: P): RingState {
   if (p.status === "COMPLETED" || p.progress >= 1) return "complete";
@@ -100,7 +104,7 @@ function ListView({ orgSlug, projects }: { orgSlug: string; projects: P[] }) {
       { id: "client", accessorFn: (r) => r.client?.name ?? "", header: m.projects.client, cell: ({ getValue }) => <span className="block min-w-28 text-[13px]">{getValue() as string}</span> },
       { accessorKey: "status", header: m.common.status, cell: ({ row }) => <StatusBadge status={row.original.status} label={m.enums.projectStatus[row.original.status]} /> },
       { accessorKey: "priority", header: m.common.priority, cell: ({ row }) => <PriorityMark priority={row.original.priority} label={m.enums.priority[row.original.priority]} /> },
-      { id: "health", accessorFn: (r) => r.health.score, header: m.projects.health, cell: ({ row }) => <HealthPill health={row.original.health} /> },
+      { id: "health", accessorFn: (r) => r.health.score, header: m.projects.health, cell: ({ row }) => <span className="block min-w-36"><HealthCell health={row.original.health} m={m} financeVisible={financeVisible(row.original)} /></span> },
       {
         id: "progress",
         accessorFn: (r) => r.progress,
@@ -136,7 +140,7 @@ function ProjectCard({ orgSlug, p }: { orgSlug: string; p: P }) {
     <Link href={`/o/${orgSlug}/projects/${p.id}`} className="surface block p-3 transition-colors hover:border-primary/50">
       <div className="flex items-start justify-between gap-2">
         <span className="ltr-nums font-mono text-[10px] text-muted-foreground">{p.code}</span>
-        <HealthPill health={p.health} compact />
+        <HealthPill health={p.health} compact financeVisible={financeVisible(p)} />
       </div>
       <div className="mt-1 text-[13px] leading-snug font-medium">{p.name}</div>
       {p.client && <div className="mt-0.5 text-xs text-muted-foreground">{p.client.name}</div>}
