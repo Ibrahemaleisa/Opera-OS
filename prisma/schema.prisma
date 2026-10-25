@@ -972,6 +972,7 @@ model Task {
   @@index([organizationId, dueAt])
   @@index([organizationId, workstreamId])
   @@index([organizationId, parentId])
+  @@index([organizationId, templateKey]) // owner suggestions: who did this template step before
 }
 
 model TaskCollaborator {
