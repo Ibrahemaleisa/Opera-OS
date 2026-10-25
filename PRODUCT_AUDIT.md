@@ -225,7 +225,8 @@ These change direction or cost and were **not** decided by the team:
 
 1. **Product strategy and naming.** The corporate site presents Opera as an execution company running
    its own projects on an in-house platform; the product is self-serve multi-tenant SaaS for agencies
-   (who are Opera's competitors), and the docs say "Operra Events OS" while the UI says "Opera".
+   (who are Opera's competitors), and the docs used a misspelled product name while the UI says "Opera".
+   *Decided: see §7.1.*
    Internal OS, separately-branded SaaS, or client-facing portal as a service differentiator? The
    answer decides billing, platform administration, CRM and ZATCA invoicing scope.
 2. **Data residency.** The deployment region is `iad1` (US East). Saudi government VIP lists likely
@@ -240,6 +241,18 @@ These change direction or cost and were **not** decided by the team:
    Before Milestone 1 such requests were accepted but could never be decided. Options: keep the
    strict rule (recommended for government work), or allow an owner self-approval with a mandatory
    justification that is audited and flagged on the Operations home.
+
+### 7.1 Owner decisions (October 2026, before Milestone 2)
+
+| # | Decision | Where it is applied |
+|---|---|---|
+| 1 | Opera is the parent brand; Opera Technologies develops the operational software, which serves agencies and organizations managing complex operations; execution services stay distinct; the name is "Opera", never "Operra" | README, PRODUCT_SPEC, UI and e-mail strings; legacy infrastructure identifiers kept and listed in ARCHITECTURE.md §10 |
+| 2 | Architect for Saudi-region deployment and data residency where required; no infrastructure migration and no sensitive government data until requirements are verified | BUSINESS_RULES.md §9 (configuration and checks only) |
+| 3 | In-app notifications and transactional e-mail first, with delivery tracking, retries, deduplication and escalation; WhatsApp later | BUSINESS_RULES.md §3 |
+| 4 | Requester ≠ approver and spend creator ≠ approver stay; the person who performed the work may approve when someone else requested, unless a stricter organisation policy applies | BUSINESS_RULES.md §4.1–4.2 |
+| 5 | Strict separation by default; an explicitly enabled, justified, audited and restricted exception for small organisations that never overrides regulatory or contractual requirements | BUSINESS_RULES.md §4.3 |
+
+Remaining questions raised while specifying Milestone 2 are listed in BUSINESS_RULES.md §11.
 
 ## 8. Decisions taken by the team (reversible)
 

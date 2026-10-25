@@ -150,6 +150,29 @@ function rowDetail(r: ExceptionRow, m: Messages, fmt: Fmt, now: Date) {
       chips.push(<Chip key="l" tone="warning">{interpolate(t.lines, { n: r.count ?? 0 })}</Chip>);
       chips.push(<Chip key="o" tone="warning">{interpolate(t.overBy, { amount: money(meta.overrun) })}</Chip>);
       break;
+    case "noApprover":
+      chips.push(<Chip key="n" tone="warning">{t.stewardship.noApprover}</Chip>);
+      break;
+    case "selfApproved":
+      if (r.owner) chips.push(<Chip key="s"><Bdi>{interpolate(t.stewardship.selfApprovedBy, { name: r.owner })}</Bdi></Chip>);
+      when = r.at ? relativeAge(r.at, now, fmt.locale) : null;
+      break;
+    case "unownedAfterDeparture":
+      if (meta.departed) chips.push(<Chip key="d" tone="warning"><Bdi>{interpolate(t.stewardship.departed, { name: String(meta.departed) })}</Bdi></Chip>);
+      when = r.at ? interpolate(t.dueOn, { when: relativeDay(r.at, now, fmt.locale) }) : null;
+      break;
+    case "pmChanged":
+    case "onHold":
+      if (meta.reason) chips.push(<Chip key="r"><Bdi>{interpolate(t.stewardship.onHoldReason, { reason: String(meta.reason) })}</Bdi></Chip>);
+      when = r.at ? relativeAge(r.at, now, fmt.locale) : null;
+      break;
+    case "stalledWork":
+      chips.push(<Chip key="s" tone="warning">{interpolate(t.stewardship.stalled, { sends: Number(meta.sends), imports: Number(meta.imports) })}</Chip>);
+      break;
+    case "openCommitment":
+      chips.push(<Chip key="c" tone="warning">{interpolate(t.stewardship.commitments, { pos: Number(meta.pos), expenses: Number(meta.expenses), workOrders: Number(meta.workOrders) })}</Chip>);
+      if (Number(meta.amount) > 0) chips.push(<Chip key="a">{money(meta.amount)}</Chip>);
+      break;
   }
   return { chips, when };
 }
@@ -166,7 +189,7 @@ function ExceptionItem({ r, m, fmt, now, base, className }: { r: ExceptionRow; m
         <Link href={`${base}${r.href}`} className="block truncate text-[13px] font-medium hover:text-primary">
           {number && <span className="ltr-nums font-normal text-muted-foreground">{number.trim()}</span>}
           {number && " "}
-          <Bdi>{r.title}</Bdi>
+          <Bdi>{r.kind === "stalledWork" ? t.stewardship.stalledTitle : r.title}</Bdi>
         </Link>
         <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
           <span className="ltr-nums">{r.project.code}</span>

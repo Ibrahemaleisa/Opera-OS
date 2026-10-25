@@ -33,7 +33,7 @@ export async function validateSessionToken(token: string) {
   const id = sha256Hex(token);
   const session = await db.session.findUnique({
     where: { id },
-    include: { user: { select: { id: true, email: true, name: true, nameAr: true, locale: true, calendar: true, theme: true, isPlatformAdmin: true } } },
+    include: { user: { select: { id: true, email: true, name: true, nameAr: true, locale: true, calendar: true, theme: true, isPlatformAdmin: true, mfaEnabledAt: true } } },
   });
   if (!session || session.revokedAt) return null;
   const now = Date.now();

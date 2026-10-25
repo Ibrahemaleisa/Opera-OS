@@ -21,6 +21,7 @@ export function runtimeDatabaseUrl(env = process.env): string | undefined {
 }
 
 export function appDbUser(env = process.env): string {
+  // default role name: legacy identifier, kept so existing deployments and devices keep working (ARCHITECTURE.md §10)
   const role = env.APP_DB_USER || env.DATABASE_APP_ROLE || "operra_app";
   if (!/^[a-z_][a-z0-9_]*$/.test(role)) throw new Error(`Invalid database role name: ${role}`);
   return role;

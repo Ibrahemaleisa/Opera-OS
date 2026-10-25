@@ -14,12 +14,13 @@ import { Field, NativeSelect } from "@/components/app/field";
 import { ProgressBar, Section } from "@/components/app/page";
 import { StatusBadge } from "@/components/app/status-badge";
 import { useAction } from "@/hooks/use-action";
-import { formatDateTime } from "@/lib/format";
+import { formatDateTime, formatRelative } from "@/lib/format";
 import { interpolate } from "@/lib/i18n";
 import { useI18n } from "@/lib/i18n/client";
 import { cn } from "@/lib/utils";
 import type { getImportPreview, listImportRows } from "@/server/modules/delivery/imports/service";
-import { commitImportAction, configureImportAction, importPreviewAction, importStatusAction, resolveImportRowsAction, rollbackImportAction, updateImportRowAction } from "@/app/o/[org]/delivery/actions";
+import { commitImportAction, configureImportAction, importPreviewAction, importStatusAction, resolveImportRowsAction, resumeImportAction, rollbackImportAction, updateImportRowAction } from "@/app/o/[org]/delivery/actions";
+import { ActionButton } from "@/components/app/action-button";
 
 type Rows = Awaited<ReturnType<typeof listImportRows>>;
 type Preview = Awaited<ReturnType<typeof getImportPreview>>;
@@ -48,7 +49,11 @@ export function ImportWizard({ orgSlug, projectId, data, preview, campaigns, sta
         <StatusBadge status={b.status} label={m.enums.importStatus[b.status]} />
         {b.status === "VALIDATED" && !mapping && <Button size="sm" variant="ghost" onClick={() => setMapping(true)}><ArrowLeftRight /> {im.steps.map}</Button>}
       </div>
-      {b.error && <p className="rounded-md bg-danger-soft px-3 py-2 text-sm text-danger">{m.errors.unexpected} ({b.error})</p>}
+      {b.error === "import.stalled" ? (
+        <p className="rounded-md bg-danger-soft px-3 py-2 text-sm text-danger" role="alert" data-testid="import-gave-up">
+          {b.status === "PARTIALLY_COMMITTED" ? interpolate(im.stall.gaveUpCommit, { max: 3, done: b.committedRows, total: b.totalRows }) : interpolate(im.stall.gaveUpValidation, { max: 3 })}
+        </p>
+      ) : b.error && <p className="rounded-md bg-danger-soft px-3 py-2 text-sm text-danger">{m.errors.unexpected} ({b.error})</p>}
       {preview?.batch.previousIdenticalBatchId && <p className="flex items-center gap-2 rounded-md bg-warning-soft px-3 py-2 text-sm text-warning"><AlertTriangle className="size-4" />{im.identicalFile}</p>}
       {(b.status === "VALIDATING" || b.status === "COMMITTING") && <Progress orgSlug={orgSlug} batchId={b.id} />}
       {showMapping && preview && <MappingStep orgSlug={orgSlug} preview={preview} onDone={() => setMapping(false)} />}
@@ -58,25 +63,57 @@ export function ImportWizard({ orgSlug, projectId, data, preview, campaigns, sta
   );
 }
 
+type ImportStatus = Extract<Awaited<ReturnType<typeof importStatusAction>>, { ok: true }>["data"];
+
 function Progress({ orgSlug, batchId }: { orgSlug: string; batchId: string }) {
-  const { m } = useI18n();
+  const { m, fmt, tk } = useI18n();
+  const st = m.delivery.import.stall;
   const router = useRouter();
-  const [p, setP] = useState({ progress: 0, status: "" });
+  const [p, setP] = useState<ImportStatus | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
   useEffect(() => {
-    const id = setInterval(async () => {
-      const r = await importStatusAction(orgSlug, { batchId });
-      if (r.ok) {
-        setP({ progress: r.data.progress, status: r.data.status });
-        if (!["VALIDATING", "COMMITTING"].includes(r.data.status)) { clearInterval(id); router.refresh(); }
-      }
-    }, 1500);
-    return () => clearInterval(id);
+    let alive = true;
+    const poll = async () => {
+      const r = await importStatusAction(orgSlug, { batchId }).catch(() => null);
+      if (!alive || !r?.ok) return;
+      setP(r.data);
+      if (!["VALIDATING", "COMMITTING"].includes(r.data.status)) { clearInterval(id); router.refresh(); }
+    };
+    const id = setInterval(poll, 1500);
+    void poll();
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
   }, [orgSlug, batchId, router]);
+  const resume = useAction(resumeImportAction, {
+    orgSlug,
+    success: false,
+    refresh: false,
+    onSuccess: (r) => {
+      setFailed(null);
+      if (r.outcome === "busy" || r.outcome === "live") toast.info(st.busy);
+      router.refresh();
+    },
+  });
+  const committing = p?.status === "COMMITTING";
   return (
     <Section>
-      <div className="grid gap-2 p-4">
-        <div className="flex items-center gap-2 text-sm"><Spinner /> {p.status === "COMMITTING" ? m.delivery.import.committing : m.delivery.import.validating}</div>
-        <ProgressBar value={p.progress} />
+      <div className="grid gap-2 p-4" aria-live="polite">
+        {p?.paused && (
+          <div className="flex flex-wrap items-center gap-2 rounded-md bg-info-soft px-3 py-2 text-sm text-info" role="status" data-testid="import-paused">
+            <span className="min-w-0 flex-1">
+              {resume.pending ? st.resuming : interpolate(st.paused, { time: formatRelative(p.nextAttemptAt, fmt), age: formatRelative(p.lastProgressAt, fmt) })}
+            </span>
+            {p.resumable && <ActionButton size="sm" variant="outline" action={() => resume.run({ batchId }).then((r) => !r.ok && setFailed(r.error))} data-testid="import-resume">{failed ? st.tryAgain : st.resumeNow}</ActionButton>}
+          </div>
+        )}
+        {failed && p && (
+          <p className="rounded-md bg-danger-soft px-3 py-2 text-sm text-danger" role="alert">{interpolate(st.resumeFailed, { reason: tk(failed), done: p.committedRows, total: p.totalRows })}</p>
+        )}
+        <div className="flex items-center gap-2 text-sm">{!p?.paused && <Spinner />} {committing ? m.delivery.import.committing : m.delivery.import.validating}</div>
+        <ProgressBar value={p?.progress ?? 0} />
+        {committing && p && <p className="tabular text-xs text-muted-foreground">{interpolate(st.progress, { done: p.committedRows, total: p.totalRows })}</p>}
         <p className="text-xs text-muted-foreground">{m.delivery.import.background}</p>
       </div>
     </Section>

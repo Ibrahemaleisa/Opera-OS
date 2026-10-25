@@ -1,15 +1,20 @@
 import type { z } from "zod";
-import type { Prisma, ProjectStatus } from "@/generated/prisma/client";
+import type { Deliverable, Milestone, Prisma, Project, ProjectStatus, Risk } from "@/generated/prisma/client";
 import type { ServiceContext } from "@/server/authz/context";
-import { assertCan, can, projectScope, projectVisibilityWhere, taskVisibilityWhere, type ProjectScope, operatesProject } from "@/server/authz/policy";
+import { assertCan, assertNotArchived, can, projectScope, projectVisibilityWhere, taskVisibilityWhere, type ProjectScope, operatesProject } from "@/server/authz/policy";
+import { casUpdate } from "@/server/concurrency";
 import { withTenant, type Tx } from "@/server/db/tenant";
 import { ForbiddenError, NotFoundError, ValidationError } from "@/server/errors";
 import { audit } from "@/server/modules/audit/audit";
 import { emit } from "@/server/modules/automation/outbox";
 import { applyTemplateVersion } from "@/server/modules/templates/service";
 import { FINANCIAL_ENTITY_TYPES } from "@/server/modules/approvals/service";
+import { withCancelled } from "@/server/modules/templates/definition";
 import { loadProjectHealth } from "./health";
-import type { createProjectSchema, deliverableSchema, memberSchema, milestoneSchema, projectSchema, riskSchema } from "./schemas";
+import { availableTargets, reasonSchema, resumeTarget } from "./lifecycle";
+import type { createProjectSchema, deliverableSchema, independentApprovalSchema, memberSchema, milestoneSchema, projectSchema, riskSchema } from "./schemas";
+
+export { setProjectStatus, previewProjectStatusChange } from "./lifecycle";
 
 async function nextProjectCode(tx: Tx, year: number) {
   const prefix = `PRJ-${year}-`;
@@ -27,7 +32,8 @@ export async function createProject(ctx: ServiceContext, input: z.output<typeof 
     // the unique index (organizationId, code) is the final guard; retry once on a race
     const exists = await tx.project.findUnique({ where: { organizationId_code: { organizationId: ctx.orgId, code } } });
     if (exists) code = `${code}-${Date.now().toString(36).slice(-3).toUpperCase()}`;
-    const { templateIds, venueIds, managerId, ...data } = input;
+    const { templateIds, venueIds, managerId, ...rest } = input;
+    const data = Object.fromEntries(Object.entries(rest).filter(([k]) => k !== "version")) as Omit<typeof rest, "version">; // version is for updates only
     const project = await tx.project.create({ data: { ...data, organizationId: ctx.orgId, code, createdById: ctx.userId, status: "PLANNING" } });
     const managers = new Set([ctx.userId, ...(managerId ? [managerId] : [])]);
     for (const uid of managers) {
@@ -47,7 +53,7 @@ export async function createProject(ctx: ServiceContext, input: z.output<typeof 
       applied.push(await applyTemplateVersion(tx, ctx, project, latest.id));
     }
     if (!templateIds.length) {
-      await tx.workstream.create({ data: { organizationId: ctx.orgId, projectId: project.id, key: "general", name: "عام", nameEn: "General", statuses: (await import("@/server/modules/templates/definition")).DEFAULT_STATUSES as unknown as Prisma.InputJsonValue } });
+      await tx.workstream.create({ data: { organizationId: ctx.orgId, projectId: project.id, key: "general", name: "عام", nameEn: "General", statuses: withCancelled(null) as unknown as Prisma.InputJsonValue } });
     }
     return { project, applied };
   }, { timeout: 60_000 });
@@ -56,10 +62,12 @@ export async function createProject(ctx: ServiceContext, input: z.output<typeof 
 export async function updateProject(ctx: ServiceContext, projectId: string, input: z.output<typeof projectSchema>) {
   return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
     const scope = await projectScope(tx, ctx, projectId);
+    assertNotArchived(scope);
     if (!scope.manage) throw new ForbiddenError();
-    const { venueIds, managerId: _m, ...data } = input;
+    const { venueIds, managerId: _m, version, ...data } = input;
     if (!scope.finance) delete (data as Partial<typeof data>).budgetAmount;
-    const updated = await tx.project.update({ where: { id: projectId }, data });
+    // compare-and-set on the version the user loaded (§6, CE-1): a stale form is refused, not merged
+    const updated = await casUpdate<Project>({ tx, ctx, model: "project", id: projectId, version, data, entityType: "PROJECT" });
     await tx.projectVenue.deleteMany({ where: { projectId } });
     if (venueIds.length) {
       const venues = await tx.venue.findMany({ where: { id: { in: venueIds } }, select: { id: true } });
@@ -74,15 +82,23 @@ function pick(p: { name: string; status: string; priority: string; deadline: Dat
   return { name: p.name, status: p.status, priority: p.priority, deadline: p.deadline, eventStartAt: p.eventStartAt, budgetAmount: p.budgetAmount?.toString() ?? null };
 }
 
-export async function setProjectStatus(ctx: ServiceContext, projectId: string, status: ProjectStatus) {
+/**
+ * The project's independent-approval flag (§4.2, AP rule 6): STRICT applies to the project whatever
+ * the org policy, and the small-organisation exception never does. Setting needs `project.delete`;
+ * clearing needs the same plus a reason.
+ */
+export async function setIndependentApproval(ctx: ServiceContext, input: z.output<typeof independentApprovalSchema>) {
+  assertCan(ctx, "project.delete");
   return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
-    const scope = await projectScope(tx, ctx, projectId);
-    if (!scope.manage) throw new ForbiddenError();
-    const before = scope.project.status;
-    if (before === status) return scope.project;
-    const p = await tx.project.update({ where: { id: projectId }, data: { status, archivedAt: status === "CLOSED" || status === "CANCELLED" ? new Date() : null } });
-    await audit(tx, ctx, { action: "project.status", entityType: "PROJECT", entityId: projectId, projectId, before: { status: before }, after: { status } });
-    if (status === "COMPLETED") await emit(tx, ctx, "project.completed", { projectId, title: p.name, code: p.code, link: `/projects/${projectId}` });
+    const scope = await projectScope(tx, ctx, input.projectId);
+    assertNotArchived(scope);
+    if (scope.clientView || scope.fieldOnly) throw new NotFoundError();
+    const before = scope.project.independentApprovalRequired;
+    if (before === input.value) return scope.project;
+    const reason = input.reason?.trim() || null;
+    if (!input.value && !reasonSchema.safeParse(reason ?? "").success) throw new ValidationError("errors.reasonRequired", { reason: ["errors.reasonRequired"] });
+    const p = await casUpdate<Project>({ tx, ctx, model: "project", id: input.projectId, version: input.version, data: { independentApprovalRequired: input.value }, entityType: "PROJECT" });
+    await audit(tx, ctx, { action: "project.independent_approval", entityType: "PROJECT", entityId: p.id, projectId: p.id, summary: reason ?? undefined, before: { independentApprovalRequired: before }, after: { independentApprovalRequired: input.value }, meta: { reason } });
     return p;
   });
 }
@@ -234,12 +250,21 @@ export async function getProjectOverview(ctx: ServiceContext, projectId: string)
       return { ...w, total: t, done: d, blocked: c.filter((x) => x.statusCategory === "BLOCKED").reduce((n, x) => n + x._count, 0) };
     });
     if (!scope.finance) (project as { budgetAmount: unknown }).budgetAmount = null;
-    return { scope: scopeSummary(scope), project, workstreams: wsProgress, milestones, deliverables, risks, members, approvals, tasks: { total, done, blocked, overdue }, health, finance, activity, instances, campaigns, events, booths };
+    // lifecycle moves the caller may make from here (§1.2); clients and field agents get none
+    const resumeTo = !scope.clientView && project.status === "ON_HOLD" ? await resumeTarget(tx, projectId) : null;
+    const lifecycle = scope.clientView
+      ? null
+      : {
+          targets: availableTargets(ctx, scope, resumeTo),
+          resumeTo,
+          canSetIndependent: can(ctx, "project.delete") && !scope.archived,
+        };
+    return { scope: scopeSummary(scope), lifecycle, project, workstreams: wsProgress, milestones, deliverables, risks, members, approvals, tasks: { total, done, blocked, overdue }, health, finance, activity, instances, campaigns, events, booths };
   });
 }
 
 export function scopeSummary(s: ProjectScope) {
-  return { manage: s.manage, operate: s.operate, finance: s.finance, vip: s.vip, export: s.export, approve: s.approve, clientView: s.clientView, fieldOnly: s.fieldOnly, taskScope: s.taskScope, workstreamIds: s.workstreamIds };
+  return { manage: s.manage, operate: s.operate, finance: s.finance, vip: s.vip, export: s.export, approve: s.approve, clientView: s.clientView, fieldOnly: s.fieldOnly, taskScope: s.taskScope, workstreamIds: s.workstreamIds, archived: s.archived, quiet: s.quiet };
 }
 
 /** Lightweight header data for project sub-pages. */
@@ -257,6 +282,7 @@ export async function getProjectHeader(ctx: ServiceContext, projectId: string) {
 export async function upsertProjectMember(ctx: ServiceContext, input: z.output<typeof memberSchema>) {
   return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
     const scope = await projectScope(tx, ctx, input.projectId);
+    assertNotArchived(scope);
     if (!scope.manage) throw new ForbiddenError();
     const membership = await tx.membership.findFirst({ where: { userId: input.userId, status: "ACTIVE" }, include: { role: true } });
     if (!membership) throw new NotFoundError();
@@ -281,6 +307,7 @@ export async function upsertProjectMember(ctx: ServiceContext, input: z.output<t
 export async function removeProjectMember(ctx: ServiceContext, projectId: string, userId: string) {
   return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
     const scope = await projectScope(tx, ctx, projectId);
+    assertNotArchived(scope);
     if (!scope.manage) throw new ForbiddenError();
     const managers = await tx.projectMember.count({ where: { projectId, role: "MANAGER" } });
     const target = await tx.projectMember.findUnique({ where: { projectId_userId: { projectId, userId } } });
@@ -296,12 +323,13 @@ export async function removeProjectMember(ctx: ServiceContext, projectId: string
 export async function saveMilestone(ctx: ServiceContext, input: z.output<typeof milestoneSchema>) {
   return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
     const scope = await projectScope(tx, ctx, input.projectId);
+    assertNotArchived(scope);
     if (!operatesProject(scope)) throw new ForbiddenError();
-    const { id, ...data } = input;
+    const { id, version, ...data } = input;
     const before = id ? await tx.milestone.findFirst({ where: { id, projectId: input.projectId } }) : null;
     if (id && !before) throw new NotFoundError();
     const m = id
-      ? await tx.milestone.update({ where: { id }, data: { ...data, completedAt: data.status === "DONE" ? before?.completedAt ?? new Date() : null } })
+      ? await casUpdate<Milestone>({ tx, ctx, model: "milestone", id, version, entityType: "MILESTONE", data: { ...data, completedAt: data.status === "DONE" ? before?.completedAt ?? new Date() : null } })
       : await tx.milestone.create({ data: { ...data, organizationId: ctx.orgId } });
     await audit(tx, ctx, { action: id ? "milestone.update" : "milestone.create", entityType: "MILESTONE", entityId: m.id, projectId: m.projectId, before: before ? { status: before.status, dueDate: before.dueDate } : undefined, after: { status: m.status, dueDate: m.dueDate } });
     if (m.status === "BLOCKED" && before?.status !== "BLOCKED") await emit(tx, ctx, "milestone.blocked", { projectId: m.projectId, title: m.title, link: `/projects/${m.projectId}`, entityType: "MILESTONE", entityId: m.id });
@@ -312,10 +340,11 @@ export async function saveMilestone(ctx: ServiceContext, input: z.output<typeof 
 export async function saveRisk(ctx: ServiceContext, input: z.output<typeof riskSchema>) {
   return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
     const scope = await projectScope(tx, ctx, input.projectId);
+    assertNotArchived(scope);
     if (!operatesProject(scope)) throw new ForbiddenError();
-    const { id, ...data } = input;
+    const { id, version, ...data } = input;
     if (id && !(await tx.risk.findFirst({ where: { id, projectId: input.projectId } }))) throw new NotFoundError();
-    const r = id ? await tx.risk.update({ where: { id }, data }) : await tx.risk.create({ data: { ...data, organizationId: ctx.orgId } });
+    const r = id ? await casUpdate<Risk>({ tx, ctx, model: "risk", id, version, data, entityType: "RISK" }) : await tx.risk.create({ data: { ...data, organizationId: ctx.orgId } });
     await audit(tx, ctx, { action: id ? "risk.update" : "risk.create", entityType: "RISK", entityId: r.id, projectId: r.projectId, after: { title: r.title, score: r.likelihood * r.impact, status: r.status } });
     return r;
   });
@@ -324,13 +353,14 @@ export async function saveRisk(ctx: ServiceContext, input: z.output<typeof riskS
 export async function saveDeliverable(ctx: ServiceContext, input: z.output<typeof deliverableSchema>) {
   return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
     const scope = await projectScope(tx, ctx, input.projectId);
+    assertNotArchived(scope);
     if (!operatesProject(scope)) throw new ForbiddenError();
-    const { id, ...data } = input;
+    const { id, version, ...data } = input;
     const before = id ? await tx.deliverable.findFirst({ where: { id, projectId: input.projectId } }) : null;
     if (id && !before) throw new NotFoundError();
     // approval-gated deliverables can only become APPROVED through an approval decision
     if (data.status === "APPROVED" && (before?.requiresApproval ?? data.requiresApproval) && before?.status !== "APPROVED") throw new ValidationError("errors.approvalRequired");
-    const d = id ? await tx.deliverable.update({ where: { id }, data }) : await tx.deliverable.create({ data: { ...data, organizationId: ctx.orgId } });
+    const d = id ? await casUpdate<Deliverable>({ tx, ctx, model: "deliverable", id, version, data, entityType: "DELIVERABLE" }) : await tx.deliverable.create({ data: { ...data, organizationId: ctx.orgId } });
     await audit(tx, ctx, { action: id ? "deliverable.update" : "deliverable.create", entityType: "DELIVERABLE", entityId: d.id, projectId: d.projectId, before: before ? { status: before.status } : undefined, after: { status: d.status } });
     return d;
   });

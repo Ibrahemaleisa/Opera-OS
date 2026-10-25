@@ -1,8 +1,10 @@
-# Operra Events OS — Product specification
+# Opera — Product specification
 
-Operra is an Arabic-first (RTL, with full English LTR) operations system for Saudi event,
-conference, exhibition, protocol, VIP invitation-delivery and exhibition-construction
-agencies. One deployment serves many agencies (tenants), each isolated at the database.
+Opera is an Arabic-first (RTL, with full English LTR) operations platform developed by Opera
+Technologies for agencies and organizations that manage complex operations: events,
+conferences, exhibitions, protocol, VIP invitation delivery and exhibition construction. One
+deployment serves many organizations (tenants), each isolated at the database. Opera's own
+execution services are a separate business and are not modelled as product modules.
 
 ## Users
 

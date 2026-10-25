@@ -126,7 +126,7 @@ export const delivery = defineMessages(
       title: "استوديو الاستيراد",
       desc: "ارفع ملف Excel أو CSV، راجع ربط الأعمدة والتحقق، ثم اعتمد الاستيراد.",
       upload: "رفع ملف المدعوين",
-      dropHint: "XLSX أو CSV حتى 20,000 صف. لا تُنفذ الصيغ أو وحدات الماكرو.",
+      dropHint: "XLSX أو CSV حتى 10,000 صف. لا تُنفذ الصيغ أو وحدات الماكرو.",
       history: "سجل الاستيراد",
       steps: { upload: "الرفع", map: "ربط الأعمدة", review: "المراجعة", commit: "الاعتماد" },
       sheet: "ورقة العمل",
@@ -178,6 +178,19 @@ export const delivery = defineMessages(
       targetCampaign: "إنشاء بطاقات في الحملة",
       noCards: "دون إنشاء بطاقات",
       summary: "{valid} صالح · {warning} تحذير · {invalid} غير صالح · {duplicate} مكرر",
+      // stalled imports (BUSINESS_RULES §7.1, UX note 8)
+      stall: {
+        paused: "متوقف مؤقتاً — يُستأنف تلقائياً {time}. آخر تقدّم {age}.",
+        resumeNow: "استئناف الآن",
+        resuming: "جارٍ الاستئناف…",
+        resumeFailed: "تعذّر الاستئناف: {reason}. بياناتك سليمة: اعتُمد {done} من {total}. أعد المحاولة أو تراجع.",
+        tryAgain: "إعادة المحاولة",
+        busy: "يُستأنف الاستيراد بالفعل.",
+        attempt: "المحاولة {n} من {max}",
+        progress: "{done} من {total}",
+        gaveUpValidation: "توقف التحقق بعد {max} محاولات. راجع ربط الأعمدة ثم ابدأ التحقق من جديد.",
+        gaveUpCommit: "توقف الاعتماد بعد {max} محاولات: اعتُمد {done} من {total}. يمكنك التراجع عن الاستيراد، أو رفع الصفوف المتبقية في ملف جديد.",
+      },
     },
   },
   {
@@ -305,7 +318,7 @@ export const delivery = defineMessages(
       title: "Import studio",
       desc: "Upload an Excel or CSV file, review column mapping and validation, then commit.",
       upload: "Upload recipient file",
-      dropHint: "XLSX or CSV up to 20,000 rows. Formulas and macros are never executed.",
+      dropHint: "XLSX or CSV up to 10,000 rows. Formulas and macros are never executed.",
       history: "Import history",
       steps: { upload: "Upload", map: "Map columns", review: "Review", commit: "Commit" },
       sheet: "Worksheet",
@@ -357,6 +370,19 @@ export const delivery = defineMessages(
       targetCampaign: "Create cards in campaign",
       noCards: "No cards",
       summary: "{valid} valid · {warning} warnings · {invalid} invalid · {duplicate} duplicates",
+      // stalled imports (BUSINESS_RULES §7.1, UX note 8)
+      stall: {
+        paused: "Paused — resuming automatically {time}. Last progress {age}.",
+        resumeNow: "Resume now",
+        resuming: "Resuming…",
+        resumeFailed: "Couldn't resume: {reason}. Your data is safe: {done} of {total} committed. Try again or roll back.",
+        tryAgain: "Try again",
+        busy: "The import is already resuming.",
+        attempt: "Attempt {n} of {max}",
+        progress: "{done} of {total}",
+        gaveUpValidation: "Validation stopped after {max} attempts. Check the column mapping, then validate again.",
+        gaveUpCommit: "Committing stopped after {max} attempts: {done} of {total} committed. You can roll back the import, or upload the remaining rows in a new file.",
+      },
     },
   },
 );
@@ -378,6 +404,7 @@ export const importErrors = defineMessages(
     CITY_MISSING: "المدينة غير محددة",
     NAME_LANG_SWAPPED: "تم نقل الاسم إلى العمود المناسب للغة",
     PRIORITY_UNKNOWN: "قيمة أولوية غير معروفة",
+    FORMULA_LIKE: "النص يبدأ كصيغة جدول بيانات؛ سيُستورد نصاً كما هو. تحقق منه.",
   },
   {
     NAME_REQUIRED: "Name is required",
@@ -395,5 +422,6 @@ export const importErrors = defineMessages(
     CITY_MISSING: "City is missing",
     NAME_LANG_SWAPPED: "Name moved to the matching language column",
     PRIORITY_UNKNOWN: "Unknown priority value",
+    FORMULA_LIKE: "Starts like a spreadsheet formula; it will be imported as plain text. Check it.",
   },
 );

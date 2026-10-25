@@ -63,6 +63,7 @@ class S3Driver implements StorageDriver {
       credentials: process.env.S3_ACCESS_KEY_ID ? { accessKeyId: process.env.S3_ACCESS_KEY_ID, secretAccessKey: process.env.S3_SECRET_ACCESS_KEY ?? "" } : undefined,
     });
   })();
+  // default bucket name: legacy identifier, kept so existing deployments and devices keep working (ARCHITECTURE.md §10)
   private bucket = process.env.S3_BUCKET ?? "operra-private";
   async put(key: string, body: Buffer, contentType: string) {
     const { PutObjectCommand } = await import("@aws-sdk/client-s3");

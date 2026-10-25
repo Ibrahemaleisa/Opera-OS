@@ -201,16 +201,16 @@ function ListView({ tasks, wsById, href, orgSlug, projectId, canBulk, members }:
         onRowClick={(r) => router.push(href(r.id))}
         bulkActions={(rows, clear) => (
           <>
-            <select className="h-6 rounded border bg-card px-1 text-xs" defaultValue="" onChange={(e) => { if (!e.target.value) return; bulk.run({ projectId, taskIds: rows.map((r) => r.id), set: { ownerId: e.target.value === "none" ? null : e.target.value } }).then(clear); e.target.value = ""; }} aria-label={m.tasks.bulkAssign}>
+            <select className="h-6 rounded border bg-card px-1 text-xs" defaultValue="" onChange={(e) => { if (!e.target.value) return; bulk.run({ projectId, taskIds: rows.map((r) => r.id), versions: Object.fromEntries(rows.map((r) => [r.id, r.version])), set: { ownerId: e.target.value === "none" ? null : e.target.value } }).then(clear); e.target.value = ""; }} aria-label={m.tasks.bulkAssign}>
               <option value="">{m.tasks.bulkAssign}…</option>
               <option value="none">{m.common.unassigned}</option>
               {members.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
-            <select className="h-6 rounded border bg-card px-1 text-xs" defaultValue="" onChange={(e) => { if (!e.target.value) return; bulk.run({ projectId, taskIds: rows.map((r) => r.id), set: { status: e.target.value } }).then(clear); e.target.value = ""; }} aria-label={m.tasks.bulkStatus}>
+            <select className="h-6 rounded border bg-card px-1 text-xs" defaultValue="" onChange={(e) => { if (!e.target.value) return; bulk.run({ projectId, taskIds: rows.map((r) => r.id), versions: Object.fromEntries(rows.map((r) => [r.id, r.version])), set: { status: e.target.value } }).then(clear); e.target.value = ""; }} aria-label={m.tasks.bulkStatus}>
               <option value="">{m.tasks.bulkStatus}…</option>
               {["todo", "in_progress", "blocked", "review", "done"].map((s, i) => <option key={s} value={s}>{m.enums.statusCategory[CATEGORIES[i]]}</option>)}
             </select>
-            <select className="h-6 rounded border bg-card px-1 text-xs" defaultValue="" onChange={(e) => { if (!e.target.value) return; bulk.run({ projectId, taskIds: rows.map((r) => r.id), set: { priority: e.target.value as never } }).then(clear); e.target.value = ""; }} aria-label={m.tasks.bulkPriority}>
+            <select className="h-6 rounded border bg-card px-1 text-xs" defaultValue="" onChange={(e) => { if (!e.target.value) return; bulk.run({ projectId, taskIds: rows.map((r) => r.id), versions: Object.fromEntries(rows.map((r) => [r.id, r.version])), set: { priority: e.target.value as never } }).then(clear); e.target.value = ""; }} aria-label={m.tasks.bulkPriority}>
               <option value="">{m.tasks.bulkPriority}…</option>
               {Object.entries(m.enums.priority).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
             </select>

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AlertCircle, Lock, Plus, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -12,12 +12,13 @@ import { Textarea } from "@/components/ui/textarea";
 import { Attachments } from "@/components/app/attachments";
 import { CommentsThread } from "@/components/app/comments";
 import { Field, NativeSelect } from "@/components/app/field";
-import { Breadcrumbs, KV, ProgressBar, Section } from "@/components/app/page";
+import { Breadcrumbs, ProgressBar, Section } from "@/components/app/page";
 import { StatusBadge } from "@/components/app/status-badge";
 import { useAction } from "@/hooks/use-action";
-import { formatDateTime, formatRelative, parseRiyadhDate, toDateInput } from "@/lib/format";
+import { formatDateTime, parseRiyadhDate, toDateInput } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/client";
 import { TimeAgo } from "@/components/app/time-ago";
+import { ExceptionChip } from "@/components/operations/exception-chip";
 import type { getTaskDetail } from "@/server/modules/tasks/service";
 import {
   addChecklistItemAction, addDependencyAction, changeTaskStatusAction, createTaskAction, decideApprovalAction,
@@ -45,7 +46,25 @@ export function TaskDetail({ orgSlug, data }: { orgSlug: string; data: Detail })
   const projectName = (locale === "en" && t.project.nameEn) || t.project.name;
   const items = t.checklists.flatMap((c) => c.items);
   const overdue = t.statusCategory !== "DONE" && t.dueAt && new Date(t.dueAt) < new Date();
-  const patch = (k: string, v: unknown) => update.run({ id: t.id, version: t.version, [k]: v } as never);
+  // Saves run one at a time and carry the version each one returns, so moving between fields never
+  // looks like someone else's edit; only a real concurrent change produces a conflict.
+  const version = useRef(t.version);
+  useEffect(() => {
+    version.current = Math.max(version.current, t.version);
+  }, [t.version]);
+  const queue = useRef<Promise<unknown>>(Promise.resolve());
+  const enqueue = (save: () => Promise<{ ok: boolean; data?: unknown }>) => {
+    queue.current = queue.current.then(async () => {
+      const r = await save();
+      if (r.ok) version.current = (r.data as { version: number }).version;
+    });
+    return queue.current;
+  };
+  const patch = (k: string, v: unknown) => enqueue(() => update.run({ id: t.id, version: version.current, [k]: v } as never));
+  /** Saves an uncontrolled field on blur only when its value actually changed. */
+  const patchIfChanged = (e: React.FocusEvent<HTMLInputElement>, k: string, v: unknown) => {
+    if (e.currentTarget.value !== e.currentTarget.defaultValue) void patch(k, v);
+  };
 
   return (
     <div className="grid gap-4">
@@ -63,7 +82,7 @@ export function TaskDetail({ orgSlug, data }: { orgSlug: string; data: Detail })
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <NativeSelect className="h-9 w-44" value={t.status} disabled={status.pending || (ro && t.ownerId === null)} onChange={(e) => status.run({ id: t.id, status: e.target.value, version: t.version })} aria-label={m.common.status} data-testid="task-status">
+          <NativeSelect className="h-9 w-44" value={t.status} disabled={status.pending || (ro && t.ownerId === null)} onChange={(e) => { const to = e.target.value; void enqueue(() => status.run({ id: t.id, status: to, version: version.current })); }} aria-label={m.common.status} data-testid="task-status">
             {data.statuses.map((s) => <option key={s.key} value={s.key}>{locale === "en" ? s.en : s.ar}</option>)}
           </NativeSelect>
           {!data.scope.clientView && data.canEdit && <Button variant="outline" size="sm" onClick={() => setApprovalOpen(true)}>{m.tasks.requestApproval}</Button>}
@@ -165,11 +184,11 @@ export function TaskDetail({ orgSlug, data }: { orgSlug: string; data: Detail })
               <div className="grid grid-cols-2 gap-2">
                 <Field label={m.common.startDate}><Input type="date" disabled={ro} defaultValue={toDateInput(t.startAt)} onChange={(e) => patch("startAt", parseRiyadhDate(e.target.value))} dir="ltr" /></Field>
                 <Field label={m.common.dueDate} error={overdue ? m.common.overdue : undefined}><Input type="date" disabled={ro} defaultValue={toDateInput(t.dueAt)} onChange={(e) => patch("dueAt", parseRiyadhDate(e.target.value, "17:00"))} dir="ltr" /></Field>
-                <Field label={m.tasks.estimate}><NumberInput decimal={false} disabled={ro} defaultValue={t.estimateMinutes ?? ""} onBlur={(e) => patch("estimateMinutes", e.target.value ? Number(e.target.value) : null)} /></Field>
-                <Field label={m.tasks.actual}><NumberInput decimal={false} disabled={ro && t.ownerId === null} defaultValue={t.actualMinutes ?? ""} onBlur={(e) => patch("actualMinutes", e.target.value ? Number(e.target.value) : null)} /></Field>
-                <Field label={m.tasks.sla}><NumberInput decimal={false} disabled={ro} defaultValue={t.slaHours ?? ""} onBlur={(e) => patch("slaHours", e.target.value ? Number(e.target.value) : null)} /></Field>
+                <Field label={m.tasks.estimate}><NumberInput decimal={false} disabled={ro} defaultValue={t.estimateMinutes ?? ""} onBlur={(e) => patchIfChanged(e, "estimateMinutes", e.target.value ? Number(e.target.value) : null)} /></Field>
+                <Field label={m.tasks.actual}><NumberInput decimal={false} disabled={ro && t.ownerId === null} defaultValue={t.actualMinutes ?? ""} onBlur={(e) => patchIfChanged(e, "actualMinutes", e.target.value ? Number(e.target.value) : null)} /></Field>
+                <Field label={m.tasks.sla}><NumberInput decimal={false} disabled={ro} defaultValue={t.slaHours ?? ""} onBlur={(e) => patchIfChanged(e, "slaHours", e.target.value ? Number(e.target.value) : null)} /></Field>
               </div>
-              <Field label={m.tasks.tags}><Input disabled={ro} defaultValue={t.tags.join(", ")} onBlur={(e) => patch("tags", e.target.value.split(",").map((s) => s.trim()).filter(Boolean))} /></Field>
+              <Field label={m.tasks.tags}><Input disabled={ro} defaultValue={t.tags.join(", ")} onBlur={(e) => patchIfChanged(e, "tags", e.target.value.split(",").map((s) => s.trim()).filter(Boolean))} /></Field>
               {!data.scope.clientView && <label className="flex items-center gap-2 text-sm"><Checkbox disabled={ro} checked={t.clientVisible} onCheckedChange={(v) => patch("clientVisible", !!v)} /> {m.common.clientVisible}</label>}
               {!data.scope.clientView && <label className="flex items-center gap-2 text-sm"><Checkbox disabled={ro} checked={t.requiresApproval} onCheckedChange={(v) => patch("requiresApproval", !!v)} /> {m.projects.requiresApproval}</label>}
             </div>
@@ -213,7 +232,7 @@ export function TaskDetail({ orgSlug, data }: { orgSlug: string; data: Detail })
 
 /** `canDecide` gates the whole box; an approval's own `canDecide` (from the server's decide rule) narrows it per row. */
 export function ApprovalsBox({ orgSlug, approvals, canDecide, nameOf }: { orgSlug: string; approvals: (Omit<Detail["approvals"][number], "canDecide"> & { canDecide?: boolean })[]; canDecide: boolean; nameOf: (id: string | null) => string }) {
-  const { m, fmt } = useI18n();
+  const { m } = useI18n();
   const decide = useAction(decideApprovalAction, { orgSlug });
   const [comment, setComment] = useState("");
   if (!approvals.length) return null;
@@ -224,8 +243,12 @@ export function ApprovalsBox({ orgSlug, approvals, canDecide, nameOf }: { orgSlu
           <li key={a.id} className="grid gap-2 px-4 py-3">
             <div className="flex items-center justify-between gap-2">
               <span className="text-[13px] font-medium">{a.title}</span>
-              <StatusBadge status={a.status} label={m.enums.approvalStatus[a.status]} />
+              <span className="flex flex-wrap items-center justify-end gap-1.5">
+                {a.policyException && <ExceptionChip>{m.tasks.policy.selfApproved}</ExceptionChip>}
+                <StatusBadge status={a.status} label={m.enums.approvalStatus[a.status]} />
+              </span>
             </div>
+            {a.policyException && a.policyExceptionReason && <p className="text-[11px] text-muted-foreground"><bdi>{a.policyExceptionReason}</bdi></p>}
             <ol className="grid gap-1 border-s ps-3 text-[11px] text-muted-foreground">
               {a.decisions.map((d) => (
                 <li key={d.id}><span className="text-foreground">{nameOf(d.actorId)}</span> · {m.enums.approvalStatus[d.decision]}{d.comment && <span> — “{d.comment}”</span>} · <TimeAgo date={d.createdAt} /></li>

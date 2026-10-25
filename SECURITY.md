@@ -1,11 +1,11 @@
-# Operra Events OS — Security & PDPL notes
+# Opera — Security & PDPL notes
 
 This describes the controls that are **implemented and tested** in this repository, then
 the known gaps. Anything not listed under "implemented" should be treated as absent.
 
 ## Threat model in one paragraph
 
-Operra stores VIP guest lists (names, honorifics, mobile numbers, addresses), protocol
+Opera stores VIP guest lists (names, honorifics, mobile numbers, addresses), protocol
 notes, client contracts and financial records for several agencies in one database.
 The main risks are: one agency reading another's data; staff seeing more VIP data than
 their job needs; clients/vendors/field agents reaching internal data; leaked or replayed
@@ -38,7 +38,39 @@ injection in exports; and accidental mass messaging.
 * Password change requires the current password, is rate-limited, and revokes every
   other session. Suspending/revoking a member's last membership revokes their sessions.
 * Rate limits (Redis, in-memory fallback): login per IP and per email, registration,
-  invitation acceptance, RSVP submit, opt-out, password change.
+  invitation acceptance, RSVP submit, opt-out, password change, password-reset requests
+  (3 per e-mail and 10 per IP per hour), MFA codes.
+* Password recovery (`/forgot`, `/reset/[token]`, `src/server/modules/auth/password-reset.ts`,
+  BUSINESS_RULES §5.1): the request always gets the same response and the work runs after the
+  response (no account enumeration by content or timing); over a limit nothing is sent. The link
+  carries 32 random bytes; only its SHA-256 is stored (`PublicToken` `PASSWORD_RESET`), it expires
+  after 30 minutes, works once (compare-and-set) and a newer request voids older links. The link is
+  rendered into one e-mail and never persisted (`SystemEmail` keeps no secret), so a failed send is
+  not retried: the user asks again. Completing a reset sets a new Argon2id hash and
+  `passwordChangedAt`, revokes every session and pending MFA challenge, clears the lockout, does
+  not sign in, and sends "your password was changed". The reset page is `noindex` with
+  `Referrer-Policy: no-referrer`. Admins can send a reset link (`member.reset_link_sent`) without
+  ever seeing it. Audit `auth.password_reset_requested` / `_completed` in every organisation of the user.
+* Two-step verification (`src/server/auth/totp.ts`, `src/server/modules/auth/mfa*.ts`, §5.2): TOTP
+  per RFC 6238 (SHA-1, 6 digits, 30 s, ±1 step) on `node:crypto`; the secret is encrypted at rest
+  with AES-256-GCM under a key derived from `APP_SECRET` (HKDF-SHA256). Replay protection: a code's
+  time step must be newer than the last accepted one (`mfaLastStep`, compare-and-set). Enrolment
+  re-asks the password and confirms one code; 10 one-time recovery codes are shown once and stored
+  as SHA-256. With MFA on, the password alone creates **no session**: an `MFA_CHALLENGE` token
+  (HttpOnly cookie, 5 minutes) is consumed by every attempt; 5 wrong codes end it and every wrong
+  code counts toward the account lockout. A recovery-code sign-in e-mails the account. Turning MFA
+  off needs the password and a current code and is refused while an organisation requires it for
+  the role. Admin reset (owner, or director for non-owners, never oneself, with a reason) clears MFA
+  and revokes every session; refused when the person also belongs to another organisation. An
+  existing account with MFA accepting an invitation signs in through both steps.
+* Organisation MFA policy (Settings → Security, owner only, audited `org.mfa_policy`, stored in
+  `Organization.settings.security`): required for privileged roles (any role with `org.manage`,
+  `org.members.manage`, `org.roles.manage`, `finance.approve`, `campaign.approve` or
+  `automation.manage`; optionally `vip.viewSensitive`), on by default for new organisations. Each
+  covered member has 14 days from the policy or their privileged role; after that their session is
+  enrolment-only in that organisation: pages redirect to `/mfa-setup`, server actions and route
+  handlers are refused (`src/server/request.ts`, fail-closed). Step-up MFA for individual actions is
+  not in Milestone 2.
 
 ### Authorization
 * Permissions are checked server-side in services — never only in the UI. The same
@@ -56,6 +88,24 @@ injection in exports; and accidental mass messaging.
   re-assigning a project to another client ends the previous client's access.
 * Context is rebuilt per request, so role changes take effect on the next request. Only an owner
   can change or suspend an owner, and nobody can change their own role or status.
+* Departure (`src/server/modules/org/handover.ts`, BUSINESS_RULES §2): suspending or revoking a member
+  runs the handover in the same transaction — tasks, designated approvals, incidents, readiness items,
+  snags, risks, cues, shifts and escorts go to an eligible active internal replacement or are left
+  visibly unowned. A designated approval moves only to someone who may decide it; otherwise it returns
+  to the eligible pool, or is cancelled with revert when nobody else can decide. The last active PM of
+  a live project can't leave without a replacement holding `project.manage` (`errors.lastManager`).
+  REVOKED is final (re-invite instead); reactivating a suspended member hands nothing back. Suspending
+  an owner is told to the other owners.
+* Project lifecycle (`src/server/modules/projects/lifecycle.ts`, §1): only the transitions of §1.2;
+  cancel, close and reopen need `project.delete`. Cancelled and closed projects are read-only
+  (`ProjectScope.archived`: `operate`/`manage` false, `errors.projectArchived`) except the financial
+  tail (PO receive/close/cancel, expense and change-order decisions, payment) and the incident tail.
+  The cancel cascade runs in the status change's transaction. Closing with unmet gates is an audited
+  override (`project.close_override`) that needs a reason and, for open POs, expenses or work orders,
+  `finance.approve`. Clients see archived projects read-only for 180 days and make no decisions there.
+* Concurrent edits: project, milestone, risk, deliverable and budget-line updates and every project
+  status change are a compare-and-set on the loaded `version`; a missing version is refused and a
+  stale one returns 409 with the current values (§6).
 * Inaccessible records return **404, not 403**, to avoid confirming existence.
 * Approvals (`src/server/modules/approvals/service.ts`, one rule `mayDecide` for deciding, the
   approver list and "awaiting you"):
@@ -65,7 +115,19 @@ injection in exports; and accidental mass messaging.
     SAR 50,000 incl. VAT), expenses and change orders `finance.approve` with project finance scope;
     tasks, deliverables, milestones and design revisions project approve scope; client approvals a
     client approver of the project's client. Naming an approver narrows the set, never grants authority;
-  * at request time the eligible approver set is resolved and notified; an empty set refuses the request;
+  * at request time the eligible approver set is resolved and notified; an empty set refuses the request
+    (`errors.noEligibleApprover`); a request without a due date is due after the org SLA (default 48 h);
+  * separation of duties (§4): under the default STANDARD policy the performer may decide a request
+    someone else made; under STRICT (org setting, owner only, audited `org.approval_policy`) or on a
+    project flagged `independentApprovalRequired` (set by `project.delete`, cleared only with a reason)
+    the performer never decides — task owner and collaborators, deliverable uploaders and submitter,
+    owners of the milestone's workstream tasks, campaign author and editors since the last approval,
+    revision author and uploaders;
+  * small-organisation exception (§4.3, off by default, one owner-only toggle; optional end date, type
+    scope, spend cap ≤ SAR 250,000 and audience cap ≤ 500 under "Advanced"): when nobody else can
+    decide, the requester may approve their own request with a one-line note. Never for
+    client approvals, flagged projects or designated approvers; recorded as `policyException`, audited
+    `approval.self_approved`, told to every other owner and listed on the Operations home for 30 days;
   * decisions compare-and-set the entity's expected state (a changed entity makes the request stale);
     a requester or project manager can withdraw a pending request (reason required, audited);
     reopening approved work marks the approval SUPERSEDED, so it must be approved again;
@@ -108,6 +170,20 @@ injection in exports; and accidental mass messaging.
   is refused otherwise. Simulated records are labelled everywhere. WhatsApp only via the
   official WhatsApp Business Cloud API with a pre-approved template.
 * Opt-outs and bounces go to a per-channel suppression list honoured before every send.
+* Notification e-mail (BUSINESS_RULES §3): `notify()` writes the in-app notice and, when the type
+  and the recipient's preference call for it, a `NotificationDelivery` row in the same transaction;
+  it is sent after commit (request `after()`, the worker, or the scheduler) with a compare-and-set
+  claim, so two senders never send the same row. Retries back off 1 m, 5 m, 30 m, 2 h; the 5th
+  failure, or a permanent 5xx, is DEAD and listed in Settings → Providers → Delivery log with a
+  manual, audited retry. Recipients are active members only; addresses are masked in the log.
+  E-mails carry the notice title, code, count and a deep link, never VIP contact data, protocol
+  notes or amounts, and every value is HTML-escaped. Mandatory types (approvals, escalations,
+  handover, security) can't be switched off.
+* E-mail **simulation** is explicit: without `SMTP_URL`, or while the organisation's e-mail
+  channel is SIMULATION, deliveries end `SIMULATED` — rendered and recorded, never sent and never
+  shown or counted as sent (the delivery log and the preference table say "simulated"). Account
+  mail (reset links, security notices) is `SystemEmail`; outside production a simulated reset link
+  is printed to the server console only.
 
 ### Platform
 * Security headers: `X-Content-Type-Options`, `X-Frame-Options: DENY`,
@@ -127,7 +203,11 @@ the data controller and must configure retention and lawful basis themselves.
 
 ## Known gaps (not implemented)
 
-* Multi-factor authentication, email verification, and a forgot-password / reset flow.
+* E-mail address verification at registration; step-up MFA for sensitive actions; WebAuthn /
+  passkeys; bounce and complaint webhooks for notification e-mail (SMTP `SENT` means accepted by
+  the server, not read).
+* MFA reset for a person who belongs to several organisations needs an Opera support process
+  (the product refuses it).
 * A Content-Security-Policy header (needs nonce support for inline scripts).
 * Malware scanning of uploads (only type/size checks).
 * Composite `(organizationId, id)` foreign keys as defence-in-depth behind RLS.

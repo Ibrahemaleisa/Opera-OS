@@ -1,10 +1,15 @@
 import { NextResponse } from "next/server";
 import { db } from "@/server/db/client";
 import { getRedis } from "@/server/redis";
+import { healthCounts } from "@/server/modules/recovery/service";
 
 export const dynamic = "force-dynamic";
 
-/** Liveness/readiness probe for containers: database required, Redis reported (jobs fall back to inline). */
+/**
+ * Liveness/readiness probe for containers: database required, Redis reported (jobs fall back to inline).
+ * `work` carries platform-wide counts of stalled or dead background work (BUSINESS_RULES §7.4) — totals
+ * only, never an organisation, id, name or error text.
+ */
 export async function GET() {
   const checks: Record<string, "ok" | "down"> = {};
   let dbRoundTripMs: number | null = null;
@@ -29,5 +34,7 @@ export async function GET() {
     checks.redis = "down";
   }
   const ok = checks.database === "ok";
-  return NextResponse.json({ ok, checks, dbRoundTripMs, region: process.env.VERCEL_REGION ?? null }, { status: ok ? 200 : 503, headers: { "Cache-Control": "no-store" } });
+  let work: Awaited<ReturnType<typeof healthCounts>> | null = null;
+  if (ok) work = await healthCounts().catch(() => null);
+  return NextResponse.json({ ok, checks, dbRoundTripMs, region: process.env.VERCEL_REGION ?? null, work }, { status: ok ? 200 : 503, headers: { "Cache-Control": "no-store" } });
 }

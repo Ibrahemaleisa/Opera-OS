@@ -11,6 +11,7 @@ export const getLocale = cache(async (): Promise<Locale> => {
 
 export const getCalendar = cache(async (): Promise<CalendarPref> => {
   const store = await cookies();
+  // cookie name: legacy identifier, kept so existing deployments and devices keep working (ARCHITECTURE.md §10)
   return store.get("operra_calendar")?.value === "islamic-umalqura" ? "islamic-umalqura" : "gregory";
 });
 

@@ -1,13 +1,14 @@
 import { z } from "zod";
 import type { Prisma, StatusCategory, Task } from "@/generated/prisma/client";
 import type { ServiceContext } from "@/server/authz/context";
-import { projectScope, taskVisibilityWhere, type ProjectScope } from "@/server/authz/policy";
+import { assertNotArchived, projectScope, taskVisibilityWhere, type ProjectScope } from "@/server/authz/policy";
 import { withTenant, type Tx } from "@/server/db/tenant";
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/server/errors";
 import { audit } from "@/server/modules/audit/audit";
-import { cancelPendingApprovalsTx, INACTIVE_PROJECT_STATUSES, mayDecide, resolveApproverSet, supersedeApprovalsTx } from "@/server/modules/approvals/service";
+import { approvalProjectGate, cancelPendingApprovalsTx, mayDecide, resolveApproverSet, supersedeApprovalsTx } from "@/server/modules/approvals/service";
+import { decidePolicyFor, loadApprovalSettings } from "@/server/modules/approvals/policy";
 import { emit } from "@/server/modules/automation/outbox";
-import { DEFAULT_STATUSES, type StatusDef } from "@/server/modules/templates/definition";
+import { withCancelled, type StatusDef } from "@/server/modules/templates/definition";
 import { nextTaskNumber } from "./numbering";
 
 const optDate = z.coerce.date().optional().nullable();
@@ -36,9 +37,9 @@ export const taskPatch = taskInput.omit({ projectId: true, parentId: true }).par
   actualMinutes: z.coerce.number().int().min(0).optional().nullable(),
 });
 
+/** A workstream's workflow; every workflow implicitly contains the system `cancelled` status (§1.3). */
 export function statusesOf(ws: { statuses: unknown } | null | undefined): StatusDef[] {
-  const s = ws?.statuses as StatusDef[] | undefined;
-  return Array.isArray(s) && s.length ? s : DEFAULT_STATUSES;
+  return withCancelled(ws?.statuses as StatusDef[] | undefined);
 }
 
 async function loadTask(tx: Tx, ctx: ServiceContext, taskId: string) {
@@ -47,6 +48,13 @@ async function loadTask(tx: Tx, ctx: ServiceContext, taskId: string) {
   const scope = await projectScope(tx, ctx, task.projectId);
   assertTaskVisible(ctx, scope, task);
   return { task, scope };
+}
+
+/** Loads a task for a change: archived projects are read-only (BUSINESS_RULES §1.5, LC-6). */
+async function loadTaskForWrite(tx: Tx, ctx: ServiceContext, taskId: string) {
+  const r = await loadTask(tx, ctx, taskId);
+  assertNotArchived(r.scope);
+  return r;
 }
 
 function assertTaskVisible(ctx: ServiceContext, scope: ProjectScope, task: Task & { collaborators: { userId: string }[] }) {
@@ -76,6 +84,7 @@ async function assertAssignable(tx: Tx, projectId: string, userId: string | null
 export async function createTask(ctx: ServiceContext, input: z.output<typeof taskInput>) {
   return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
     const scope = await projectScope(tx, ctx, input.projectId);
+    assertNotArchived(scope);
     if (!scope.operate || scope.clientView || (scope.taskScope === "assigned" && !scope.manage && !input.parentId)) throw new ForbiddenError();
     let workstream = input.workstreamId ? await tx.workstream.findFirst({ where: { id: input.workstreamId, projectId: input.projectId } }) : null;
     if (input.workstreamId && !workstream) throw new NotFoundError();
@@ -102,7 +111,7 @@ export async function createTask(ctx: ServiceContext, input: z.output<typeof tas
 
 export async function updateTask(ctx: ServiceContext, patch: z.output<typeof taskPatch>) {
   return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
-    const { task, scope } = await loadTask(tx, ctx, patch.id);
+    const { task, scope } = await loadTaskForWrite(tx, ctx, patch.id);
     if (!canEditTask(ctx, scope, task)) throw new ForbiddenError();
     const { id, version, recurrence, ...data } = patch;
     // removing an approval gate or exposing a task to the client is a project-manager decision
@@ -139,7 +148,7 @@ export async function updateTask(ctx: ServiceContext, patch: z.output<typeof tas
  */
 export async function changeTaskStatus(ctx: ServiceContext, input: { id: string; status: string; version?: number; reason?: string | null }) {
   return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
-    const { task, scope } = await loadTask(tx, ctx, input.id);
+    const { task, scope } = await loadTaskForWrite(tx, ctx, input.id);
     if (!canEditTask(ctx, scope, task) && task.ownerId !== ctx.userId) throw new ForbiddenError();
     const statuses = statusesOf(task.workstream);
     const target = statuses.find((s) => s.key === input.status);
@@ -207,7 +216,7 @@ async function scheduleNextOccurrence(tx: Tx, ctx: ServiceContext, task: Task & 
 
 export async function setCollaborators(ctx: ServiceContext, taskId: string, userIds: string[]) {
   return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
-    const { task, scope } = await loadTask(tx, ctx, taskId);
+    const { task, scope } = await loadTaskForWrite(tx, ctx, taskId);
     if (!canEditTask(ctx, scope, task)) throw new ForbiddenError();
     for (const u of userIds) await assertAssignable(tx, task.projectId, u);
     await tx.taskCollaborator.deleteMany({ where: { taskId } });
@@ -220,7 +229,7 @@ export async function setCollaborators(ctx: ServiceContext, taskId: string, user
 export async function addDependency(ctx: ServiceContext, taskId: string, dependsOnId: string) {
   if (taskId === dependsOnId) throw new ValidationError("errors.dependencyCycle");
   return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
-    const { task, scope } = await loadTask(tx, ctx, taskId);
+    const { task, scope } = await loadTaskForWrite(tx, ctx, taskId);
     if (!canEditTask(ctx, scope, task)) throw new ForbiddenError();
     const other = await tx.task.findFirst({ where: { id: dependsOnId, projectId: task.projectId } });
     if (!other) throw new NotFoundError();
@@ -251,7 +260,7 @@ export function wouldCreateCycle(edges: { taskId: string; dependsOnId: string }[
 
 export async function removeDependency(ctx: ServiceContext, taskId: string, dependsOnId: string) {
   return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
-    const { task, scope } = await loadTask(tx, ctx, taskId);
+    const { task, scope } = await loadTaskForWrite(tx, ctx, taskId);
     if (!canEditTask(ctx, scope, task)) throw new ForbiddenError();
     await tx.taskDependency.deleteMany({ where: { taskId, dependsOnId } });
     await audit(tx, ctx, { action: "task.dependency_remove", entityType: "TASK", entityId: taskId, projectId: task.projectId, meta: { dependsOnId } });
@@ -262,7 +271,7 @@ export async function removeDependency(ctx: ServiceContext, taskId: string, depe
 
 export async function addChecklistItem(ctx: ServiceContext, input: { taskId: string; checklistId?: string | null; label: string }) {
   return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
-    const { task, scope } = await loadTask(tx, ctx, input.taskId);
+    const { task, scope } = await loadTaskForWrite(tx, ctx, input.taskId);
     if (!canEditTask(ctx, scope, task)) throw new ForbiddenError();
     let checklistId = input.checklistId;
     if (checklistId) {
@@ -280,7 +289,7 @@ export async function toggleChecklistItem(ctx: ServiceContext, itemId: string, d
   return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
     const item = await tx.checklistItem.findUnique({ where: { id: itemId }, include: { checklist: true } });
     if (!item) throw new NotFoundError();
-    const { task, scope } = await loadTask(tx, ctx, item.checklist.taskId);
+    const { task, scope } = await loadTaskForWrite(tx, ctx, item.checklist.taskId);
     if (!canEditTask(ctx, scope, task) && task.ownerId !== ctx.userId) throw new ForbiddenError();
     await tx.checklistItem.update({ where: { id: itemId }, data: { done, doneById: done ? ctx.userId : null, doneAt: done ? new Date() : null } });
     await audit(tx, ctx, { action: done ? "checklist.check" : "checklist.uncheck", entityType: "TASK", entityId: task.id, projectId: task.projectId, summary: item.label });
@@ -293,6 +302,8 @@ export async function addComment(ctx: ServiceContext, input: { entityType: strin
   return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
     const scope = await projectScope(tx, ctx, input.projectId);
     if (scope.fieldOnly) throw new ForbiddenError();
+    // archived projects are read-only, except the incident tail (§1.5)
+    if (input.entityType !== "INCIDENT") assertNotArchived(scope);
     // clients can only post client-visible comments; staff choose
     const visibility = scope.clientView ? "CLIENT" : input.visibility;
     if (input.entityType === "TASK") {
@@ -426,7 +437,7 @@ export async function getTaskDetail(ctx: ServiceContext, taskId: string) {
       tx.task.findMany({ where: { ...(taskVisibilityWhere(ctx, scope) as Prisma.TaskWhereInput), id: { not: taskId }, parentId: null }, select: { id: true, number: true, title: true }, orderBy: { number: "asc" }, take: 500 }),
     ]);
     // Same rule as decideApproval, so the UI never offers a decision the server would refuse.
-    const active = !(INACTIVE_PROJECT_STATUSES as readonly string[]).includes(scope.project.status);
+    const active = !approvalProjectGate(scope.project.status, "TASK");
     const requestLike = { entityType: "TASK", entityId: taskId, requestedById: ctx.userId, approverUserId: null, clientVisible: true };
     const [internalApprovers, clientApprovers] = scope.clientView || !active
       ? [{ eligible: [] as string[] }, { eligible: [] as string[] }]
@@ -440,7 +451,10 @@ export async function getTaskDetail(ctx: ServiceContext, taskId: string) {
       workstream: task.workstream ? { id: task.workstream.id, name: (ctx.locale === "en" && task.workstream.nameEn) || task.workstream.name } : null,
       comments,
       attachments,
-      approvals: approvals.map((a) => ({ ...a, canDecide: active && a.status === "PENDING" && mayDecide(ctx, scope, a, null) })),
+      approvals: await (async () => {
+        const settings = active && approvals.some((a) => a.status === "PENDING") ? await loadApprovalSettings(tx, ctx.orgId) : null;
+        return Promise.all(approvals.map(async (a) => ({ ...a, canDecide: active && a.status === "PENDING" && !!settings && mayDecide(ctx, scope, a, null, await decidePolicyFor(tx, settings, scope.project, a)) })));
+      })(),
       eligibleApprovers: { INTERNAL: internalApprovers.eligible, CLIENT: clientApprovers.eligible },
       history,
       auditTrail,
@@ -471,6 +485,8 @@ export async function myWork(ctx: ServiceContext) {
 export const bulkInput = z.object({
   projectId: z.string(),
   taskIds: z.array(z.string()).min(1).max(500),
+  /** the versions the user loaded, per task (§6 CE rule 5); a row changed since is skipped and reported */
+  versions: z.record(z.string(), z.number().int()).optional(),
   set: z.object({ ownerId: z.string().nullable().optional(), priority: z.enum(["LOW", "MEDIUM", "HIGH", "CRITICAL"]).optional(), status: z.string().optional(), dueAt: optDate, clientVisible: z.boolean().optional(), addTag: z.string().optional() }),
 });
 
@@ -480,7 +496,7 @@ export async function bulkUpdateTasks(ctx: ServiceContext, input: z.output<typeo
   if (input.set.status) {
     for (const id of input.taskIds) {
       try {
-        await changeTaskStatus(ctx, { id, status: input.set.status });
+        await changeTaskStatus(ctx, { id, status: input.set.status, version: input.versions?.[id] });
         results.updated++;
       } catch (e) {
         results.skipped.push({ id, reason: (e as Error).message });
@@ -491,13 +507,24 @@ export async function bulkUpdateTasks(ctx: ServiceContext, input: z.output<typeo
   if (Object.keys(rest).length || addTag) {
     await withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
       const scope = await projectScope(tx, ctx, input.projectId);
+      assertNotArchived(scope);
       if (!scope.operate || scope.clientView || scope.taskScope === "assigned") throw new ForbiddenError();
       if (rest.clientVisible !== undefined && !scope.manage) throw new ForbiddenError();
       if (rest.ownerId) await assertAssignable(tx, input.projectId, rest.ownerId);
       // write scope = read scope (workstream restrictions included)
-      const tasks = await tx.task.findMany({ where: { ...(taskVisibilityWhere(ctx, scope) as Prisma.TaskWhereInput), id: { in: input.taskIds } } });
-      for (const t of tasks) {
-        await tx.task.update({ where: { id: t.id }, data: { ...rest, ...(addTag && !t.tags.includes(addTag) ? { tags: { push: addTag } } : {}), version: { increment: 1 } } });
+      const found = await tx.task.findMany({ where: { ...(taskVisibilityWhere(ctx, scope) as Prisma.TaskWhereInput), id: { in: input.taskIds } } });
+      const tasks: typeof found = [];
+      for (const t of found) {
+        // compare-and-set per row on the version the user loaded (or, without one, the version read
+        // here): a row changed meanwhile is skipped and reported, never overwritten (CE rule 5)
+        // when this same call already moved the status (and the version), compare with what was read here
+        const expected = input.set.status ? t.version : input.versions?.[t.id] ?? t.version;
+        const r = await tx.task.updateMany({ where: { id: t.id, version: expected }, data: { ...rest, ...(addTag && !t.tags.includes(addTag) ? { tags: { push: addTag } } : {}), version: { increment: 1 } } });
+        if (!r.count) {
+          if (!results.skipped.some((x) => x.id === t.id)) results.skipped.push({ id: t.id, reason: "errors.staleWrite" });
+          continue;
+        }
+        tasks.push(t);
         if (rest.ownerId !== undefined && rest.ownerId !== t.ownerId) {
           await tx.taskAssignmentHistory.create({ data: { organizationId: ctx.orgId, taskId: t.id, fromUserId: t.ownerId, toUserId: rest.ownerId, changedById: ctx.userId, reason: "bulk" } });
           if (rest.ownerId) await emit(tx, ctx, "task.assigned", { taskId: t.id, projectId: t.projectId, ownerId: rest.ownerId, title: t.title, link: `/tasks/${t.id}`, entityType: "TASK", entityId: t.id });

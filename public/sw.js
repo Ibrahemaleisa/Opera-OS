@@ -5,7 +5,7 @@
  * The first visit happens before this worker controls the page, so the page itself asks for its
  * shell and the assets it already loaded to be cached ({ type: "PRECACHE", urls }); after that one
  * online visit /field/<org> opens offline. Navigations are network-first and refresh the copy. */
-const CACHE = "operra-field-v3";
+const CACHE = "opera-field-v4";
 const SHELL = /^\/field\/[^/]+\/?$/;
 
 self.addEventListener("install", () => self.skipWaiting());

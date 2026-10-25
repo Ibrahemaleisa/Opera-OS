@@ -1,6 +1,7 @@
-import { Queue, type JobsOptions } from "bullmq";
+import { Queue } from "bullmq";
 import { getRedis } from "@/server/redis";
 
+// legacy identifier, kept so existing deployments and devices keep working (ARCHITECTURE.md §10): renaming would orphan jobs already queued in Redis
 export const QUEUE_NAME = "operra";
 
 export type JobName = "outbox" | "import.validate" | "import.commit" | "message.send" | "campaign.dispatch" | "scheduler.tick";

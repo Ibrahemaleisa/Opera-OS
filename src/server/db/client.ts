@@ -7,7 +7,7 @@ import { runtimeDatabaseUrl } from "./urls";
  * query against a tenant table outside `withTenant` returns no rows.
  * Use it directly ONLY for global tables (User, Session, PublicToken, MessageRef, Permission).
  */
-const globalForDb = globalThis as unknown as { __operraDb?: PrismaClient };
+const globalForDb = globalThis as unknown as { __operaDb?: PrismaClient };
 
 function createClient() {
   const connectionString = runtimeDatabaseUrl();
@@ -18,8 +18,8 @@ function createClient() {
   });
 }
 
-export const db: PrismaClient = globalForDb.__operraDb ?? createClient();
-if (process.env.NODE_ENV !== "production") globalForDb.__operraDb = db;
+export const db: PrismaClient = globalForDb.__operaDb ?? createClient();
+if (process.env.NODE_ENV !== "production") globalForDb.__operaDb = db;
 
 export type Db = PrismaClient;
 

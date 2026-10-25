@@ -19,6 +19,15 @@ export const DEFAULT_STATUSES: StatusDef[] = [
   { key: "done", ar: "منجز", en: "Done", category: "DONE" },
 ];
 
+/** The system status every workflow implicitly contains (BUSINESS_RULES §1.3): cancelling never invents a key. */
+export const CANCELLED_STATUS: StatusDef = { key: "cancelled", ar: "ملغاة", en: "Cancelled", category: "CANCELLED" };
+
+/** A workflow's statuses with the implicit `cancelled` status appended when it declares no CANCELLED one. */
+export function withCancelled(statuses: StatusDef[] | null | undefined): StatusDef[] {
+  const s = Array.isArray(statuses) && statuses.length ? statuses : DEFAULT_STATUSES;
+  return s.some((x) => x.category === "CANCELLED") ? s : [...s, CANCELLED_STATUS];
+}
+
 const anchor = z.enum(["start", "event", "deadline"]);
 
 export const taskDef = z.object({

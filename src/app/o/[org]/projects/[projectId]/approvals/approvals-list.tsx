@@ -6,6 +6,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { Section } from "@/components/app/page";
 import { StatusBadge } from "@/components/app/status-badge";
 import { TimeAgo } from "@/components/app/time-ago";
+import { ConfirmAction } from "@/components/app/confirm-action";
+import { ExceptionChip } from "@/components/operations/exception-chip";
 import { useAction } from "@/hooks/use-action";
 import { useI18n } from "@/lib/i18n/client";
 import type { listProjectApprovals } from "@/server/modules/approvals/service";
@@ -24,14 +26,20 @@ export function ApprovalsList({ orgSlug, approvals, users }: { orgSlug: string; 
           <li key={a.id} className="grid gap-2 px-4 py-3">
             <div className="flex items-center justify-between gap-2">
               <span className="text-[13px] font-medium">{a.title}</span>
-              <StatusBadge status={a.status} label={m.enums.approvalStatus[a.status]} />
+              <span className="flex flex-wrap items-center justify-end gap-1.5">
+                {a.policyException && <ExceptionChip testId="approval-exception-chip">{m.tasks.policy.selfApproved}</ExceptionChip>}
+                {a.noEligibleApprover && <ExceptionChip testId="approval-no-approver">{m.tasks.policy.noEligibleApprover}</ExceptionChip>}
+                <StatusBadge status={a.status} label={m.enums.approvalStatus[a.status]} />
+              </span>
             </div>
+            {a.policyException && a.policyExceptionReason && <p className="text-[11px] text-muted-foreground"><bdi>{a.policyExceptionReason}</bdi></p>}
             <ol className="grid gap-1 border-s ps-3 text-[11px] text-muted-foreground">
               {a.decisions.map((d) => (
                 <li key={d.id}><span className="text-foreground">{nameOf(d.actorId)}</span> · {m.enums.approvalStatus[d.decision]}{d.comment && <span> — “{d.comment}”</span>} · <TimeAgo date={d.createdAt} /></li>
               ))}
             </ol>
             {a.canDecide && <Decide orgSlug={orgSlug} approvalId={a.id} />}
+            {a.canSelfApprove && <SelfApprove orgSlug={orgSlug} approvalId={a.id} />}
             {a.canWithdraw && <Withdraw orgSlug={orgSlug} approvalId={a.id} />}
           </li>
         ))}
@@ -51,6 +59,26 @@ function Decide({ orgSlug, approvalId }: { orgSlug: string; approvalId: string }
         <Button size="sm" disabled={decide.pending} onClick={() => decide.run({ approvalId, decision: "APPROVED", comment: comment || null })}>{m.tasks.approve}</Button>
         <Button size="sm" variant="outline" disabled={decide.pending || !comment.trim()} title={m.tasks.rejectNeedsComment} onClick={() => decide.run({ approvalId, decision: "REJECTED", comment })}>{m.tasks.reject}</Button>
       </div>
+    </div>
+  );
+}
+
+/** §4.3: the requester decides their own request under the exception, with a justification and an explicit confirmation. */
+function SelfApprove({ orgSlug, approvalId }: { orgSlug: string; approvalId: string }) {
+  const { m } = useI18n();
+  const P = m.tasks.policy;
+  const decide = useAction(decideApprovalAction, { orgSlug });
+  return (
+    <div>
+      <ConfirmAction
+        trigger={<Button size="sm" variant="outline" className="border-warning/40 bg-warning-soft text-warning hover:bg-warning-soft/80" data-testid="approval-self-approve">{P.selfApprove}</Button>}
+        title={P.selfApprove}
+        description={P.selfApproveDesc}
+        confirmLabel={P.selfApprove}
+        field={{ type: "textarea", label: P.justification, required: true, hint: P.justificationHint }}
+        onConfirm={async (justification) => decide.run({ approvalId, decision: "APPROVED", comment: null, exception: { justification, confirm: true } })}
+        testId="self-approve-dialog"
+      />
     </div>
   );
 }

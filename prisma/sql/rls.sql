@@ -1,11 +1,13 @@
--- Operra Events OS — Row-Level Security (idempotent; re-run after every migration).
+-- Opera — Row-Level Security (idempotent; re-run after every migration).
 -- Every table with an "organizationId" column is tenant-owned unless listed in the
 -- exclusion list below. The runtime role (__APP_ROLE__) is not the table owner and
 -- has NOBYPASSRLS, so these policies apply to every application query.
 
 -- Global tables that carry an organizationId only as a lookup pointer.
-CREATE OR REPLACE FUNCTION operra_rls_excluded(tbl text) RETURNS boolean
+CREATE OR REPLACE FUNCTION opera_rls_excluded(tbl text) RETURNS boolean
 LANGUAGE sql IMMUTABLE AS $$ SELECT tbl IN ('PublicToken', 'MessageRef') $$;
+-- earlier name of the same helper
+DROP FUNCTION IF EXISTS operra_rls_excluded(text);
 
 DO $$
 DECLARE r record;
@@ -15,7 +17,7 @@ BEGIN
     FROM information_schema.columns c
     JOIN information_schema.tables t ON t.table_name = c.table_name AND t.table_schema = c.table_schema
     WHERE c.table_schema = 'public' AND c.column_name = 'organizationId' AND t.table_type = 'BASE TABLE'
-      AND NOT operra_rls_excluded(c.table_name)
+      AND NOT opera_rls_excluded(c.table_name)
   LOOP
     EXECUTE format('ALTER TABLE %I ENABLE ROW LEVEL SECURITY', r.table_name);
     EXECUTE format('DROP POLICY IF EXISTS tenant_isolation ON %I', r.table_name);

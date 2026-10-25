@@ -4,8 +4,13 @@ import type { JobName, JobPayloads } from "./queue";
 export async function runJob<N extends JobName>(name: N, data: JobPayloads[N]): Promise<unknown> {
   switch (name) {
     case "outbox": {
+      const { orgId } = data as JobPayloads["outbox"];
       const { processOutbox } = await import("@/server/modules/automation/engine");
-      return processOutbox((data as JobPayloads["outbox"]).orgId);
+      const r = await processOutbox(orgId);
+      // notices written by the mutation (or by the rules just run) send their e-mail now
+      const { sendDueDeliveries } = await import("@/server/modules/notifications/delivery");
+      await sendDueDeliveries(orgId, { limit: 50 });
+      return r;
     }
     case "import.validate": {
       const d = data as JobPayloads["import.validate"];

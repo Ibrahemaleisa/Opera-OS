@@ -6,15 +6,16 @@ import { LoginForm } from "./login-form";
 
 export const metadata = { title: "Sign in" };
 
-export default async function LoginPage({ searchParams }: { searchParams: Promise<{ next?: string }> }) {
+export default async function LoginPage({ searchParams }: { searchParams: Promise<{ next?: string; reset?: string }> }) {
   const session = await getSession();
-  const { next } = await searchParams;
+  const { next, reset } = await searchParams;
   if (session) redirect(safeNextPath(next) ?? "/select-org");
   const { m } = await getI18n();
   return (
     <div>
       <h1 className="text-2xl font-medium">{m.auth.signInTitle}</h1>
       <p className="mt-1 text-sm text-muted-foreground">{m.auth.signInSubtitle}</p>
+      {reset === "1" && <p role="status" className="mt-6 rounded-md bg-success-soft px-3 py-2 text-sm text-success" data-testid="reset-done">{m.auth.reset.done}</p>}
       <LoginForm next={next} />
       <p className="mt-6 text-sm text-muted-foreground">
         {m.auth.noAccount}{" "}

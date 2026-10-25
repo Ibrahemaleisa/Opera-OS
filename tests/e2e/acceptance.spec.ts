@@ -47,7 +47,7 @@ async function accept(browser: Browser, invitePath: string, name: string, mobile
   return page;
 }
 
-test("Operra acceptance scenario", async ({ page, browser }) => {
+test("Opera acceptance scenario", async ({ page, browser }) => {
   test.setTimeout(420_000);
   // 1. Agency admin creates organization
   await register(page, slug, `owner-${stamp}@example.test`);

@@ -13,9 +13,11 @@ import { audit } from "@/server/modules/audit/audit";
 import { bootstrapOrganization } from "@/server/modules/org/bootstrap";
 import { acceptInviteSchema, loginSchema, registerSchema } from "@/server/modules/org/schemas";
 import type { z } from "zod";
+import type { Prisma } from "@/generated/prisma/client";
+import { recordFailedLogin } from "@/server/auth/lockout";
+import { issueMfaChallenge, RECOVERY_LOW_WATERMARK, verifyMfaChallenge, type MfaChallenge } from "./mfa";
+import { defaultSecuritySettings, mfaRequirementsForUser } from "./mfa-policy";
 
-const LOCK_AFTER = 8;
-const LOCK_MINUTES = 15;
 
 export async function registerAgency(input: z.input<typeof registerSchema>, meta: SessionMeta = {}) {
   const data = registerSchema.parse(input);
@@ -29,7 +31,8 @@ export async function registerAgency(input: z.input<typeof registerSchema>, meta
   try {
     await withTenant({ orgId, userId }, async (tx) => {
       await tx.user.create({ data: { id: userId, email: data.email, name: data.name, nameAr: data.locale === "ar" ? data.name : null, passwordHash, locale: data.locale } });
-      await tx.organization.create({ data: { id: orgId, slug: data.orgSlug, name: data.orgName, defaultLocale: data.locale } });
+      // new organisations require MFA for privileged roles from day one (§5.2), with the 14-day grace
+      await tx.organization.create({ data: { id: orgId, slug: data.orgSlug, name: data.orgName, defaultLocale: data.locale, settings: defaultSecuritySettings() as unknown as Prisma.InputJsonValue } });
       const roles = await bootstrapOrganization(tx, orgId, userId);
       await tx.membership.create({ data: { organizationId: orgId, userId, roleId: roles.get("owner")!, status: "ACTIVE" } });
       await tx.resourceProfile.create({ data: { organizationId: orgId, userId, kind: "EMPLOYEE" } });
@@ -43,7 +46,15 @@ export async function registerAgency(input: z.input<typeof registerSchema>, meta
   return { userId, orgId, orgSlug: data.orgSlug, session, redirectTo: `/o/${data.orgSlug}` };
 }
 
-export async function login(input: z.input<typeof loginSchema>, meta: SessionMeta = {}) {
+export type LoginResult =
+  | { mfa: false; userId: string; session: { token: string; expiresAt: Date }; redirectTo: string; locale: string }
+  | { mfa: true; challenge: MfaChallenge; locale: string };
+
+/**
+ * Password step. With MFA on, no session exists yet: an MFA challenge is returned instead (§5.2) and
+ * the failed-login counter is only cleared once the second step succeeds.
+ */
+export async function login(input: z.input<typeof loginSchema>, meta: SessionMeta = {}): Promise<LoginResult> {
   const data = loginSchema.parse(input);
   await enforceRateLimit(`login:ip:${meta.ip ?? "unknown"}`, 30, 600);
   await enforceRateLimit(`login:email:${data.email}`, 10, 600);
@@ -56,18 +67,35 @@ export async function login(input: z.input<typeof loginSchema>, meta: SessionMet
   if (user.lockedUntil && user.lockedUntil > new Date()) throw new AppError("auth.locked", "LOCKED", 423);
   const ok = await verifyPassword(user.passwordHash, data.password);
   if (!ok) {
-    const failed = user.failedLogins + 1;
-    await db.user.update({
-      where: { id: user.id },
-      data: { failedLogins: failed >= LOCK_AFTER ? 0 : failed, lockedUntil: failed >= LOCK_AFTER ? new Date(Date.now() + LOCK_MINUTES * 60_000) : null },
-    });
+    await recordFailedLogin(user.id);
     throw new AppError("auth.invalidCredentials", "INVALID_CREDENTIALS", 401);
   }
+  if (user.mfaEnabledAt && user.mfaSecretEnc) return { mfa: true, challenge: await issueMfaChallenge(user.id), locale: user.locale };
   await db.user.update({ where: { id: user.id }, data: { failedLogins: 0, lockedUntil: null, lastLoginAt: new Date() } });
-  const session = await createSession(user.id, meta);
-  const orgs = await listUserOrganizations(user.id);
-  const redirectTo = orgs.length === 1 ? homePathFor(orgs[0].role.baseRole, orgs[0].organization.slug) : "/select-org";
-  return { userId: user.id, session, redirectTo, locale: user.locale };
+  return { mfa: false, userId: user.id, session: await createSession(user.id, meta), redirectTo: await landingFor(user.id, null), locale: user.locale };
+}
+
+/** Second step: a TOTP or a recovery code against the challenge. A session only on success. */
+export async function completeMfaLogin(challengeToken: string, input: { code?: string | null; recoveryCode?: string | null }, meta: SessionMeta = {}) {
+  const r = await verifyMfaChallenge(challengeToken, input, meta);
+  if (!r.ok) return r;
+  const user = await db.user.findUniqueOrThrow({ where: { id: r.userId }, select: { locale: true, mfaEnabledAt: true } });
+  const session = await createSession(r.userId, meta);
+  const redirectTo = r.usedRecoveryCode && r.recoveryLeft <= RECOVERY_LOW_WATERMARK ? "/account?recovery=low" : await landingFor(r.userId, user.mfaEnabledAt);
+  return { ok: true as const, session, redirectTo, locale: user.locale };
+}
+
+/**
+ * Where a signed-in user lands: their workspace, the org picker, or — when an organisation requires
+ * MFA for their role and they haven't set it up — the enrolment interstitial (grace: skippable).
+ */
+async function landingFor(userId: string, mfaEnabledAt: Date | null): Promise<string> {
+  const orgs = await listUserOrganizations(userId);
+  const home = orgs.length === 1 ? homePathFor(orgs[0].role.baseRole, orgs[0].organization.slug) : "/select-org";
+  if (mfaEnabledAt) return home;
+  const req = await mfaRequirementsForUser(userId, null);
+  if (!req.length) return home;
+  return `/mfa-setup?next=${encodeURIComponent(home)}`;
 }
 
 /** Resolve an invitation token to its tenant + invitation (public, pre-tenant). */
@@ -131,6 +159,8 @@ export async function acceptInvitation(input: z.input<typeof acceptInviteSchema>
     await tx.publicToken.update({ where: { id: sha256Hex(data.token) }, data: { usedAt: new Date() } });
     await audit(tx, { ...systemContext(orgId, org.slug), userId, userName: user?.name ?? data.name ?? inv.email, request: meta }, { action: "member.join", entityType: "MEMBERSHIP", entityId: userId, summary: `${inv.email} → ${role.key}` });
   });
+  // an existing account with MFA on gets no session here: it signs in through both steps
+  if (user?.mfaEnabledAt) return { userId, session: null, redirectTo: `/login?next=${encodeURIComponent(homePathFor(role.baseRole, org.slug))}` };
   const session = await createSession(userId, meta);
   return { userId, session, redirectTo: homePathFor(role.baseRole, org.slug) };
 }

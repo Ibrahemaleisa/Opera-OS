@@ -7,14 +7,16 @@ import { nav } from "./dict/nav";
 import { modules } from "./dict/modules";
 import { ops } from "./dict/operations";
 import { audit } from "./dict/audit";
+import { health } from "./dict/health";
 
-const parts = { common, errors, nav, auth, enums, ...modules, ops, audit };
+const parts = { common, errors, nav, auth, enums, ...modules, ops, audit, health };
 type Parts = typeof parts;
 
 export type Messages = { [K in keyof Parts]: Parts[K]["ar"] };
 export type Locale = "ar" | "en";
 export const LOCALES: Locale[] = ["ar", "en"];
 export const DEFAULT_LOCALE: Locale = "ar";
+// legacy identifier, kept so existing deployments and devices keep working (ARCHITECTURE.md §10)
 export const LOCALE_COOKIE = "operra_locale";
 
 function build(locale: Locale): Messages {

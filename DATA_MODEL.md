@@ -1,4 +1,4 @@
-# Operra Events OS — Data model
+# Opera — Data model
 
 Source of truth: `prisma/schema.prisma` (87 models, PostgreSQL 16). Migrations live in
 `prisma/migrations/`; row-level security in `prisma/sql/rls.sql`. This document explains

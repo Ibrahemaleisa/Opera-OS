@@ -1,6 +1,6 @@
 import type { Project, ProjectMember } from "@/generated/prisma/client";
 import type { Tx } from "@/server/db/tenant";
-import { ForbiddenError, NotFoundError } from "@/server/errors";
+import { AppError, ForbiddenError, NotFoundError } from "@/server/errors";
 import type { ServiceContext } from "./context";
 import type { PermissionKey } from "./permissions";
 import { isClientRole } from "./roles";
@@ -36,6 +36,39 @@ export interface ProjectScope {
   clientView: boolean;
   /** field agent: only their assigned deliveries */
   fieldOnly: boolean;
+  /** CLOSED or CANCELLED: read-only except the financial and incident tails (BUSINESS_RULES §1.5) */
+  archived: boolean;
+  /** ON_HOLD, COMPLETED, CLOSED or CANCELLED: reminders and escalations are suppressed (§1.6) */
+  quiet: boolean;
+  /**
+   * What `operate` would be if the project were not archived. Only for the §1.5 tails that stay
+   * operable in archived projects (incidents, in-car deliveries); never for ordinary edits.
+   */
+  tailOperate: boolean;
+}
+
+/** Archived projects (BUSINESS_RULES §0): read-only after the status change. */
+export const ARCHIVED_PROJECT_STATUSES = ["CLOSED", "CANCELLED"] as const;
+/** Quiet projects (§0): no reminders or escalations, with the §1.6 exceptions. */
+export const QUIET_PROJECT_STATUSES = ["ON_HOLD", "COMPLETED", "CLOSED", "CANCELLED"] as const;
+
+export function isArchivedStatus(status: string) {
+  return (ARCHIVED_PROJECT_STATUSES as readonly string[]).includes(status);
+}
+
+export function isQuietStatus(status: string) {
+  return (QUIET_PROJECT_STATUSES as readonly string[]).includes(status);
+}
+
+/** LC rule 5: every mutation in an archived project is refused, except the listed tails. */
+export class ProjectArchivedError extends AppError {
+  constructor() {
+    super("errors.projectArchived", "PROJECT_ARCHIVED", 409);
+  }
+}
+
+export function assertNotArchived(scope: Pick<ProjectScope, "archived">): void {
+  if (scope.archived) throw new ProjectArchivedError();
 }
 
 /**
@@ -51,6 +84,16 @@ export async function projectScope(tx: Tx, ctx: ServiceContext, projectId: strin
 }
 
 export function computeProjectScope(ctx: ServiceContext, project: Project, member: ProjectMember | null): ProjectScope {
+  const s = baseProjectScope(ctx, project, member);
+  const archived = isArchivedStatus(project.status);
+  const quiet = isQuietStatus(project.status);
+  // archived projects are read-only: nobody manages or operates them (reopen uses project.delete)
+  return { ...s, archived, quiet, tailOperate: s.operate, ...(archived ? { manage: false, operate: false } : {}) };
+}
+
+type BaseScope = Omit<ProjectScope, "archived" | "quiet" | "tailOperate">;
+
+function baseProjectScope(ctx: ServiceContext, project: Project, member: ProjectMember | null): BaseScope {
   const base = { project, member };
   if (ctx.permissions.has("*")) {
     return { ...base, manage: true, operate: true, finance: true, vip: true, export: true, approve: true, workstreamIds: [], taskScope: "all", clientView: false, fieldOnly: false };

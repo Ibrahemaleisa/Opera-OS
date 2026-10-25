@@ -60,7 +60,7 @@ class SmtpProvider implements MessageProvider {
     const nodemailer = await import("nodemailer");
     const transport = nodemailer.createTransport(process.env.SMTP_URL!);
     try {
-      const info = await transport.sendMail({ from: process.env.EMAIL_FROM, to: msg.to, subject: msg.subject ?? "", text: msg.body, headers: { "X-Operra-Ref": msg.reference } });
+      const info = await transport.sendMail({ from: process.env.EMAIL_FROM, to: msg.to, subject: msg.subject ?? "", text: msg.body, headers: { "X-Opera-Ref": msg.reference } });
       return { providerMessageId: info.messageId, status: "SENT" };
     } catch (e) {
       throw new ProviderError((e as Error).message, true);
@@ -133,7 +133,7 @@ function hmac(secret: string, body: string) {
 export function verifyAndParseWebhook(provider: string, rawBody: string, headers: Headers): ProviderEvent[] | null {
   if (provider === "simulation") {
     const secret = process.env.WEBHOOK_SECRET_SIMULATION;
-    const sig = headers.get("x-operra-signature") ?? "";
+    const sig = headers.get("x-opera-signature") ?? "";
     if (!secret || !safeEqual(hmac(secret, rawBody), sig)) return null;
     const j = JSON.parse(rawBody) as { id: string; messageId: string; status: ProviderEvent["status"]; error?: string };
     return [{ externalId: j.id, providerMessageId: j.messageId, status: j.status, error: j.error }];

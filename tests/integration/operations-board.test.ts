@@ -47,10 +47,11 @@ describe("operations board (Today) and My work", () => {
     await member(a.ctx, B.id, staff.userId);
     await task(a.ctx, B.id, "Late in cancelled", -2, { ownerId: staff.userId });
     await task(a.ctx, B.id, "Late in cancelled 2", -2);
-    await setProjectStatus(a.ctx, B.id, "CANCELLED");
+    // M2 (§1.2, §6): status changes carry the loaded version; cancel and hold need a reason
+    await setProjectStatus(a.ctx, B.id, "CANCELLED", { version: B.version, reason: "Cancelled for the board test" });
     const C = await project(a.ctx, "مشروع ج");
     await task(a.ctx, C.id, "Late on hold", -2);
-    await setProjectStatus(a.ctx, C.id, "ON_HOLD");
+    await setProjectStatus(a.ctx, C.id, "ON_HOLD", { version: C.version, reason: "Held for the board test" });
 
     // D: the PM's own project with one overdue task
     const D = await project(pm.ctx, "مشروع د");
@@ -59,8 +60,10 @@ describe("operations board (Today) and My work", () => {
     // ── director: org scope ──
     const b = await operationsBoard(director.ctx);
     expect(b.portfolio.map((p) => p.id).sort()).toEqual([A.id, D.id].sort());
-    const projectsInRows = new Set(b.exceptions.flatMap((g) => g.rows.map((r) => r.project.id)));
+    // M2 §1.6: a held project raises no exceptions; it is only listed under "On hold" with its reason
+    const projectsInRows = new Set(b.exceptions.filter((g) => g.kind !== "onHold").flatMap((g) => g.rows.map((r) => r.project.id)));
     expect(projectsInRows.has(B.id) || projectsInRows.has(C.id)).toBe(false);
+    expect(group(b.exceptions, "onHold")?.rows.map((r) => [r.id, r.meta.reason])).toEqual([[C.id, "Held for the board test"]]);
 
     const overdue = group(b.exceptions, "overdueTask")!;
     expect(overdue.count).toBe(4);

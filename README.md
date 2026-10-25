@@ -1,8 +1,14 @@
-# Operra Events OS
+# Opera
 
-Arabic-first (RTL, with full English) multi-tenant operations system for Saudi event,
-conference, exhibition, protocol, VIP invitation-delivery and exhibition-construction
-agencies: projects composed from templates, tasks, VIP delivery with an Excel Import
+**Opera** is the parent brand. **Opera Technologies** develops Opera's operational software;
+the product in this repository serves agencies and organizations that manage complex
+operations — events and conferences, VIP invitations and protocol, exhibitions, booths and
+pavilions. Opera's execution services (event management, protocol, exhibition production)
+are a separate line of business, presented on the corporate site at `/`; the software
+product lives behind `/login`.
+
+The product is an Arabic-first (RTL, with full English) multi-tenant operations platform:
+projects composed from templates, tasks and approvals, VIP delivery with an Excel Import
 Studio and an offline driver PWA, digital invitations with RSVP/QR, event operations,
 VIP protocol, booth production, vendors, finance, and client and vendor portals.
 
@@ -48,17 +54,17 @@ Without Redis, set `JOBS_MODE=inline` and skip the worker (jobs run in-process).
 
 ### Demo logins (after `pnpm db:seed`)
 
-Password: `Operra-Demo-2026` (local demo only; override with `SEED_PASSWORD`).
+Password: `Opera-Demo-2026` (local demo only; override with `SEED_PASSWORD`).
 
 | Email | Role | Lands on |
 |---|---|---|
-| owner@operra.demo | Agency owner | `/o/demo` (Operations: decisions waiting, exceptions, next events) |
-| director@operra.demo | Ops director (approves campaigns and finance) | `/o/demo` |
-| pm@operra.demo | Project manager | `/o/demo` (scoped to their projects) |
-| lead@operra.demo / staff@operra.demo | Team lead / employee | `/o/demo/my-work` |
-| agent1@operra.demo / agent2@operra.demo | Field delivery agents | `/field/demo` (open on a phone) |
-| client@operra.demo | Client approver | `/portal/demo` |
-| vendor@operra.demo | Vendor | `/vendor/demo` |
+| owner@opera.demo | Agency owner | `/o/demo` (Operations: decisions waiting, exceptions, next events) |
+| director@opera.demo | Ops director (approves campaigns and finance) | `/o/demo` |
+| pm@opera.demo | Project manager | `/o/demo` (scoped to their projects) |
+| lead@opera.demo / staff@opera.demo | Team lead / employee | `/o/demo/my-work` |
+| agent1@opera.demo / agent2@opera.demo | Field delivery agents | `/field/demo` (open on a phone) |
+| client@opera.demo | Client approver | `/portal/demo` |
+| vendor@opera.demo | Vendor | `/vendor/demo` |
 
 All demo names, organisations and numbers are fictional. `pnpm db:reset-demo` removes the
 demo agency (development only).
@@ -105,6 +111,38 @@ at `/api/webhooks/unifonic` (`WEBHOOK_SECRET_UNIFONIC`) and `/api/webhooks/whats
 has no receipt webhook; email stays at "sent". See
 IMPLEMENTATION_PLAN.md: the live adapters still need verification with real accounts.
 
+**Notification and account e-mail (SMTP).** In-app notices that call for e-mail (approvals,
+escalations, handovers, security notices; BUSINESS_RULES §3) go through an outbox with retries
+(1 m, 5 m, 30 m, 2 h, then DEAD) and are listed under *Settings → Providers → Delivery log*. To send
+them for real:
+
+1. Set `SMTP_URL` (e.g. `smtps://user:password@smtp.example.com:465`, or `smtp://…:587` with
+   STARTTLS) and `EMAIL_FROM` (e.g. `Opera <no-reply@your-domain>`; SPF/DKIM for that domain are
+   your mail provider's setup). `APP_URL` must be the public URL: it builds the links in e-mails.
+2. Switch the organisation's **Email** channel to LIVE under *Settings → Providers*. Account mail
+   (password reset, "password changed", MFA notices) needs only `SMTP_URL`.
+
+Without SMTP, or with the channel in simulation, every e-mail ends **Simulated**: recorded, never
+sent and never shown as sent. Outside production a simulated password-reset link is printed to the
+server console (and nowhere else) so the flow can be tried locally. Where data residency applies,
+the e-mail provider's region is part of BUSINESS_RULES §9 (e-mails never contain VIP contact data).
+
+### Scheduler: run it at least every 5 minutes
+
+Reminders, the escalation ladders (tasks, approvals, vendor work orders, unacknowledged incidents,
+deliveries near a campaign deadline), stalled-work recovery, scheduled sends and e-mail retries all
+run on the scheduler tick. **Production MUST tick at least every 5 minutes** (BUSINESS_RULES §0,
+§7.4): the 15-minute critical-incident escalation and the 1-minute e-mail retry are not met
+otherwise. Ticks are idempotent and bounded, so calling more often is safe, and a late tick still
+fires every tier it missed — once, late. Options:
+
+* the worker (`JOBS_MODE=queue` + `pnpm worker`) ticks every 5 minutes by itself;
+* an external scheduler calling `GET /api/cron/scheduler` with `Authorization: Bearer $CRON_SECRET`
+  every 5 minutes;
+* Vercel Cron on a plan that allows a `*/5 * * * *` schedule.
+
+System health shows a warning when the last tick is older than 15 minutes and critical after 60.
+
 ## Deploy on Vercel
 
 The app runs on Vercel with Neon Postgres and a **private** Vercel Blob store:
@@ -123,8 +161,10 @@ The app runs on Vercel with Neon Postgres and a **private** Vercel Blob store:
    database makes every page seconds slower — `/api/health` reports `dbRoundTripMs`.
 
 Differences from the Docker setup: there is no long-running worker — jobs run inside the
-request, and a daily Vercel Cron (`/api/cron/scheduler`, Hobby plan limit) sends due-soon/overdue
-reminders; without Redis, rate limits are per function instance; uploads are limited to ~4 MB.
+request, and the Vercel Cron in `vercel.json` (`/api/cron/scheduler`) is daily because of the Hobby
+plan limit — **that does not meet the ≤ 5-minute tick production needs** (see "Scheduler" above):
+use a plan that allows `*/5 * * * *` or an external scheduler with `CRON_SECRET`; without Redis,
+rate limits are per function instance; uploads are limited to ~4 MB.
 
 ## Corporate site
 

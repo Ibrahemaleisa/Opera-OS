@@ -1,4 +1,4 @@
-# Operra Events OS — Implementation plan & status
+# Opera — Implementation plan & status
 
 Status as of the current `claude/operra-events-os` branch. "Done" means implemented,
 reachable in the UI, and covered by at least one automated test (unit, integration or

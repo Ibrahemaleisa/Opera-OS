@@ -22,7 +22,7 @@ export interface ServiceContext {
 export function systemContext(orgId: string, orgSlug = "", actorId = "system"): ServiceContext {
   return {
     userId: actorId,
-    userName: "Operra",
+    userName: "Opera",
     locale: "ar",
     orgId,
     orgSlug,

@@ -1,24 +1,58 @@
 import ExcelJS from "exceljs";
 import { z } from "zod";
 import type { ImportRowStatus, Prisma } from "@/generated/prisma/client";
-import { neutralizeFormula } from "@/lib/csv";
+import { addXlsxRow } from "../export";
 import { createId, shortCode } from "@/lib/id";
 import { systemContext, type ServiceContext } from "@/server/authz/context";
-import { assertCan, projectScope } from "@/server/authz/policy";
+import { assertCan, assertNotArchived, projectScope } from "@/server/authz/policy";
 import { withTenant, type Tx } from "@/server/db/tenant";
 import { AppError, ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/server/errors";
 import { audit } from "@/server/modules/audit/audit";
 import { emit } from "@/server/modules/automation/outbox";
+import { notify } from "@/server/modules/notifications/notify";
 import { storeAttachment } from "@/server/modules/files/service";
 import { storage } from "@/server/modules/files/storage";
 import { enqueue } from "@/server/jobs/dispatch";
 import { CANONICAL_FIELDS, headerSignature, suggestMapping } from "./canonical";
 import { DEFAULT_OPTIONS, nameKey, normalizeRow, type ImportOptions, type Mapping, type NormalizedRecipient } from "./normalize";
-import { detectHeaderRow, extractTable, parseWorkbook } from "./parse";
+import { assertRowCap, extractTable, parseWorkbook, pickSheet } from "./parse";
 
 /** Imports up to this many rows are processed within the request; larger ones go to the worker. */
 export const INLINE_ROW_LIMIT = Number(process.env.IMPORT_INLINE_ROW_LIMIT ?? 1500);
 const CHUNK = 300;
+
+// ── Processing lease (BUSINESS_RULES §7.1) ──────────────────────────────────
+
+/** A run holds the batch for 120 s and renews after every chunk (≤ 1000 rows) and at least every 60 s. */
+export const IMPORT_LEASE_MS = 120_000;
+/** Attempts per stage (the user's start counts as the first); then the sweep gives up. */
+export const IMPORT_MAX_ATTEMPTS = 3;
+
+/** Thrown inside a run that lost its lease (another run resumed the batch): the run stops quietly. */
+class LeaseLost extends Error {}
+
+const leaseEnd = (from = Date.now()) => new Date(from + IMPORT_LEASE_MS);
+const leaseToken = (kind: "req" | "run" | "resume") => `${kind}:${createId()}`;
+
+/**
+ * Starts a run: takes the lease over from `expected` (the request or resume that started it; a job
+ * without one adopts the current holder) under a fresh token, so two runs never hold it together.
+ */
+async function takeImportLease(orgId: string, batchId: string, status: "VALIDATING" | "COMMITTING", expected?: string): Promise<string | null> {
+  return withTenant({ orgId }, async (tx) => {
+    const b = await tx.importBatch.findUnique({ where: { id: batchId }, select: { status: true, leaseOwner: true } });
+    if (!b || b.status !== status) return null;
+    const token = leaseToken("run");
+    const r = await tx.importBatch.updateMany({ where: { id: batchId, status, leaseOwner: expected === undefined ? b.leaseOwner : expected }, data: { leaseOwner: token, leaseUntil: leaseEnd() } });
+    return r.count ? token : null;
+  });
+}
+
+/** Renews the lease inside the caller's transaction; throws {@link LeaseLost} when another run took over. */
+async function renewImportLease(tx: Tx, batchId: string, status: "VALIDATING" | "COMMITTING", token: string) {
+  const r = await tx.importBatch.updateMany({ where: { id: batchId, status, leaseOwner: token }, data: { leaseUntil: leaseEnd() } });
+  if (!r.count) throw new LeaseLost();
+}
 
 export const optionsSchema = z.object({
   duplicateScope: z.enum(["PROJECT", "ORGANIZATION"]).default("PROJECT"),
@@ -33,11 +67,13 @@ function readOptions(raw: unknown): ImportOptions {
   return p.success ? { ...DEFAULT_OPTIONS, ...p.data, defaultCity: p.data.defaultCity ?? null } : DEFAULT_OPTIONS;
 }
 
-async function loadBatch(tx: Tx, ctx: ServiceContext, batchId: string) {
+/** Loads a batch for reading (also in archived projects, LC rule 5) or for a change ("write"). */
+async function loadBatch(tx: Tx, ctx: ServiceContext, batchId: string, mode: "read" | "write" = "write") {
   const batch = await tx.importBatch.findUnique({ where: { id: batchId } });
   if (!batch) throw new NotFoundError();
   const scope = await projectScope(tx, ctx, batch.projectId);
-  if (!scope.operate || scope.clientView) throw new ForbiddenError();
+  if (mode === "write") assertNotArchived(scope);
+  if (!(mode === "read" && scope.archived ? scope.tailOperate : scope.operate) || scope.clientView) throw new ForbiddenError();
   assertCan(ctx, "recipient.import");
   return { batch, scope };
 }
@@ -88,13 +124,15 @@ export async function createImport(ctx: ServiceContext, input: { projectId: stri
   assertCan(ctx, "recipient.import");
   const ext = input.fileName.toLowerCase().split(".").pop();
   if (!["xlsx", "csv"].includes(ext ?? "")) throw new ValidationError("errors.fileType");
+  assertRowCap(input.body, input.fileName); // §7.1 rule 4: refused before any row is parsed
   const sheets = await parseWorkbook(input.body, input.fileName); // validate before storing
   if (!sheets.length || sheets.every((s) => s.grid.length < 2)) throw new ValidationError("errors.noRowsSelected");
-  const first = sheets.find((s) => s.grid.length >= 2) ?? sheets[0];
-  const headerRow = detectHeaderRow(first.grid);
+  // KD-2: the sheet with the best header score, not merely the first one
+  const { sheet: first, headerRow } = pickSheet(sheets)!;
   const { headers, rows } = extractTable(first.grid, headerRow);
   return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
     const scope = await projectScope(tx, ctx, input.projectId);
+    assertNotArchived(scope);
     if (!scope.operate || scope.clientView) throw new ForbiddenError();
     if (input.campaignId && !(await tx.invitationCampaign.findFirst({ where: { id: input.campaignId, projectId: input.projectId, type: "PHYSICAL" } }))) throw new NotFoundError();
     const batchId = createId();
@@ -131,7 +169,7 @@ export async function createImport(ctx: ServiceContext, input: { projectId: stri
 
 export async function getImportPreview(ctx: ServiceContext, batchId: string, override?: { sheetName?: string; headerRow?: number }) {
   const { batch, customFields, mappings } = await withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
-    const { batch } = await loadBatch(tx, ctx, batchId);
+    const { batch } = await loadBatch(tx, ctx, batchId, "read");
     const customFields = await tx.customFieldDefinition.findMany({ where: { entityType: "RECIPIENT", archived: false, OR: [{ projectId: null }, { projectId: batch.projectId }] } });
     const mappings = await tx.importMapping.findMany({ where: { kind: "RECIPIENTS" }, orderBy: { createdAt: "desc" }, take: 20 });
     return { batch, customFields, mappings };
@@ -169,6 +207,7 @@ export async function configureAndValidate(ctx: ServiceContext, input: z.output<
   const allowed = new Set([...CANONICAL_FIELDS.map((f) => f.key as string)]);
   for (const k of Object.keys(mapping)) if (!allowed.has(k) && !k.startsWith("cf:")) delete (mapping as Record<string, unknown>)[k];
   if (!mapping.nameAr && !mapping.nameEn) throw new ValidationError("errors.validation", { mapping: ["delivery.import.mapName"] });
+  const owner = leaseToken("req");
   const batch = await withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
     const { batch } = await loadBatch(tx, ctx, input.batchId);
     if (!["PARSED", "VALIDATED", "FAILED"].includes(batch.status)) throw new ValidationError("errors.importState");
@@ -176,7 +215,7 @@ export async function configureAndValidate(ctx: ServiceContext, input: z.output<
     // compare-and-set claim: a double-clicked "validate" starts one validation, the other gets a conflict
     const claimed = await tx.importBatch.updateMany({
       where: { id: batch.id, status: batch.status },
-      data: { sheetName: input.sheetName, headerRow: input.headerRow, mapping: mapping as Prisma.InputJsonValue, options: { ...(batch.options as object), ...input.options } as Prisma.InputJsonValue, status: "VALIDATING", progress: 0, error: null },
+      data: { sheetName: input.sheetName, headerRow: input.headerRow, mapping: mapping as Prisma.InputJsonValue, options: { ...(batch.options as object), ...input.options } as Prisma.InputJsonValue, status: "VALIDATING", progress: 0, error: null, leaseOwner: owner, leaseUntil: leaseEnd(), attempts: 1 },
     });
     if (!claimed.count) throw new ConflictError();
     const updated = await tx.importBatch.findUniqueOrThrow({ where: { id: batch.id } });
@@ -186,7 +225,7 @@ export async function configureAndValidate(ctx: ServiceContext, input: z.output<
     await audit(tx, ctx, { action: "import.configure", entityType: "IMPORT", entityId: batch.id, projectId: batch.projectId, meta: { mapping, options: input.options } });
     return updated;
   });
-  const mode = batch.totalRows > INLINE_ROW_LIMIT ? await enqueue("import.validate", { orgId: ctx.orgId, actorId: ctx.userId, batchId: batch.id }, { jobId: `import-validate-${batch.id}-${Date.now()}` }) : (await runValidation(ctx.orgId, ctx.userId, batch.id), "inline");
+  const mode = batch.totalRows > INLINE_ROW_LIMIT ? await enqueue("import.validate", { orgId: ctx.orgId, actorId: ctx.userId, batchId: batch.id }, { jobId: `import-validate-${batch.id}-${Date.now()}` }) : (await runValidation(ctx.orgId, ctx.userId, batch.id, owner), "inline");
   return { batchId: batch.id, mode };
 }
 
@@ -228,12 +267,20 @@ function classify(errors: unknown[], warnings: unknown[], dup: boolean): ImportR
   return warnings.length ? "WARNING" : "VALID";
 }
 
-export async function runValidation(orgId: string, actorId: string, batchId: string) {
+/**
+ * Validates a batch (idempotent: its rows are replaced as a whole). Holds the processing lease and
+ * renews it after the parse, the duplicate lookup and every chunk; a run that loses it stops.
+ */
+export async function runValidation(orgId: string, actorId: string, batchId: string, owner?: string) {
   const ctx = { ...systemContext(orgId), userId: actorId };
+  const token = await takeImportLease(orgId, batchId, "VALIDATING", owner);
+  if (!token) return { skipped: true };
   const batch = await withTenant({ orgId }, (tx) => tx.importBatch.findUnique({ where: { id: batchId } }));
   if (!batch || batch.status !== "VALIDATING") return { skipped: true };
+  const renew = () => withTenant({ orgId }, (tx) => renewImportLease(tx, batchId, "VALIDATING", token));
   try {
     const { rows } = await readTable(batch);
+    await renew();
     const mapping = (batch.mapping ?? {}) as Mapping;
     const opts = readOptions(batch.options);
     const results = rows.map((r) => ({ r, res: normalizeRow(r.values, mapping, opts) }));
@@ -245,6 +292,7 @@ export async function runValidation(orgId: string, actorId: string, batchId: str
         names: opts.matchOn.includes("name") ? [...new Set(results.map((x) => nameKey(x.res.normalized)))] : [],
       }),
     );
+    await renew();
     const idx = keyIndex(existing);
     const firstSeen = new Map<string, number>();
     const data: Prisma.ImportRowCreateManyInput[] = results.map(({ r, res }) => {
@@ -272,22 +320,31 @@ export async function runValidation(orgId: string, actorId: string, batchId: str
       };
     });
     await withTenant({ orgId }, async (tx) => {
+      await renewImportLease(tx, batchId, "VALIDATING", token);
       await tx.importRow.deleteMany({ where: { batchId } });
     });
     let done = 0;
     for (const part of chunked(data, 1000)) {
       await withTenant({ orgId }, async (tx) => {
+        // the lease check and the rows commit together: a run that lost the batch writes nothing
+        await renewImportLease(tx, batchId, "VALIDATING", token);
         await tx.importRow.createMany({ data: part });
         done += part.length;
         await tx.importBatch.update({ where: { id: batchId }, data: { progress: Math.round((done / Math.max(1, data.length)) * 100) } });
       });
     }
+    await withTenant({ orgId }, async (tx) => {
+      await renewImportLease(tx, batchId, "VALIDATING", token);
+      await tx.importBatch.update({ where: { id: batchId }, data: { leaseOwner: null, leaseUntil: null } });
+    });
     await refreshCounts(orgId, batchId, "VALIDATED");
     await withTenant({ orgId, userId: actorId }, (tx) => audit(tx, ctx, { action: "import.validated", entityType: "IMPORT", entityId: batchId, projectId: batch.projectId, summary: `${data.length} rows` }));
     return { rows: data.length };
   } catch (err) {
+    if (err instanceof LeaseLost) return { skipped: true, leaseLost: true };
     const message = err instanceof AppError ? err.message : "errors.unexpected";
-    await withTenant({ orgId }, (tx) => tx.importBatch.update({ where: { id: batchId }, data: { status: "FAILED", error: message } }));
+    const failed = await withTenant({ orgId }, (tx) => tx.importBatch.updateMany({ where: { id: batchId, status: "VALIDATING", leaseOwner: token }, data: { status: "FAILED", error: message, leaseOwner: null, leaseUntil: null } }));
+    if (!failed.count) return { skipped: true, leaseLost: true };
     await withTenant({ orgId, userId: actorId }, (tx) => emit(tx, ctx, "import.failed", { batchId, projectId: batch.projectId, link: `/projects/${batch.projectId}/delivery/imports/${batchId}` }));
     if (!(err instanceof AppError)) throw err;
     return { failed: true };
@@ -309,7 +366,7 @@ async function refreshCounts(orgId: string, batchId: string, status?: "VALIDATED
 
 export async function listImportRows(ctx: ServiceContext, batchId: string, filter: { status?: string; take?: number; skip?: number } = {}) {
   return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
-    const { batch, scope } = await loadBatch(tx, ctx, batchId);
+    const { batch, scope } = await loadBatch(tx, ctx, batchId, "read");
     const where = { batchId, ...(filter.status ? { status: filter.status as ImportRowStatus } : {}) };
     const [rows, total, counts, history] = await Promise.all([
       tx.importRow.findMany({ where, orderBy: { rowNumber: "asc" }, take: Math.min(filter.take ?? 200, 1000), skip: filter.skip ?? 0 }),
@@ -392,6 +449,7 @@ export async function resolveRows(ctx: ServiceContext, input: { batchId: string;
 export const commitSchema = z.object({ batchId: z.string(), includeWarnings: z.boolean().default(true), acceptPartial: z.boolean().default(false), campaignId: z.string().nullish() });
 
 export async function commitImport(ctx: ServiceContext, input: z.output<typeof commitSchema>) {
+  const owner = leaseToken("req");
   const batch = await withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
     const { batch } = await loadBatch(tx, ctx, input.batchId);
     if (batch.status !== "VALIDATED") throw new ValidationError("errors.importState");
@@ -405,13 +463,13 @@ export async function commitImport(ctx: ServiceContext, input: z.output<typeof c
     if (blocking > 0 && !input.acceptPartial) throw new AppError("delivery.import.partialRequired", "PARTIAL_REQUIRED", 409);
     const claimed = await tx.importBatch.updateMany({
       where: { id: batch.id, status: "VALIDATED" },
-      data: { status: "COMMITTING", progress: 0, committedById: ctx.userId, campaignId: input.campaignId === undefined ? batch.campaignId : input.campaignId, options: { ...(batch.options as object), includeWarnings: input.includeWarnings, acceptPartial: input.acceptPartial } as Prisma.InputJsonValue },
+      data: { status: "COMMITTING", progress: 0, leaseOwner: owner, leaseUntil: leaseEnd(), attempts: 1, committedById: ctx.userId, campaignId: input.campaignId === undefined ? batch.campaignId : input.campaignId, options: { ...(batch.options as object), includeWarnings: input.includeWarnings, acceptPartial: input.acceptPartial } as Prisma.InputJsonValue },
     });
     if (!claimed.count) throw new ConflictError();
     await audit(tx, ctx, { action: "import.commit_start", entityType: "IMPORT", entityId: batch.id, projectId: batch.projectId, meta: { importable, blocking, acceptPartial: input.acceptPartial } });
     return { ...batch, importable };
   });
-  const mode = batch.importable > INLINE_ROW_LIMIT ? await enqueue("import.commit", { orgId: ctx.orgId, actorId: ctx.userId, batchId: batch.id }, { jobId: `import-commit-${batch.id}` }) : (await runCommit(ctx.orgId, ctx.userId, batch.id), "inline");
+  const mode = batch.importable > INLINE_ROW_LIMIT ? await enqueue("import.commit", { orgId: ctx.orgId, actorId: ctx.userId, batchId: batch.id }, { jobId: `import-commit-${batch.id}` }) : (await runCommit(ctx.orgId, ctx.userId, batch.id, owner), "inline");
   return { batchId: batch.id, mode };
 }
 
@@ -420,11 +478,29 @@ async function nextRecipientNumber(tx: Tx, projectId: string): Promise<number> {
   return (last[0]?.n ?? 0) + 1;
 }
 
-/** Idempotent, chunked commit. Safe to re-run after a crash: COMMITTED rows are skipped. */
-export async function runCommit(orgId: string, actorId: string, batchId: string) {
+/**
+ * Idempotent, chunked commit. Safe to re-run after a crash: it resumes from the first row not
+ * COMMITTED, and each row moves to COMMITTED (compare-and-set) in the same transaction as its
+ * recipient and delivery card, under the lease check, so no row is committed twice.
+ */
+export async function runCommit(orgId: string, actorId: string, batchId: string, owner?: string, opts: { stopAfterChunks?: number } = {}) {
   const ctx = { ...systemContext(orgId), userId: actorId };
+  const token = await takeImportLease(orgId, batchId, "COMMITTING", owner);
+  if (!token) return { skipped: true };
   const batch = await withTenant({ orgId }, (tx) => tx.importBatch.findUnique({ where: { id: batchId } }));
   if (!batch || batch.status !== "COMMITTING") return { skipped: true };
+  try {
+    return await commitChunks(orgId, actorId, batch, token, ctx, opts.stopAfterChunks);
+  } catch (err) {
+    if (err instanceof LeaseLost) return { skipped: true, leaseLost: true };
+    throw err;
+  }
+}
+
+/** `stopAfterChunks` ends the run early without finishing, as a crashed process would (recovery tests). */
+async function commitChunks(orgId: string, actorId: string, batch: Prisma.ImportBatchGetPayload<object>, token: string, ctx: ServiceContext, stopAfterChunks?: number) {
+  const batchId = batch.id;
+  let chunks = 0;
   const opts = batch.options as { includeWarnings?: boolean };
   const statuses: ImportRowStatus[] = opts.includeWarnings === false ? ["VALID"] : ["VALID", "WARNING"];
   const config = batch.campaignId ? await withTenant({ orgId }, (tx) => tx.invitationCampaign.findUnique({ where: { id: batch.campaignId! } })) : null;
@@ -434,6 +510,7 @@ export async function runCommit(orgId: string, actorId: string, batchId: string)
     const n = await withTenant({ orgId, userId: actorId }, async (tx) => {
       // serialize code allocation per project across concurrent imports
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${batch.projectId}))`;
+      await renewImportLease(tx, batchId, "COMMITTING", token);
       const rows = await tx.importRow.findMany({
         where: { batchId, OR: [{ status: { in: statuses } }, { status: "DUPLICATE", resolution: { in: ["IMPORT_AS_NEW", "LINK_EXISTING"] } }] },
         orderBy: { rowNumber: "asc" },
@@ -519,18 +596,23 @@ export async function runCommit(orgId: string, actorId: string, batchId: string)
           await tx.deliveryEvent.createMany({ data: fresh.map((d) => ({ organizationId: orgId, deliveryId: d.id!, toStatus: d.status!, actorId, source: "IMPORT", note: batch.fileName })) });
         }
       }
-      for (const u of rowUpdates) await tx.importRow.update({ where: { id: u.id }, data: { status: "COMMITTED", recipientId: u.recipientId } });
+      for (const u of rowUpdates) {
+        const moved = await tx.importRow.updateMany({ where: { id: u.id, status: { not: "COMMITTED" } }, data: { status: "COMMITTED", recipientId: u.recipientId } });
+        if (!moved.count) throw new ConflictError(); // never: rows are claimed under the project lock
+      }
       const done = await tx.importRow.count({ where: { batchId, status: "COMMITTED" } });
       await tx.importBatch.update({ where: { id: batchId }, data: { committedRows: done, progress: Math.min(99, Math.round((done / Math.max(1, batch.totalRows)) * 100)) } });
       return rows.length;
     }, { timeout: 120_000 });
     if (!n) break;
+    if (stopAfterChunks !== undefined && ++chunks >= stopAfterChunks) return { created, linked, stopped: true };
   }
   await withTenant({ orgId, userId: actorId }, async (tx) => {
+    await renewImportLease(tx, batchId, "COMMITTING", token);
     await tx.importRow.updateMany({ where: { batchId, status: { notIn: ["COMMITTED"] } }, data: { status: "SKIPPED" } });
     const skipped = await tx.importRow.count({ where: { batchId, status: "SKIPPED" } });
     const committed = await tx.importRow.count({ where: { batchId, status: "COMMITTED" } });
-    await tx.importBatch.update({ where: { id: batchId }, data: { status: skipped ? "PARTIALLY_COMMITTED" : "COMMITTED", committedRows: committed, committedAt: new Date(), progress: 100 } });
+    await tx.importBatch.update({ where: { id: batchId }, data: { status: skipped ? "PARTIALLY_COMMITTED" : "COMMITTED", committedRows: committed, committedAt: new Date(), progress: 100, leaseOwner: null, leaseUntil: null } });
     await audit(tx, ctx, { action: "import.commit", entityType: "IMPORT", entityId: batchId, projectId: batch.projectId, summary: `${committed} committed, ${skipped} skipped`, meta: { created, linked, campaignId: batch.campaignId } });
     await emit(tx, ctx, "import.completed", { batchId, projectId: batch.projectId, count: committed, link: `/projects/${batch.projectId}/delivery/imports/${batchId}`, entityType: "IMPORT", entityId: batchId });
   });
@@ -576,9 +658,139 @@ export async function listImports(ctx: ServiceContext, projectId: string) {
 
 export async function importStatus(ctx: ServiceContext, batchId: string) {
   return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
-    const { batch } = await loadBatch(tx, ctx, batchId);
-    return { status: batch.status, progress: batch.progress, committedRows: batch.committedRows, totalRows: batch.totalRows, error: batch.error };
+    const { batch } = await loadBatch(tx, ctx, batchId, "read");
+    return { status: batch.status, progress: batch.progress, committedRows: batch.committedRows, totalRows: batch.totalRows, error: batch.error, ...importLeaseState(batch) };
   });
+}
+
+// ── 8. Stalled imports (BUSINESS_RULES §7.1) ────────────────────────────────
+
+type LeaseFields = Pick<Prisma.ImportBatchGetPayload<object>, "status" | "leaseUntil" | "updatedAt" | "attempts">;
+
+/** When the batch's lease runs out (a batch without one counts from its last change). */
+function leaseExpiry(b: LeaseFields) {
+  return b.leaseUntil ?? new Date(b.updatedAt.getTime() + IMPORT_LEASE_MS);
+}
+
+/**
+ * What the wizard shows while a stage runs: "paused" once the lease expired (the sweep resumes it),
+ * and "Resume now" once it has been expired for more than 120 s.
+ */
+export function importLeaseState(b: LeaseFields, now = new Date()) {
+  const running = b.status === "VALIDATING" || b.status === "COMMITTING";
+  const expiry = leaseExpiry(b).getTime();
+  return {
+    paused: running && expiry < now.getTime(),
+    resumable: running && expiry < now.getTime() - IMPORT_LEASE_MS,
+    attempts: b.attempts,
+    maxAttempts: IMPORT_MAX_ATTEMPTS,
+    lastProgressAt: b.updatedAt,
+    /** when the recovery sweep will next try (the scheduler tick after the lease expired) */
+    nextAttemptAt: new Date(Math.max(now.getTime(), expiry) + 60_000),
+  };
+}
+
+export type ImportRecovery = "resumed" | "failed" | "partial" | "live" | "busy" | "not_running";
+
+/**
+ * Gives up on a stage after {@link IMPORT_MAX_ATTEMPTS}: VALIDATING → FAILED (`import.stalled`);
+ * COMMITTING → PARTIALLY_COMMITTED when rows were committed (rollback stays available), else FAILED.
+ * The person who started the stage gets one notice (and the PMs too for a commit).
+ */
+async function giveUpImport(tx: Tx, b: Prisma.ImportBatchGetPayload<object>, now: Date): Promise<ImportRecovery> {
+  const ctx = systemContext(b.organizationId);
+  const where = { id: b.id, status: b.status, attempts: b.attempts, leaseOwner: b.leaseOwner };
+  const committed = b.status === "COMMITTING" ? await tx.importRow.count({ where: { batchId: b.id, status: "COMMITTED" } }) : 0;
+  const partial = committed > 0;
+  const r = await tx.importBatch.updateMany({
+    where,
+    data: partial
+      ? { status: "PARTIALLY_COMMITTED", committedRows: committed, committedAt: now, progress: 100, error: "import.stalled", leaseOwner: null, leaseUntil: null }
+      : { status: "FAILED", error: "import.stalled", leaseOwner: null, leaseUntil: null },
+  });
+  if (!r.count) return "busy";
+  if (partial) await tx.importRow.updateMany({ where: { batchId: b.id, status: { not: "COMMITTED" } }, data: { status: "SKIPPED" } });
+  const actor = b.status === "COMMITTING" ? b.committedById ?? b.createdById : b.createdById;
+  const pms = b.status === "COMMITTING" ? (await tx.projectMember.findMany({ where: { projectId: b.projectId, role: "MANAGER" }, select: { userId: true } })).map((x) => x.userId) : [];
+  await notify(tx, {
+    orgId: b.organizationId,
+    userIds: [actor, ...pms],
+    type: "import.stalled",
+    titleKey: "notif.types.importStalled",
+    params: { name: b.fileName },
+    link: `/projects/${b.projectId}/delivery/imports/${b.id}`,
+    entityType: "IMPORT",
+    entityId: b.id,
+    dedupeKey: `import.stalled:${b.id}:${b.status}`,
+    priority: "HIGH",
+  });
+  await audit(tx, ctx, { action: "import.stalled", entityType: "IMPORT", entityId: b.id, projectId: b.projectId, summary: partial ? `${committed} committed, rest skipped` : "failed", meta: { stage: b.status, attempts: b.attempts, committed } });
+  return partial ? "partial" : "failed";
+}
+
+/**
+ * The single recovery path for an import whose lease expired (§7.1 rules 2–3), used by the sweep
+ * (`minExpiredMs` 0) and by "Resume now" (lease expired for more than 120 s). It resumes the stage —
+ * validation restarts, a commit continues from the first row not committed — or gives up after the
+ * third attempt. A resume counts as an attempt; a second call while the resumed run holds the lease
+ * does nothing.
+ */
+export async function recoverImport(orgId: string, batchId: string, opts: { now?: Date; minExpiredMs?: number; by?: ServiceContext } = {}): Promise<ImportRecovery> {
+  const now = opts.now ?? new Date();
+  const claim = await withTenant({ orgId }, async (tx): Promise<{ outcome: ImportRecovery; batch?: Prisma.ImportBatchGetPayload<object> }> => {
+    const b = await tx.importBatch.findUnique({ where: { id: batchId } });
+    if (!b || (b.status !== "VALIDATING" && b.status !== "COMMITTING")) return { outcome: "not_running" };
+    if (leaseExpiry(b).getTime() > now.getTime() - (opts.minExpiredMs ?? 0)) return { outcome: "live" };
+    const project = await tx.project.findUnique({ where: { id: b.projectId }, select: { status: true } });
+    // an archived project takes no more writes (LC rule 5): the stage stops where it is
+    if (b.attempts >= IMPORT_MAX_ATTEMPTS || !project || ["CLOSED", "CANCELLED"].includes(project.status)) return { outcome: await giveUpImport(tx, b, now) };
+    const r = await tx.importBatch.updateMany({
+      where: { id: b.id, status: b.status, attempts: b.attempts, leaseOwner: b.leaseOwner },
+      data: { leaseOwner: leaseToken("resume"), leaseUntil: new Date(now.getTime() + IMPORT_LEASE_MS), attempts: { increment: 1 } },
+    });
+    if (!r.count) return { outcome: "busy" };
+    await audit(tx, opts.by ?? systemContext(orgId), { action: "import.resume", entityType: "IMPORT", entityId: b.id, projectId: b.projectId, summary: `${b.status} · attempt ${b.attempts + 1}/${IMPORT_MAX_ATTEMPTS}`, meta: { stage: b.status, attempt: b.attempts + 1, manual: !!opts.by } });
+    return { outcome: "resumed", batch: b };
+  });
+  if (claim.outcome === "resumed" && claim.batch) {
+    const b = claim.batch;
+    // the job adopts the resume's lease (no owner in the payload); inline mode runs it right here
+    if (b.status === "VALIDATING") await enqueue("import.validate", { orgId, actorId: b.createdById, batchId }, { jobId: `import-resume-${batchId}-${b.attempts + 1}` });
+    else await enqueue("import.commit", { orgId, actorId: b.committedById ?? b.createdById, batchId }, { jobId: `import-resume-${batchId}-${b.attempts + 1}` });
+  }
+  return claim.outcome;
+}
+
+/** "Resume now" on the wizard: the starter or any `recipient.import` holder, once the lease has been expired > 120 s (SW-3). */
+export async function resumeImport(ctx: ServiceContext, batchId: string) {
+  await withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
+    const { batch } = await loadBatch(tx, ctx, batchId);
+    if (batch.status !== "VALIDATING" && batch.status !== "COMMITTING") throw new ValidationError("errors.importNotResumable");
+  });
+  const outcome = await recoverImport(ctx.orgId, batchId, { minExpiredMs: IMPORT_LEASE_MS, by: ctx });
+  return { outcome };
+}
+
+/** Sweep step (scheduler tick): every import whose lease ran out is resumed or given up. */
+export async function recoverStalledImports(orgId: string, now = new Date()) {
+  const stale = await withTenant({ orgId }, (tx) =>
+    tx.importBatch.findMany({
+      where: { status: { in: ["VALIDATING", "COMMITTING"] }, OR: [{ leaseUntil: { lt: now } }, { leaseUntil: null, updatedAt: { lt: new Date(now.getTime() - IMPORT_LEASE_MS) } }] },
+      select: { id: true },
+      orderBy: { updatedAt: "asc" },
+      take: 10,
+    }),
+  );
+  const out = { resumed: 0, failed: 0 };
+  for (const b of stale) {
+    const r = await recoverImport(orgId, b.id, { now }).catch((e) => {
+      console.error(`[recovery] import ${b.id}`, (e as Error).message);
+      return "busy" as const;
+    });
+    if (r === "resumed") out.resumed++;
+    if (r === "failed" || r === "partial") out.failed++;
+  }
+  return out;
 }
 
 // ── 7. Reports ──────────────────────────────────────────────────────────────
@@ -586,7 +798,7 @@ export async function importStatus(ctx: ServiceContext, batchId: string) {
 /** Error report / normalized export as XLSX. All cells are formula-neutralized. */
 export async function importReport(ctx: ServiceContext, batchId: string, kind: "errors" | "normalized" | "original", messages: (code: string) => string) {
   const { batch, rows } = await withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
-    const { batch, scope } = await loadBatch(tx, ctx, batchId);
+    const { batch, scope } = await loadBatch(tx, ctx, batchId, "read");
     if (kind !== "errors" && !scope.vip && !scope.export) throw new ForbiddenError();
     const found = await tx.importRow.findMany({ where: { batchId, ...(kind === "errors" ? { status: { in: ["INVALID", "DUPLICATE", "WARNING", "SKIPPED"] } } : {}) }, orderBy: { rowNumber: "asc" } });
     // without VIP scope the report carries no contact data
@@ -595,20 +807,25 @@ export async function importReport(ctx: ServiceContext, batchId: string, kind: "
     return { batch, rows };
   });
   const wb = new ExcelJS.Workbook();
-  wb.creator = "Operra";
+  wb.creator = "Opera";
   const ws = wb.addWorksheet(kind === "errors" ? "Errors" : kind === "normalized" ? "Normalized" : "Original", { views: [{ rightToLeft: ctx.locale === "ar" }] });
   const canonical = CANONICAL_FIELDS.map((f) => f.key);
   const headers = kind === "normalized" ? ["row", "status", ...canonical] : ["row", "status", "errors", "warnings", ...batch.headers];
   ws.addRow(headers);
   ws.getRow(1).font = { bold: true };
+  // KD-4: user values are string cells; E.164 phones in phone columns are written without an apostrophe
+  const mapping = (batch.mapping ?? {}) as Mapping;
+  const phoneHeaders = new Set([mapping.mobile, mapping.altPhone].filter(Boolean));
+  const phoneColumns = new Set(kind === "normalized" ? canonical.flatMap((k, i) => (k === "mobile" || k === "altPhone" ? [i + 2] : [])) : batch.headers.flatMap((h, i) => (phoneHeaders.has(h) ? [i + 4] : [])));
+  const str = (v: unknown) => (v === null || v === undefined ? "" : String(v));
   for (const r of rows) {
     const issues = (xs: unknown) => (xs as { field: string; code: string }[]).map((i) => `${i.field}: ${messages(i.code)}`).join("; ");
     if (kind === "normalized") {
       const nr = (r.normalized ?? {}) as Record<string, unknown>;
-      ws.addRow([r.rowNumber, r.status, ...canonical.map((k) => neutralizeFormula(nr[k]))]);
+      addXlsxRow(ws, [r.rowNumber, r.status, ...canonical.map((k) => str(nr[k]))], phoneColumns);
     } else {
       const raw = r.raw as Record<string, unknown>;
-      ws.addRow([r.rowNumber, r.status, neutralizeFormula(issues(r.errors) + (r.duplicateOfRow ? `; duplicate of row ${r.duplicateOfRow}` : r.duplicateOfRecipientId ? "; duplicate of existing recipient" : "")), neutralizeFormula(issues(r.warnings)), ...batch.headers.map((h) => neutralizeFormula(raw[h]))]);
+      addXlsxRow(ws, [r.rowNumber, r.status, issues(r.errors) + (r.duplicateOfRow ? `; duplicate of row ${r.duplicateOfRow}` : r.duplicateOfRecipientId ? "; duplicate of existing recipient" : ""), issues(r.warnings), ...batch.headers.map((h) => str(raw[h]))], phoneColumns);
     }
   }
   ws.columns.forEach((c) => (c.width = 18));

@@ -4,6 +4,7 @@
  *   TEST_DATABASE_URL=... TEST_MIGRATION_DATABASE_URL=... pnpm vitest run tests/integration/arch-audit
  */
 import { describe, expect, it } from "vitest";
+import { adminDb } from "@/server/db/admin";
 import { withTenant } from "@/server/db/tenant";
 import { createProject, upsertProjectMember } from "@/server/modules/projects/service";
 import { changeTaskStatus, createTask, updateTask } from "@/server/modules/tasks/service";
@@ -14,6 +15,9 @@ import { cancelCampaign, requestCampaignApproval, saveDigitalCampaign, addAudien
 import { processOutbox } from "@/server/modules/automation/engine";
 import { statusesOf } from "@/server/modules/tasks/service";
 import { addMember, createAgency } from "../../helpers";
+
+/** The campaign version a user would have loaded: launch, approval requests and edits carry it (BUSINESS_RULES §6). */
+const cver = (id: string) => adminDb().invitationCampaign.findUniqueOrThrow({ where: { id } }).then((x) => x.version);
 
 async function tplId(orgId: string, key: string) {
   return withTenant({ orgId }, async (tx) => (await tx.template.findUniqueOrThrow({ where: { organizationId_key: { organizationId: orgId, key } } })).id);
@@ -80,11 +84,11 @@ describe("arch-audit: approvals & state machines", () => {
     const { project } = await createProject(a.ctx, { name: "Gala", type: "EVENT", priority: "HIGH", currency: "SAR", clientPortal: true, venueIds: [], templateIds: [await tplId(a.orgId, "vip-digital-campaign")] });
     const r = await withTenant({ orgId: a.orgId }, (tx) => tx.recipient.create({ data: { organizationId: a.orgId, projectId: project.id, code: "R-00001", nameAr: "ضيف", mobile: "+966555000001", createdById: a.userId } }));
     const draft = await withTenant({ orgId: a.orgId }, (tx) => tx.invitationCampaign.findFirstOrThrow({ where: { projectId: project.id, type: "DIGITAL" } }));
-    const c = await saveDigitalCampaign(a.ctx, { id: draft.id, projectId: project.id, name: "Invite", channel: "SMS", bodyTemplate: "مرحبا {{name}} {{rsvp_link}}", rsvpEnabled: true, qrEnabled: false });
+    const c = await saveDigitalCampaign(a.ctx, { id: draft.id, version: await cver(draft.id), projectId: project.id, name: "Invite", channel: "SMS", bodyTemplate: "مرحبا {{name}} {{rsvp_link}}", rsvpEnabled: true, qrEnabled: false });
     await addAudience(a.ctx, { campaignId: c.id, recipientIds: [r.id] });
     const director = await addMember(a.ctx, "ops_director", "Director"); // an eligible approver must exist at request time
-    const ap = await requestCampaignApproval(a.ctx, c.id);
-    await cancelCampaign(a.ctx, c.id);
+    const ap = await requestCampaignApproval(a.ctx, c.id, await cver(c.id));
+    await cancelCampaign(a.ctx, c.id, await cver(c.id));
     await decideApproval(director.ctx, { approvalId: ap.id, decision: "APPROVED" }).catch(() => null);
     const after = await withTenant({ orgId: a.orgId }, (tx) => tx.invitationCampaign.findUniqueOrThrow({ where: { id: c.id } }));
     // SAFE: stays CANCELLED (today the decision blindly sets APPROVED and it can be launched)

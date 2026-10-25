@@ -12,7 +12,7 @@ import { getI18n } from "@/lib/i18n/server";
 import { getProjectOverview } from "@/server/modules/projects/service";
 import { requirePageContext } from "@/server/request";
 import { listClients } from "@/server/modules/org/service";
-import { DeliverablesPanel, EditProjectButton, MilestonesPanel, ProjectStatusMenu, RisksPanel } from "./overview-panels";
+import { DeliverablesPanel, EditProjectButton, IndependentApprovalControl, MilestonesPanel, ProjectStatusMenu, RisksPanel } from "./overview-panels";
 import { guardPage } from "@/server/page-guard";
 
 async function ProjectOverviewPage({ params }: { params: Promise<{ org: string; projectId: string }> }) {
@@ -29,8 +29,16 @@ async function ProjectOverviewPage({ params }: { params: Promise<{ org: string; 
   const p = o.project;
   const anchor = p.eventStartAt ?? p.deadline;
   const plain = JSON.parse(JSON.stringify(o)) as typeof o;
+  const archived = p.status === "CLOSED" || p.status === "CANCELLED";
+  const statusLabels = m.enums.projectStatus as Record<string, string>;
   return (
     <div className="grid gap-5">
+      {(archived || p.status === "ON_HOLD") && (
+        <div role="status" className="rounded-lg border bg-muted/40 px-4 py-2.5 text-sm" data-testid="project-archived-banner">
+          {archived ? interpolate(m.projects.lifecycle.archived, { status: statusLabels[p.status] }) : statusLabels[p.status]}
+          {p.statusReason && !o.scope.clientView && <span className="ms-2 text-muted-foreground"><bdi>{p.statusReason}</bdi></span>}
+        </div>
+      )}
       <section aria-labelledby="project-health" className="surface grid gap-x-8 gap-y-3 p-4 md:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
         <div className="flex flex-col gap-2">
           <h2 id="project-health" className="eyebrow">{m.ops.health.title}</h2>
@@ -78,7 +86,7 @@ async function ProjectOverviewPage({ params }: { params: Promise<{ org: string; 
         </div>
 
         <div className="grid content-start gap-5">
-          <Section title={m.common.details} actions={o.scope.manage && <div className="flex items-center"><EditProjectButton orgSlug={org} canFinance={o.scope.finance} clients={clients} project={{ id: p.id, name: p.name, nameEn: p.nameEn, description: p.description, clientId: p.clientId, type: p.type, priority: p.priority, contractRef: p.contractRef, poReference: p.poReference, budgetAmount: p.budgetAmount?.toString() ?? null, currency: p.currency, startDate: p.startDate, deadline: p.deadline, eventStartAt: p.eventStartAt, eventEndAt: p.eventEndAt, clientPortal: p.clientPortal, venueIds: p.venues.map((v) => v.venueId) }} /><ProjectStatusMenu orgSlug={org} projectId={projectId} status={p.status} /></div>}>
+          <Section title={m.common.details} actions={(o.scope.manage || !!o.lifecycle?.targets.length) && <div className="flex items-center">{o.scope.manage && <EditProjectButton orgSlug={org} canFinance={o.scope.finance} clients={clients} project={{ id: p.id, version: p.version, name: p.name, nameEn: p.nameEn, description: p.description, clientId: p.clientId, type: p.type, priority: p.priority, contractRef: p.contractRef, poReference: p.poReference, budgetAmount: p.budgetAmount?.toString() ?? null, currency: p.currency, startDate: p.startDate, deadline: p.deadline, eventStartAt: p.eventStartAt, eventEndAt: p.eventEndAt, clientPortal: p.clientPortal, venueIds: p.venues.map((v) => v.venueId) }} />}<ProjectStatusMenu orgSlug={org} projectId={projectId} code={p.code} status={p.status} version={p.version} targets={o.lifecycle?.targets ?? []} /></div>}>
             <dl className="px-4 py-2">
               <KV label={m.projects.code}><span className="ltr-nums font-mono text-xs">{p.code}</span></KV>
               <KV label={m.projects.client}>{p.client?.name ?? "—"}</KV>
@@ -88,6 +96,8 @@ async function ProjectOverviewPage({ params }: { params: Promise<{ org: string; 
               <KV label={m.projects.deadline}>{formatDate(p.deadline, fmt)}</KV>
               <KV label={m.projects.venues}>{p.venues.map((v) => v.venue.name).join("، ") || "—"}</KV>
               <KV label={m.projects.contractRef}>{p.contractRef ?? "—"}</KV>
+              {/* a quiet, advanced project setting: shown to those who may change it, or when it's on */}
+              {!o.scope.clientView && (p.independentApprovalRequired || !!o.lifecycle?.canSetIndependent) && <KV label={m.projects.lifecycle.independent.label}><IndependentApprovalControl orgSlug={org} projectId={projectId} value={p.independentApprovalRequired} version={p.version} canSet={!!o.lifecycle?.canSetIndependent} /></KV>}
               <KV label={m.projects.templates}>{o.instances.map((i) => `${i.templateKey} v${i.versionNumber}`).join(", ") || "—"}</KV>
             </dl>
           </Section>

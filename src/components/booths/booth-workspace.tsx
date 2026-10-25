@@ -41,7 +41,7 @@ export function BoothWorkspace({ orgSlug, data }: { orgSlug: string; data: D }) 
   const gateLabel = (key: string) => tk(key);
   const person = (id: string | null) => data.people.find((p) => p.id === id)?.name ?? "—";
 
-  const saveBooth = useAction(saveBoothAction, { orgSlug, onSuccess: close });
+  const saveBooth = useAction(saveBoothAction, { orgSlug, onSuccess: close, conflictUi: "inline" });
   const stage = useAction(setBoothStageAction, { orgSlug });
   const newRev = useAction(createRevisionAction, { orgSlug, onSuccess: close });
   const submitRev = useAction(submitRevisionAction, { orgSlug });
@@ -105,7 +105,7 @@ export function BoothWorkspace({ orgSlug, data }: { orgSlug: string; data: D }) 
   };
   const submit = (kind: NonNullable<Dlg>["kind"], v: Record<string, unknown>) => {
     const id = dlg?.values?.id as string | undefined;
-    if (kind === "booth") saveBooth.run({ ...v, id: b.id, projectId: data.project.id } as never);
+    if (kind === "booth") saveBooth.run({ ...v, id: b.id, projectId: data.project.id, version: (v.version as number | undefined) ?? b.version } as never);
     if (kind === "revision") newRev.run({ ...v, boothId: b.id } as never);
     if (kind === "boq") saveBoq.run({ ...v, id, boothId: b.id, unit: v.unit ?? "unit", committedCost: v.committedCost ?? 0, actualCost: v.actualCost ?? 0 } as never);
     if (kind === "inspection") inspect.run({ ...v, boothId: b.id } as never);
@@ -149,11 +149,11 @@ export function BoothWorkspace({ orgSlug, data }: { orgSlug: string; data: D }) 
                 title={interpolate(m.common.confirmDialog.moveBackTitle, { name: m.enums.boothStage[STAGES[idx - 1]] })}
                 field={{ type: "textarea", label: t.reasonPrompt, required: true }}
                 confirmLabel={t.moveBack}
-                onConfirm={(reason) => stage.run({ boothId: b.id, stage: STAGES[idx - 1], reason })}
+                onConfirm={(reason) => stage.run({ boothId: b.id, stage: STAGES[idx - 1], reason, version: b.version })}
                 testId="booth-move-back"
               />
             )}
-            <Button size="sm" disabled={stage.pending || data.nextGates.length > 0} onClick={() => stage.run({ boothId: b.id, stage: data.nextStage! })} data-testid="booth-advance">{t.advance}: {m.enums.boothStage[data.nextStage]}</Button>
+            <Button size="sm" disabled={stage.pending || data.nextGates.length > 0} onClick={() => stage.run({ boothId: b.id, stage: data.nextStage!, version: b.version })} data-testid="booth-advance">{t.advance}: {m.enums.boothStage[data.nextStage]}</Button>
           </div>
         </div>
       )}
@@ -313,7 +313,7 @@ export function BoothWorkspace({ orgSlug, data }: { orgSlug: string; data: D }) 
             {b.handoverSignedAt ? (
               <p className="flex items-center gap-2 rounded-md bg-success-soft px-3 py-2 text-sm text-success"><FileSignature className="size-4" /> {t.signed}: {b.handoverSignedBy} · <DateText value={b.handoverSignedAt} /></p>
             ) : can && (
-              <form className="flex flex-wrap items-end gap-2" onSubmit={(e) => { e.preventDefault(); sign.run({ boothId: b.id, signedBy }); }}>
+              <form className="flex flex-wrap items-end gap-2" onSubmit={(e) => { e.preventDefault(); sign.run({ boothId: b.id, signedBy, version: b.version }); }}>
                 <label className="grid gap-1 text-xs">{t.signedBy}<Input value={signedBy} onChange={(e) => setSignedBy(e.target.value)} required minLength={2} className="w-64" /></label>
                 <Button type="submit" disabled={sign.pending || !data.readiness.every((r) => r.ok)} data-testid="sign-handover"><FileSignature /> {t.signHandover}</Button>
               </form>
@@ -323,7 +323,7 @@ export function BoothWorkspace({ orgSlug, data }: { orgSlug: string; data: D }) 
       )}
 
       {dlg && (
-        <FormDialog open onOpenChange={(o) => !o && close()} title={dlg.values?.id && dlg.kind !== "booth" ? String(dlg.values.code ?? dlg.values.title ?? titles[dlg.kind]) : titles[dlg.kind]} fields={fields[dlg.kind]} values={dlg.values} onSubmit={(v) => submit(dlg.kind, v)} pending={pending} errorFor={errorFor} testId={`form-${dlg.kind}`} />
+        <FormDialog open onOpenChange={(o) => !o && close()} title={dlg.values?.id && dlg.kind !== "booth" ? String(dlg.values.code ?? dlg.values.title ?? titles[dlg.kind]) : titles[dlg.kind]} fields={fields[dlg.kind]} values={dlg.values} onSubmit={(v) => submit(dlg.kind, v)} pending={pending} errorFor={errorFor} testId={`form-${dlg.kind}`} conflict={dlg.kind === "booth" ? saveBooth.conflict : null} onConflictResolved={saveBooth.clearConflict} />
       )}
     </div>
   );

@@ -24,7 +24,7 @@ import type { FieldDelivery } from "@/server/modules/delivery/service";
 import { FAILURE_REASONS } from "@/server/modules/delivery/state-machine";
 
 const ACTIVE = ["ASSIGNED", "OUT_FOR_DELIVERY", "FAILED_ATTEMPT", "RESCHEDULED"];
-const SESSION_KEY = "operra-field-cache"; // sessionStorage only: cleared when the browser session ends
+const SESSION_KEY = "opera-field-cache"; // sessionStorage only: cleared when the browser session ends
 // in-progress first, then assigned, rescheduled, failed (by priority within each)
 const ORDER: Record<string, number> = { OUT_FOR_DELIVERY: 0, ASSIGNED: 1, RESCHEDULED: 2, FAILED_ATTEMPT: 3 };
 const PRI: Record<string, number> = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };

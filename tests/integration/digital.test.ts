@@ -8,6 +8,9 @@ import { decideApproval } from "@/server/modules/approvals/service";
 import { addMember, createAgency } from "../helpers";
 import { adminDb } from "@/server/db/admin";
 
+/** The campaign version a user would have loaded: launch, approval requests and edits carry it (BUSINESS_RULES §6). */
+const cver = (id: string) => adminDb().invitationCampaign.findUniqueOrThrow({ where: { id } }).then((x) => x.version);
+
 describe("digital invitations", () => {
   it("approval-gated simulated campaign → webhook receipts → RSVP → QR check-in → opt-out", async () => {
     process.env.WEBHOOK_SECRET_SIMULATION = "test-webhook-secret";
@@ -23,21 +26,21 @@ describe("digital invitations", () => {
       return Promise.all(rows.map((r) => tx.recipient.create({ data: { ...r, organizationId: a.orgId, projectId: project.id, createdById: a.userId } })));
     });
     const draft = await withTenant({ orgId: a.orgId }, (tx) => tx.invitationCampaign.findFirstOrThrow({ where: { projectId: project.id, type: "DIGITAL" } }));
-    const c = await saveDigitalCampaign(a.ctx, { id: draft.id, projectId: project.id, name: "دعوة الحفل", channel: "SMS", bodyTemplate: "{{honorific}} {{name}}، يسرنا دعوتكم إلى {{event_name}}. للتأكيد: {{rsvp_link}}", rsvpEnabled: true, qrEnabled: true });
+    const c = await saveDigitalCampaign(a.ctx, { id: draft.id, version: await cver(draft.id), projectId: project.id, name: "دعوة الحفل", channel: "SMS", bodyTemplate: "{{honorific}} {{name}}، يسرنا دعوتكم إلى {{event_name}}. للتأكيد: {{rsvp_link}}", rsvpEnabled: true, qrEnabled: true });
     const aud = await addAudience(a.ctx, { campaignId: c.id, recipientIds: recipients.map((r) => r.id) });
     expect(aud).toMatchObject({ added: 3, missing: 1 });
 
     // cannot launch without approval
-    await expect(launchCampaign(a.ctx, c.id)).rejects.toThrow("errors.campaignNotApproved");
+    await expect(launchCampaign(a.ctx, c.id, await cver(c.id))).rejects.toThrow("errors.campaignNotApproved");
     // the approver must exist when approval is requested: a request nobody else can decide is refused
-    await expect(requestCampaignApproval(a.ctx, c.id)).rejects.toThrow("errors.noEligibleApprover");
+    await expect(requestCampaignApproval(a.ctx, c.id, await cver(c.id))).rejects.toThrow("errors.noEligibleApprover");
     const director = await addMember(a.ctx, "ops_director", "Director");
-    const approval = await requestCampaignApproval(a.ctx, c.id);
+    const approval = await requestCampaignApproval(a.ctx, c.id, await cver(c.id));
     // requester cannot approve their own bulk campaign (four-eyes)
     await expect(decideApproval(a.ctx, { approvalId: approval.id, decision: "APPROVED" })).rejects.toThrow("errors.forbidden");
     await decideApproval(director.ctx, { approvalId: approval.id, decision: "APPROVED", comment: "ok" });
 
-    const launched = await launchCampaign(a.ctx, c.id);
+    const launched = await launchCampaign(a.ctx, c.id, await cver(c.id));
     expect(launched.mode).toBe("inline");
     const d = await getDigitalCampaign(a.ctx, c.id);
     expect(d.providerMode).toBe("SIMULATION");
@@ -50,8 +53,8 @@ describe("digital invitations", () => {
 
     // signed delivery receipt; tampered signature rejected; duplicate ignored
     const body = JSON.stringify({ id: "evt-1", messageId: jobs[0].providerMessageId, status: "DELIVERED" });
-    expect(verifyAndParseWebhook("simulation", body, new Headers({ "x-operra-signature": "bad" }))).toBeNull();
-    const events = verifyAndParseWebhook("simulation", body, new Headers({ "x-operra-signature": signSimulationWebhook(body) }))!;
+    expect(verifyAndParseWebhook("simulation", body, new Headers({ "x-opera-signature": "bad" }))).toBeNull();
+    const events = verifyAndParseWebhook("simulation", body, new Headers({ "x-opera-signature": signSimulationWebhook(body) }))!;
     expect(await applyProviderEvent("simulation", events[0], JSON.parse(body))).toEqual({ applied: "DELIVERED" });
     expect(await applyProviderEvent("simulation", events[0], JSON.parse(body))).toEqual({ duplicate: true });
 

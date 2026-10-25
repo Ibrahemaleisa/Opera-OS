@@ -2,6 +2,7 @@
  * ARCH-AUDIT probes (Agent 2). Assert intended behaviour; failures document live defects.
  */
 import { describe, expect, it } from "vitest";
+import { adminDb } from "@/server/db/admin";
 import { withTenant } from "@/server/db/tenant";
 import { createProject, setProjectStatus, updateProject, upsertProjectMember } from "@/server/modules/projects/service";
 import { addComment, bulkUpdateTasks, createTask } from "@/server/modules/tasks/service";
@@ -17,6 +18,9 @@ import { dispatchCampaign } from "@/server/modules/digital/sender";
 import { storeAttachment } from "@/server/modules/files/service";
 import { schedulerTick } from "@/server/modules/automation/scheduler";
 import { addMember, createAgency } from "../../helpers";
+
+/** The campaign version a user would have loaded: launch, approval requests and edits carry it (BUSINESS_RULES §6). */
+const cver = (id: string) => adminDb().invitationCampaign.findUniqueOrThrow({ where: { id } }).then((x) => x.version);
 
 const tpl = (orgId: string, key: string) => withTenant({ orgId }, async (tx) => (await tx.template.findUniqueOrThrow({ where: { organizationId_key: { organizationId: orgId, key } } })).id);
 // this file registers many agencies from one "IP": relax the registration rate limit (non-production only)
@@ -75,7 +79,7 @@ describe("arch-audit: external-role boundary (agency workspace pages render for 
     await withTenant({ orgId: a.orgId }, (tx) => tx.membership.updateMany({ where: { userId: u.userId }, data: { clientId: c1.id } }));
     const uctx = { ...u.ctx, clientId: c1.id };
     await upsertProjectMember(a.ctx, { projectId: project.id, userId: u.userId, role: "CLIENT_VIEWER", canApprove: false, canExport: false, canViewFinance: false, canViewVip: false, workstreamIds: [] });
-    await updateProject(a.ctx, project.id, { name: "Shared", type: "EVENT", priority: "HIGH", currency: "SAR", clientPortal: true, venueIds: [], clientId: c2.id });
+    await updateProject(a.ctx, project.id, { name: "Shared", type: "EVENT", priority: "HIGH", currency: "SAR", clientPortal: true, venueIds: [], clientId: c2.id, version: project.version }); // M2: CAS (§6)
     // SAFE: first client's user no longer sees the (now second client's) project
     await expect(portalProject(uctx, project.id)).rejects.toThrow();
   });
@@ -109,7 +113,7 @@ describe("arch-audit: VIP data across project boundaries and erasure", () => {
     await commitImport(a.ctx, { batchId, includeWarnings: true, acceptPartial: true });
     const rec = await withTenant({ orgId: a.orgId }, (tx) => tx.recipient.findMany({ where: { importBatchId: batchId } }));
     const draft = await withTenant({ orgId: a.orgId }, (tx) => tx.invitationCampaign.findFirstOrThrow({ where: { projectId: project.id, type: "DIGITAL" } }));
-    await saveDigitalCampaign(a.ctx, { id: draft.id, projectId: project.id, name: "Invite", channel: "SMS", bodyTemplate: "مرحبا {{name}} {{rsvp_link}}", rsvpEnabled: true, qrEnabled: false });
+    await saveDigitalCampaign(a.ctx, { id: draft.id, version: await cver(draft.id), projectId: project.id, name: "Invite", channel: "SMS", bodyTemplate: "مرحبا {{name}} {{rsvp_link}}", rsvpEnabled: true, qrEnabled: false });
     await addAudience(a.ctx, { campaignId: draft.id, recipientIds: rec.map((r) => r.id) });
     // SAFE: rollback must be refused (or clean up the audience); today it hard-deletes recipients and leaves dangling invitations
     const rolledBack = await rollbackImport(a.ctx, batchId).then(() => true, () => false);
@@ -131,7 +135,7 @@ describe("arch-audit: VIP data across project boundaries and erasure", () => {
     const { importGuestsFromRecipients } = await import("@/server/modules/protocol/service");
     await importGuestsFromRecipients(a.ctx, { projectId: project.id });
     const draft = await withTenant({ orgId: a.orgId }, (tx) => tx.invitationCampaign.findFirstOrThrow({ where: { projectId: project.id, type: "DIGITAL" } }));
-    await saveDigitalCampaign(a.ctx, { id: draft.id, projectId: project.id, name: "Invite", channel: "SMS", bodyTemplate: "مرحبا {{name}} {{rsvp_link}}", rsvpEnabled: true, qrEnabled: false });
+    await saveDigitalCampaign(a.ctx, { id: draft.id, version: await cver(draft.id), projectId: project.id, name: "Invite", channel: "SMS", bodyTemplate: "مرحبا {{name}} {{rsvp_link}}", rsvpEnabled: true, qrEnabled: false });
     await addAudience(a.ctx, { campaignId: draft.id, recipientIds: [r.id] });
     await anonymizeRecipients(a.ctx, { projectId: project.id, recipientIds: [r.id] });
     const left = await withTenant({ orgId: a.orgId }, async (tx) => ({
@@ -153,7 +157,7 @@ describe("arch-audit: lifecycle & scope", () => {
     const a = await createAgency("ArchCancel");
     const { project } = await createProject(a.ctx, { name: "Dropped", type: "CUSTOM", priority: "LOW", currency: "SAR", clientPortal: true, venueIds: [], templateIds: [] });
     await createTask(a.ctx, { projectId: project.id, title: "Late item", priority: "LOW", requiresApproval: false, clientVisible: false, tags: [], ownerId: a.userId, dueAt: new Date(Date.now() - 3600_000) });
-    await setProjectStatus(a.ctx, project.id, "CANCELLED");
+    await setProjectStatus(a.ctx, project.id, "CANCELLED", { version: project.version, reason: "Cancelled for the boundaries probe" }); // M2 (§1.2, §6)
     await schedulerTick(new Date());
     const n = await withTenant({ orgId: a.orgId }, (tx) => tx.outboxEvent.count({ where: { type: "task.overdue" } }));
     expect(n).toBe(0);

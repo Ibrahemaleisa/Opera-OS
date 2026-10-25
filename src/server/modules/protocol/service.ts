@@ -1,9 +1,10 @@
 import { z } from "zod";
 import type { Guest } from "@/generated/prisma/client";
 import type { ServiceContext } from "@/server/authz/context";
-import { assertCan, can, projectScope, projectVisibilityWhere, type ProjectScope } from "@/server/authz/policy";
+import { assertCan, assertNotArchived, can, projectScope, projectVisibilityWhere, type ProjectScope } from "@/server/authz/policy";
 import { withTenant, type Tx } from "@/server/db/tenant";
-import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/server/errors";
+import { ForbiddenError, NotFoundError, ValidationError } from "@/server/errors";
+import { assertVersion, casUpdate, versionField } from "@/server/concurrency";
 import { audit } from "@/server/modules/audit/audit";
 
 const optText = (max = 500) => z.string().trim().max(max).nullish();
@@ -28,6 +29,7 @@ export const guestSchema = z.object({
   specialInstructions: optText(1000),
   /** only honoured with protocol.viewRestricted */
   restrictedNotes: optText(2000),
+  version: versionField,
 });
 
 export const zoneSchema = z.object({ id: z.string().optional(), eventId: z.string(), name: z.string().trim().min(1).max(100), capacity: z.coerce.number().int().min(0).max(100000), protocolLevel: z.coerce.number().int().min(1).max(5).nullish() });
@@ -56,6 +58,7 @@ async function protocolScope(tx: Tx, ctx: ServiceContext, projectId: string) {
 async function editable(tx: Tx, ctx: ServiceContext, projectId: string) {
   assertCan(ctx, "protocol.manage");
   const scope = await protocolScope(tx, ctx, projectId);
+  assertNotArchived(scope); // LC rule 5: guests are read-only in archived projects
   if (!scope.operate) throw new ForbiddenError();
   return scope;
 }
@@ -126,13 +129,21 @@ export async function saveGuest(ctx: ServiceContext, input: z.output<typeof gues
     const scope = await editable(tx, ctx, input.projectId);
     if (input.eventId && !(await tx.event.findFirst({ where: { id: input.eventId, projectId: input.projectId } }))) throw new NotFoundError();
     const mayRestrict = can(ctx, "protocol.viewRestricted") && scope.vip;
-    const { id, restrictedNotes, mobile, ...data } = input;
+    const { id, restrictedNotes, mobile, version, ...data } = input;
     if (id) {
       const existing = await tx.guest.findFirst({ where: { id, projectId: input.projectId } });
       if (!existing) throw new NotFoundError();
-      const g = await tx.guest.update({
-        where: { id },
+      const g = await casUpdate<Guest>({
+        tx,
+        ctx,
+        model: "guest",
+        id,
+        version,
         data: { ...data, mobile: scope.vip ? mobile ?? null : existing.mobile, restrictedNotes: mayRestrict && restrictedNotes !== undefined ? restrictedNotes : existing.restrictedNotes },
+        entityType: "GUEST",
+        // a conflict never reveals what the caller may not see: restricted notes are only shown
+        // through the audited reveal, and the mobile only with VIP access
+        redact: ["restrictedNotes", ...(scope.vip ? [] : ["mobile"])],
       });
       await audit(tx, ctx, { action: "guest.update", entityType: "GUEST", entityId: g.id, projectId: g.projectId, summary: g.nameAr, meta: { restrictedChanged: mayRestrict && restrictedNotes !== undefined && restrictedNotes !== existing.restrictedNotes } });
       return g;
@@ -182,19 +193,27 @@ const ATTENDANCE_FLOW: Record<string, string[]> = {
   CANCELLED: ["EXPECTED"],
 };
 
-/** Arrival desk transitions. Uses the stored status as a compare-and-set so two desks can't double-process. */
-export async function setAttendance(ctx: ServiceContext, input: { guestId: string; attendance: (typeof ATTENDANCE)[number]; expected?: string }) {
+/**
+ * Arrival desk transitions. Compare-and-set on the guest's `version` (BUSINESS_RULES §6), so two
+ * desks can't double-process and a stale board is told to refresh. A stale or missing version is
+ * reported before the transition is judged against the stored status.
+ */
+export async function setAttendance(ctx: ServiceContext, input: { guestId: string; attendance: (typeof ATTENDANCE)[number]; version?: number }) {
   return withTenant(scoped(ctx), async (tx) => {
     const g = await loadGuest(tx, ctx, input.guestId);
     await editable(tx, ctx, g.projectId);
-    if (input.expected && input.expected !== g.attendance) throw new ConflictError();
+    await assertVersion(tx, { model: "guest", id: g.id, version: input.version, stored: g.version, entityType: "GUEST", data: { attendance: input.attendance } });
     if (!ATTENDANCE_FLOW[g.attendance]?.includes(input.attendance)) throw new ValidationError("errors.invalidTransition");
     const now = new Date();
-    const r = await tx.guest.updateMany({
-      where: { id: g.id, attendance: g.attendance },
+    await casUpdate<Guest>({
+      tx,
+      ctx,
+      model: "guest",
+      id: g.id,
+      version: input.version,
       data: { attendance: input.attendance, ...(input.attendance === "ARRIVED" && g.attendance !== "SEATED" ? { arrivalAt: now } : {}), ...(input.attendance === "DEPARTED" ? { departureAt: now } : {}) },
+      entityType: "GUEST",
     });
-    if (!r.count) throw new ConflictError();
     if (input.attendance === "ARRIVED") await tx.protocolAssignment.updateMany({ where: { guestId: g.id, status: { in: ["PLANNED", "CONFIRMED", "EN_ROUTE"] } }, data: { status: "RECEIVED" } });
     await audit(tx, ctx, { action: "guest.attendance", entityType: "GUEST", entityId: g.id, projectId: g.projectId, summary: `${g.nameAr}: ${g.attendance} → ${input.attendance}` });
     return { attendance: input.attendance };
@@ -223,10 +242,11 @@ export async function saveZone(ctx: ServiceContext, input: z.output<typeof zoneS
  * Assigns a seat. Enforces zone capacity (serialized per zone with an advisory lock) and the
  * zone's minimum protocol level (level 1 = highest precedence).
  */
-export async function assignSeat(ctx: ServiceContext, input: { guestId: string; seatZoneId: string | null; seatLabel?: string | null }) {
+export async function assignSeat(ctx: ServiceContext, input: { guestId: string; seatZoneId: string | null; seatLabel?: string | null; version?: number }) {
   return withTenant(scoped(ctx), async (tx) => {
     const g = await loadGuest(tx, ctx, input.guestId);
     await editable(tx, ctx, g.projectId);
+    await assertVersion(tx, { model: "guest", id: g.id, version: input.version, stored: g.version, entityType: "GUEST", data: { seatZoneId: input.seatZoneId, seatLabel: input.seatLabel ?? null } });
     if (input.seatZoneId) {
       const zone = await tx.seatingZone.findUnique({ where: { id: input.seatZoneId } });
       const event = zone ? await tx.event.findUnique({ where: { id: zone.eventId } }) : null;
@@ -242,7 +262,7 @@ export async function assignSeat(ctx: ServiceContext, input: { guestId: string; 
         if (taken) throw new ValidationError("errors.validation", { seatLabel: ["protocol.seatTaken"] });
       }
     }
-    const u = await tx.guest.update({ where: { id: g.id }, data: { seatZoneId: input.seatZoneId, seatLabel: input.seatZoneId ? input.seatLabel ?? null : null } });
+    const u = await casUpdate<Guest>({ tx, ctx, model: "guest", id: g.id, version: input.version, data: { seatZoneId: input.seatZoneId, seatLabel: input.seatZoneId ? input.seatLabel ?? null : null }, entityType: "GUEST" });
     await audit(tx, ctx, { action: "guest.seat", entityType: "GUEST", entityId: g.id, projectId: g.projectId, summary: `${g.nameAr}: ${u.seatLabel ?? "—"}` });
     return u;
   });

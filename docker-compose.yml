@@ -2,6 +2,7 @@
 #   docker compose up -d --build
 #   docker compose run --rm migrate            # (also runs automatically before app/worker start)
 #   docker compose run --rm tools pnpm db:seed # optional synthetic demo data
+# project name: legacy identifier, kept so existing deployments and devices keep working (ARCHITECTURE.md §10) (volume names derive from it)
 name: operra
 
 x-env: &app-env

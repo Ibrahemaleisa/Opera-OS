@@ -62,6 +62,19 @@ export const tasks = defineMessages(
     filterOwner: "المسؤول",
     onlyOverdue: "المتأخرة فقط",
     blockedReason: "سبب الحجب",
+    // Milestone 2: approval policy (BUSINESS_RULES §4)
+    policy: {
+      selfApprove: "اعتماد ذاتي بموجب الاستثناء",
+      selfApproveDesc: "لا يستطيع أحد غيرك اعتماد هذا الطلب. سيُسجَّل قرارك ويظهر لبقية المالكين.",
+      justification: "ملاحظة قصيرة",
+      justificationHint: "سطر واحد يوضّح السبب. يظهر لبقية المالكين.",
+      selfApproved: "اعتماد ذاتي (استثناء)",
+      noEligibleApprover: "لا يوجد معتمد مؤهل",
+      notices: {
+        selfApproved: "اعتمد {name} «{title}» ذاتياً بموجب الاستثناء",
+        exceptionEnabled: "فعّل {name} استثناء الاعتماد الذاتي",
+      },
+    },
   },
   {
     title: "Tasks",
@@ -124,5 +137,18 @@ export const tasks = defineMessages(
     filterOwner: "Owner",
     onlyOverdue: "Overdue only",
     blockedReason: "Blocked reason",
+    // Milestone 2: approval policy (BUSINESS_RULES §4)
+    policy: {
+      selfApprove: "Self-approve under exception",
+      selfApproveDesc: "No one else can approve this. Your decision is recorded and shown to the other owners.",
+      justification: "A short note",
+      justificationHint: "One line on why. The other owners will see it.",
+      selfApproved: "Self-approved (exception)",
+      noEligibleApprover: "No eligible approver",
+      notices: {
+        selfApproved: "{name} self-approved “{title}” under the exception",
+        exceptionEnabled: "{name} enabled the self-approval exception",
+      },
+    },
   },
 );

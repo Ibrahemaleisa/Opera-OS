@@ -9,7 +9,8 @@ import { withTenant } from "@/server/db/tenant";
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/server/errors";
 import { audit } from "@/server/modules/audit/audit";
 import { emit } from "@/server/modules/automation/outbox";
-import { cancelPendingApprovalsTx } from "@/server/modules/approvals/service";
+import { notify } from "@/server/modules/notifications/notify";
+import { executeHandover, memberHoldings, type HandoverOptions, type HandoverResult, type Holdings } from "./handover";
 import type { clientSchema, contactSchema, customFieldSchema, inviteSchema, orgSettingsSchema, roleSchema, teamSchema, venueSchema } from "./schemas";
 
 const INVITE_TTL_DAYS = 14;
@@ -163,19 +164,49 @@ export async function changeMemberRole(ctx: ServiceContext, input: { membershipI
   });
 }
 
-export async function setMemberStatus(ctx: ServiceContext, input: { membershipId: string; status: "ACTIVE" | "SUSPENDED" | "REVOKED" }) {
+/**
+ * The handover preview for a member (HO rule 1): H1–H15 with counts and items per project, from
+ * the same `memberHoldings` query the execution uses (HO-9).
+ */
+export async function handoverPreview(ctx: ServiceContext, membershipId: string): Promise<Holdings & { member: { id: string; name: string; role: string; status: string; lastLoginAt: Date | null } }> {
   assertCan(ctx, "org.members.manage");
-  const userId = await withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
-    const target = await tx.membership.findFirst({ where: { id: input.membershipId, organizationId: ctx.orgId }, include: { role: true } });
+  return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
+    const m = await tx.membership.findFirst({ where: { id: membershipId, organizationId: ctx.orgId }, include: { role: true, user: { select: { name: true, nameAr: true, lastLoginAt: true } } } });
+    if (!m) throw new NotFoundError();
+    const h = await memberHoldings(tx, ctx.orgId, m.userId);
+    return { ...h, member: { id: m.id, name: (ctx.locale === "ar" ? m.user.nameAr : null) ?? m.user.name, role: m.role.key, status: m.status, lastLoginAt: m.user.lastLoginAt } };
+  });
+}
+
+/**
+ * Suspend, revoke or reactivate a member (§2). Leaving runs the handover in the same transaction
+ * (HO rule 1); the last active PM of a live project can't leave without a replacement PM (HO rule 3);
+ * REVOKED is final (HO rule 5) and reactivation hands nothing back.
+ */
+export async function setMemberStatus(ctx: ServiceContext, input: { membershipId: string; status: "ACTIVE" | "SUSPENDED" | "REVOKED"; handover?: HandoverOptions | null }) {
+  assertCan(ctx, "org.members.manage");
+  const { userId, handover } = await withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
+    const target = await tx.membership.findFirst({ where: { id: input.membershipId, organizationId: ctx.orgId }, include: { role: true, user: { select: { name: true } } } });
     if (!target) throw new NotFoundError();
     if (target.userId === ctx.userId) throw new ForbiddenError(); // nobody changes their own status
     if (target.role.baseRole === "OWNER" && ctx.role !== "OWNER") throw new ForbiddenError(); // only an owner suspends an owner
+    if (input.status === "ACTIVE" && target.status === "REVOKED") throw new ValidationError("errors.revokedIsFinal");
+    if (input.status === target.status) return { userId: target.userId, handover: null };
     const m = input.status === "ACTIVE" ? target : await assertNotLastOwner(tx, target.id);
     await tx.membership.update({ where: { id: m.id }, data: { status: input.status, revokedAt: input.status === "REVOKED" ? new Date() : null } });
-    if (input.status !== "ACTIVE") await releaseWorkOf(tx, ctx, m.userId);
-    await audit(tx, ctx, { action: `member.${input.status.toLowerCase()}`, entityType: "MEMBERSHIP", entityId: m.id, meta: { userId: m.userId } });
-    return m.userId;
-  });
+    let result: HandoverResult | null = null;
+    if (input.status !== "ACTIVE" && target.status === "ACTIVE") {
+      result = await executeHandover(tx, ctx, { userId: m.userId, name: target.user.name }, input.handover ?? {});
+      await releaseDeliveries(tx, ctx, m.userId);
+      // §2.3: suspending or revoking an owner is told to the other owners
+      if (target.role.baseRole === "OWNER") {
+        const owners = await tx.membership.findMany({ where: { organizationId: ctx.orgId, status: "ACTIVE", role: { baseRole: "OWNER" }, userId: { notIn: [m.userId] } }, select: { userId: true } });
+        await notify(tx, { orgId: ctx.orgId, userIds: owners.map((o) => o.userId), type: "member.departed", titleKey: input.status === "REVOKED" ? "org.handover.notices.ownerRevoked" : "org.handover.notices.ownerSuspended", params: { name: target.user.name }, link: "/settings/members", excludeUserId: ctx.userId, mandatory: true });
+      }
+    }
+    await audit(tx, ctx, { action: `member.${input.status.toLowerCase()}`, entityType: "MEMBERSHIP", entityId: m.id, before: { status: target.status }, after: { status: input.status }, meta: { userId: m.userId } });
+    return { userId: m.userId, handover: result };
+  }, { timeout: 60_000 });
   // Membership checks happen per request, so access ends immediately; additionally terminate
   // sessions if the user has no other active membership.
   if (input.status !== "ACTIVE") {
@@ -183,14 +214,15 @@ export async function setMemberStatus(ctx: ServiceContext, input: { membershipId
     const remaining = await listUserOrganizations(userId);
     if (!remaining.length) await revokeAllSessions(userId);
   }
+  return handover;
 }
 
 /**
- * When someone leaves (suspended / revoked): their not-yet-started deliveries go back to dispatch with
- * history, deliveries already in their car are escalated to dispatch, and approvals waiting on them
- * personally are withdrawn so they can be re-routed.
+ * H14, always automatic (M1): when someone leaves, their not-yet-started deliveries go back to
+ * dispatch with history and deliveries already in their car are escalated to dispatch. No automatic
+ * re-assignment to another driver. Designated approvals are handed over by `executeHandover` (H3).
  */
-async function releaseWorkOf(tx: Prisma.TransactionClient, ctx: ServiceContext, userId: string) {
+async function releaseDeliveries(tx: Prisma.TransactionClient, ctx: ServiceContext, userId: string) {
   const now = new Date();
   const assigned = await tx.delivery.findMany({ where: { agentId: userId, status: "ASSIGNED" }, select: { id: true, version: true, status: true } });
   for (const d of assigned) {
@@ -205,8 +237,7 @@ async function releaseWorkOf(tx: Prisma.TransactionClient, ctx: ServiceContext, 
     await tx.deliveryEvent.create({ data: { organizationId: ctx.orgId, deliveryId: d.id, fromStatus: d.status, toStatus: d.status, actorId: ctx.userId, reason: "ESCALATED", note: "agent_inactive", source: "WEB" } });
     await emit(tx, ctx, "delivery.failed", { deliveryId: d.id, projectId: d.projectId, campaignId: d.campaignId, code: d.trackingCode, reason: "agent_inactive", link: `/projects/${d.projectId}/delivery/cards/${d.id}`, entityType: "DELIVERY", entityId: d.id });
   }
-  if (assigned.length || inFlight.length) await audit(tx, ctx, { action: "delivery.release_inactive_agent", entityType: "DELIVERY", summary: `${assigned.length} released, ${inFlight.length} escalated`, meta: { userId } });
-  await cancelPendingApprovalsTx(tx, ctx, { approverUserId: userId }, { reason: "designated approver is no longer active", revert: true, action: "approval.cancel_inactive_approver" });
+  if (assigned.length || inFlight.length) await audit(tx, ctx, { action: "delivery.release_inactive_agent", entityType: "DELIVERY", summary: `${assigned.length} released, ${inFlight.length} escalated`, meta: { userId, cause: "handover" } });
 }
 
 // ── Roles ───────────────────────────────────────────────────────────────────

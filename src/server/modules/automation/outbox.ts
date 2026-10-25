@@ -21,7 +21,18 @@ export type DomainEventType =
   | "project.completed"
   | "incident.reported"
   | "campaign.approval_requested"
-  | "member.invited";
+  | "member.invited"
+  // escalation ladder markers emitted by the scheduler (BUSINESS_RULES §3.4); notices are sent directly
+  | "task.escalated"
+  | "task.unowned_due"
+  | "approval.reminder"
+  | "approval.overdue"
+  | "approval.escalated"
+  | "workorder.not_accepted"
+  | "workorder.overdue"
+  | "workorder.escalated"
+  | "incident.escalated"
+  | "delivery.deadline_risk";
 
 /**
  * Transactional outbox: the event row commits atomically with the change that caused it.

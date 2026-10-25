@@ -128,6 +128,10 @@ export function nameKey(n: Pick<NormalizedRecipient, "nameAr" | "nameEn" | "orga
  * Maps a raw spreadsheet row to canonical recipient fields and validates it.
  * Pure function — unit tested — used by preview, validation jobs and inline row edits.
  */
+/** Fields checked for formula-looking text (KD-3): names, organisation, address and notes. */
+const FORMULA_CHECKED = ["nameAr", "nameEn", "organizationName", "address", "notes"] as const;
+const FORMULA_LIKE = /^[=+\-@\t\r]/;
+
 export function normalizeRow(raw: Record<string, unknown>, mapping: Mapping, opts: ImportOptions, overrides?: Partial<NormalizedRecipient> | null): NormalizeResult {
   const get = (k: string) => (mapping[k as CanonicalKey] ? raw[mapping[k as CanonicalKey]!] : undefined);
   const errors: Issue[] = [];
@@ -243,6 +247,12 @@ export function normalizeRow(raw: Record<string, unknown>, mapping: Mapping, opt
   if (opts.requireMobile && !n.mobile && !errors.some((e) => e.field === "mobile")) errors.push({ field: "mobile", code: "MOBILE_REQUIRED" });
   if (opts.requireLocation && !n.address && !n.mapsUrl && (n.lat == null || n.lng == null)) errors.push({ field: "address", code: "LOCATION_REQUIRED" });
   if (!n.city) warnings.push({ field: "city", code: "CITY_MISSING" });
+  // KD-3 (`import.formulaLike`): text that a spreadsheet would read as a formula is imported as
+  // literal text with a warning (exports neutralise it). Phones are exempt, so "+966…" never warns.
+  for (const field of FORMULA_CHECKED) {
+    const v = n[field];
+    if (typeof v === "string" && FORMULA_LIKE.test(v)) warnings.push({ field, code: "FORMULA_LIKE" });
+  }
 
   return { normalized: n, errors, warnings, keys: matchKeys(n, opts.matchOn) };
 }

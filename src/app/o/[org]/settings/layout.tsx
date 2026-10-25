@@ -3,6 +3,7 @@ import { PageBody } from "@/components/app/page";
 import { getI18n } from "@/lib/i18n/server";
 import { can } from "@/server/authz/policy";
 import { requirePageContext } from "@/server/request";
+import { canViewSystemHealth } from "@/server/modules/recovery/service";
 
 export default async function SettingsLayout({ children, params }: { children: React.ReactNode; params: Promise<{ org: string }> }) {
   const { org } = await params;
@@ -18,6 +19,8 @@ export default async function SettingsLayout({ children, params }: { children: R
     ...(can(ctx, "automation.manage") ? [{ href: `${b}/automation`, label: t.automation }] : []),
     ...(can(ctx, "campaign.manage") ? [{ href: `${b}/providers`, label: t.providers }] : []),
     ...(can(ctx, "org.audit.view") ? [{ href: `${b}/audit`, label: t.audit }] : []),
+    ...(can(ctx, "org.manage") ? [{ href: `${b}/security`, label: m.auth.security.tab }] : []),
+    ...(canViewSystemHealth(ctx) ? [{ href: `${b}/health`, label: m.health.tab }] : []),
   ];
   return (
     <PageBody>

@@ -1,4 +1,4 @@
-import type { OutboxEvent, Prisma } from "@/generated/prisma/client";
+import type { AutomationRule, OutboxEvent, Prisma } from "@/generated/prisma/client";
 import { systemContext } from "@/server/authz/context";
 import { adminDb } from "@/server/db/admin";
 import { withTenant, type Tx } from "@/server/db/tenant";
@@ -6,7 +6,7 @@ import { audit } from "@/server/modules/audit/audit";
 import { notify } from "@/server/modules/notifications/notify";
 import { nextTaskNumber } from "@/server/modules/tasks/numbering";
 import { DEFAULT_STATUSES, type StatusDef } from "@/server/modules/templates/definition";
-import { actionsSchema, conditionsSchema, matchesConditions, type AutomationAction } from "./rules";
+import { actionsSchema, conditionsSchema, matchesConditions, RETIRED_RULE_KEYS, type AutomationAction } from "./rules";
 
 const MAX_EVENT_ATTEMPTS = 5;
 
@@ -33,7 +33,8 @@ export async function processOutbox(orgId: string, limit = 100): Promise<{ proce
 }
 
 async function processEvent(orgId: string, event: OutboxEvent): Promise<number> {
-  const rules = await withTenant({ orgId }, (tx) => tx.automationRule.findMany({ where: { trigger: event.type, enabled: true } }));
+  // retired default rules stay in existing organisations' tables but never run again (see RETIRED_RULE_KEYS)
+  const rules = await withTenant({ orgId }, (tx) => tx.automationRule.findMany({ where: { trigger: event.type, enabled: true, key: { notIn: [...RETIRED_RULE_KEYS] } } }));
   const payload = (event.payload ?? {}) as Record<string, unknown>;
   let count = 0;
   for (const rule of rules) {
@@ -60,7 +61,7 @@ async function processEvent(orgId: string, event: OutboxEvent): Promise<number> 
         const claim = await tx.automationExecution.updateMany({ where: { idempotencyKey: key, status: { in: ["PENDING", "FAILED"] } }, data: { status: "RUNNING", startedAt: new Date(), attempts: { increment: 1 } } });
         if (!claim.count) return null;
         const results: unknown[] = [];
-        for (const action of actions.data) results.push(await runAction(tx, orgId, event, payload, action));
+        for (const action of actions.data) results.push(await runAction(tx, orgId, event, rule, payload, action));
         await tx.automationExecution.update({
           where: { idempotencyKey: key },
           data: { status: "SUCCEEDED", finishedAt: new Date(), result: results as Prisma.InputJsonValue },
@@ -109,7 +110,19 @@ function str(v: unknown): string | null {
   return typeof v === "string" && v ? v : null;
 }
 
-async function runAction(tx: Tx, orgId: string, event: OutboxEvent, p: Record<string, unknown>, action: AutomationAction): Promise<unknown> {
+/**
+ * The occurrence a rule's notice belongs to (BUSINESS_RULES §3.1 rule 1, §3.3 rule 2): a replayed or
+ * re-emitted event for the same occurrence creates no second notice for the same person. An approval
+ * request is one occurrence however many rules or emits announce it.
+ */
+function notifyDedupeKey(event: OutboxEvent, rule: AutomationRule, p: Record<string, unknown>): string {
+  if (typeof p.dedupeKey === "string" && p.dedupeKey) return `${event.type}:${p.dedupeKey}`;
+  const approvalId = str(p.approvalId);
+  if (approvalId && event.type.startsWith("approval.")) return `${event.type}:${approvalId}`;
+  return `evt:${event.id}:${rule.id}`;
+}
+
+async function runAction(tx: Tx, orgId: string, event: OutboxEvent, rule: AutomationRule, p: Record<string, unknown>, action: AutomationAction): Promise<unknown> {
   switch (action.type) {
     case "notify": {
       const ids: string[] = [];
@@ -130,6 +143,7 @@ async function runAction(tx: Tx, orgId: string, event: OutboxEvent, p: Record<st
       // everyone addressed by an actionable alert has left: it still has to reach someone who can act
       const actionable = action.to.some((t) => ["assignee", "owner", "project_managers", "approver"].includes(t));
       if (actionable && ids.length && !recipients.filter((u) => u !== exclude).length) recipients = await projectManagers(tx, orgId, p.projectId);
+      const severity = str(p.severity);
       const n = await notify(tx, {
         orgId,
         userIds: recipients,
@@ -137,15 +151,29 @@ async function runAction(tx: Tx, orgId: string, event: OutboxEvent, p: Record<st
         titleKey: action.titleKey,
         params: { title: str(p.title), code: str(p.code), count: typeof p.count === "number" ? p.count : null, name: str(p.name) },
         link: str(p.link) ?? undefined,
-        entityType: str(p.entityType) ?? undefined,
-        entityId: str(p.entityId) ?? undefined,
+        entityType: str(p.entityType) ?? (str(p.incidentId) ? "INCIDENT" : undefined),
+        entityId: str(p.entityId) ?? str(p.incidentId) ?? undefined,
         excludeUserId: exclude,
+        dedupeKey: notifyDedupeKey(event, rule, p),
+        priority: severity === "CRITICAL" ? "CRITICAL" : severity === "HIGH" ? "HIGH" : "NORMAL",
       });
       return { notify: n };
     }
     case "create_task": {
       const projectId = str(p.projectId);
       if (!projectId) return { skipped: "no project" };
+      // at most one open follow-up task per delivery (§3.4, ES-6): a new failure appends to it
+      const deliveryId = str(p.deliveryId);
+      const followTag = deliveryId ? `delivery:${deliveryId}` : null;
+      if (followTag) {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`followup:${followTag}`}))`;
+        const open = await tx.task.findFirst({ where: { projectId, tags: { has: followTag }, statusCategory: { notIn: ["DONE", "CANCELLED"] } }, select: { id: true, description: true } });
+        if (open) {
+          const line = `${new Date().toISOString().slice(0, 16).replace("T", " ")} · ${str(p.reason) ?? event.type}`;
+          await tx.task.update({ where: { id: open.id }, data: { description: [open.description, line].filter(Boolean).join("\n").slice(-4000), version: { increment: 1 } } });
+          return { appendedTo: open.id };
+        }
+      }
       const pm = action.assignTo === "project_manager" ? (await projectManagers(tx, orgId, projectId))[0] : action.assignTo === "actor" ? (await activeOnly(tx, orgId, [event.actorId]))[0] ?? null : null;
       const number = await nextTaskNumber(tx, projectId);
       const task = await tx.task.create({
@@ -160,7 +188,7 @@ async function runAction(tx: Tx, orgId: string, event: OutboxEvent, p: Record<st
           priority: action.priority,
           ownerId: pm ?? null,
           dueAt: new Date(Date.now() + action.dueInHours * 3600_000),
-          tags: ["automation"],
+          tags: followTag ? ["automation", followTag] : ["automation"],
           createdById: event.actorId ?? pm ?? "system",
         },
       });
@@ -199,7 +227,7 @@ async function runAction(tx: Tx, orgId: string, event: OutboxEvent, p: Record<st
         return { reopened: reopened ? entityId : null, dependents: blocked };
       }
       if (entityType === "DELIVERABLE" && entityId) {
-        const r = await tx.deliverable.updateMany({ where: { id: entityId, status: "REJECTED" }, data: { status: "IN_PROGRESS" } });
+        const r = await tx.deliverable.updateMany({ where: { id: entityId, status: "REJECTED" }, data: { status: "IN_PROGRESS", version: { increment: 1 } } });
         if (r.count) await audit(tx, systemContext(orgId), { action: "automation.deliverable_reopened", entityType: "DELIVERABLE", entityId, projectId: str(p.projectId), summary: "approval rejected" });
         return { reopened: r.count ? entityId : null };
       }
@@ -213,8 +241,9 @@ async function runAction(tx: Tx, orgId: string, event: OutboxEvent, p: Record<st
         tx.delivery.count({ where: { campaignId, status: { not: "CANCELLED" } } }),
         tx.delivery.count({ where: { campaignId, status: "DELIVERED" } }),
       ]);
-      if (total > 0 && total === done) await tx.invitationCampaign.updateMany({ where: { id: campaignId, status: { not: "COMPLETED" } }, data: { status: "COMPLETED" } });
-      else await tx.invitationCampaign.updateMany({ where: { id: campaignId, status: { in: ["DRAFT", "APPROVED"] } }, data: { status: "ACTIVE" } });
+      // a system status change bumps the version, so a form opened before it conflicts (CE-5)
+      if (total > 0 && total === done) await tx.invitationCampaign.updateMany({ where: { id: campaignId, status: { not: "COMPLETED" } }, data: { status: "COMPLETED", version: { increment: 1 } } });
+      else await tx.invitationCampaign.updateMany({ where: { id: campaignId, status: { in: ["DRAFT", "APPROVED"] } }, data: { status: "ACTIVE", version: { increment: 1 } } });
       return { total, done };
     }
     case "create_closeout_checklist": {

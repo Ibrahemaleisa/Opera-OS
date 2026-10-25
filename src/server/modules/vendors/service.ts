@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { ServiceContext } from "@/server/authz/context";
-import { assertCan, can, projectScope, projectVisibilityWhere } from "@/server/authz/policy";
+import { assertCan, assertNotArchived, can, isArchivedStatus, projectScope, projectVisibilityWhere, ProjectArchivedError } from "@/server/authz/policy";
 import { withTenant, type Tx } from "@/server/db/tenant";
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/server/errors";
 import { audit } from "@/server/modules/audit/audit";
@@ -39,6 +39,7 @@ const scoped = (ctx: ServiceContext) => ({ orgId: ctx.orgId, userId: ctx.userId 
 
 async function operateProject(tx: Tx, ctx: ServiceContext, projectId: string) {
   const s = await projectScope(tx, ctx, projectId);
+  assertNotArchived(s);
   if (!s.operate || s.clientView || s.fieldOnly) throw new ForbiddenError();
   return s;
 }
@@ -236,9 +237,20 @@ export async function setWorkOrderStatus(ctx: ServiceContext, input: { id: strin
     if (isVendor) {
       if (!can(ctx, "vendor.portal") || ctx.vendorId !== w.vendorId) throw new NotFoundError();
       if (!VENDOR_FLOW[w.status]?.includes(input.status)) throw new ValidationError("errors.invalidTransition");
+      // archived project (§1.3): work already accepted may be completed while the agency decides
+      const project = await tx.project.findUnique({ where: { id: w.projectId }, select: { status: true } });
+      if (project && isArchivedStatus(project.status) && !["ACCEPTED", "IN_PROGRESS"].includes(w.status)) throw new ProjectArchivedError();
     } else {
-      assertCan(ctx, "vendor.manage");
-      await operateProject(tx, ctx, w.projectId);
+      const s = await projectScope(tx, ctx, w.projectId);
+      if (s.clientView || s.fieldOnly) throw new ForbiddenError();
+      if (s.archived) {
+        // financial tail (§1.5): only agency acceptance or cancellation, by finance with the project's finance scope
+        if (!["ACCEPTED_BY_AGENCY", "CANCELLED"].includes(input.status)) throw new ProjectArchivedError();
+        if (!(can(ctx, "finance.manage") || can(ctx, "finance.approve")) || !s.finance) throw new ForbiddenError();
+      } else {
+        assertCan(ctx, "vendor.manage");
+        if (!s.operate) throw new ForbiddenError();
+      }
       if (!AGENCY_FLOW[w.status]?.includes(input.status) && !VENDOR_FLOW[w.status]?.includes(input.status)) throw new ValidationError("errors.invalidTransition");
       if (input.status === "ACCEPTED_BY_AGENCY" && !input.rating) throw new ValidationError("errors.validation", { rating: ["vendors.ratingRequired"] });
     }

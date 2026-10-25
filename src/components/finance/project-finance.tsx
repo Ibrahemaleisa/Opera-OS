@@ -10,6 +10,7 @@ import { DateText } from "@/components/app/date-text";
 import { EmptyState, Section, Stat } from "@/components/app/page";
 import { StatusBadge } from "@/components/app/status-badge";
 import { FormDialog, enumOptions, type FieldDef } from "@/components/app/form-dialog";
+import { ExceptionChip } from "@/components/operations/exception-chip";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useAction } from "@/hooks/use-action";
 import { formatMoney, formatPercent } from "@/lib/format";
@@ -49,9 +50,11 @@ export function ProjectFinance({ orgSlug, data }: { orgSlug: string; data: D }) 
   const money = (v: number | null | undefined) => formatMoney(v ?? null, { ...fmt, currency: data.project.currency });
   const s = data.summary;
   const can = data.canManage;
+  // new spend and plan changes are closed in archived projects; PO receipt / close / cancel and payments stay (§1.5)
+  const canPlan = can && !data.archived;
   const pid = data.project.id;
 
-  const budget = useAction(saveBudgetAction, { orgSlug, onSuccess: close });
+  const budget = useAction(saveBudgetAction, { orgSlug, conflictUi: "inline", onSuccess: close });
   const contract = useAction(setContractValueAction, { orgSlug, onSuccess: close });
   const newPo = useAction(createPurchaseOrderAction, { orgSlug, onSuccess: close });
   const submitPo = useAction(submitPurchaseOrderAction, { orgSlug });
@@ -92,7 +95,8 @@ export function ProjectFinance({ orgSlug, data }: { orgSlug: string; data: D }) 
     ],
   };
   const submit = (kind: NonNullable<Dlg>["kind"], v: Record<string, unknown>) => {
-    if (kind === "budget") budget.run({ ...v, projectId: pid } as never);
+    // an existing line carries the version it was loaded at (§6); a conflict moves it on via the dialog
+    if (kind === "budget") budget.run({ ...v, projectId: pid, version: (v.version as number | undefined) ?? data.budgetVersions[String(v.category)] } as never);
     if (kind === "contract") contract.run({ projectId: pid, contractValue: (v.contractValue as number | null) ?? null });
     if (kind === "po") newPo.run({ ...v, projectId: pid, vatAmount: v.vatAmount ?? 0 } as never);
     if (kind === "expense") newExp.run({ ...v, projectId: pid, vatAmount: v.vatAmount ?? 0 } as never);
@@ -115,14 +119,14 @@ export function ProjectFinance({ orgSlug, data }: { orgSlug: string; data: D }) 
       </div>
       <p className="text-xs text-muted-foreground">{interpolate(t.thresholdNote, { amount: money(data.threshold) })}</p>
 
-      <Section title={t.budget} actions={can && <div className="flex gap-2"><Button size="sm" variant="outline" onClick={() => setDlg({ kind: "contract", values: { contractValue: s.contract.original } })}>{t.setContract}</Button><Button size="sm" onClick={() => setDlg({ kind: "budget", values: { category: "PRODUCTION" } })}><Plus /> {t.setBudget}</Button></div>}>
+      <Section title={t.budget} actions={canPlan && <div className="flex gap-2"><Button size="sm" variant="outline" onClick={() => setDlg({ kind: "contract", values: { contractValue: s.contract.original } })}>{t.setContract}</Button><Button size="sm" onClick={() => setDlg({ kind: "budget", values: { category: "PRODUCTION" } })}><Plus /> {t.setBudget}</Button></div>}>
         {s.lines.length === 0 ? <EmptyState title={m.common.emptyTitle} /> : (
           <div className="overflow-x-auto">
             <table className="w-full text-[13px]" data-testid="budget-table">
               <thead className="border-b bg-muted/40 text-[11px] text-muted-foreground"><tr>{[t.category, t.planned, t.committed, t.actual, t.forecast, t.variance, ""].map((h, i) => <th key={i} className="px-3 py-2 text-start font-medium">{h}</th>)}</tr></thead>
               <tbody className="divide-y">
                 {s.lines.map((l) => (
-                  <tr key={l.category} className={cn(can && "cursor-pointer hover:bg-muted/40")} onClick={() => can && setDlg({ kind: "budget", values: { category: l.category, planned: l.planned } })}>
+                  <tr key={l.category} className={cn(canPlan && "cursor-pointer hover:bg-muted/40")} onClick={() => canPlan && setDlg({ kind: "budget", values: { category: l.category, planned: l.planned, notes: data.budgetNotes[l.category] ?? null } })}>
                     <td className="px-3 py-2 font-medium">{m.enums.budgetCategory[l.category as keyof typeof m.enums.budgetCategory] ?? l.category}</td>
                     <td className="tabular px-3 py-2">{money(l.planned)}</td>
                     <td className="tabular px-3 py-2">{money(l.committed)}</td>
@@ -144,17 +148,17 @@ export function ProjectFinance({ orgSlug, data }: { orgSlug: string; data: D }) 
         )}
       </Section>
 
-      <Section title={`${t.pos} (${data.purchaseOrders.length})`} actions={can && <Button size="sm" onClick={() => setDlg({ kind: "po", values: { budgetCategory: "PRODUCTION" } })}><Plus /> {t.newPo}</Button>}>
+      <Section title={`${t.pos} (${data.purchaseOrders.length})`} actions={canPlan && <Button size="sm" onClick={() => setDlg({ kind: "po", values: { budgetCategory: "PRODUCTION" } })}><Plus /> {t.newPo}</Button>}>
         {data.purchaseOrders.length === 0 ? <EmptyState title={m.common.emptyTitle} /> : (
           <ul className="divide-y">
             {data.purchaseOrders.map((p) => (
               <li key={p.id} className="grid gap-2 px-4 py-3 md:grid-cols-[1fr_140px_150px_auto] md:items-center" data-testid="po-row" data-status={p.status}>
                 <div><div className="text-[13px] font-medium"><span className="ltr-nums font-mono text-xs text-muted-foreground">{p.code}</span> {p.title}</div><div className="text-[11px] text-muted-foreground">{p.vendorName} · {m.enums.budgetCategory[p.budgetCategory as keyof typeof m.enums.budgetCategory] ?? p.budgetCategory}</div></div>
                 <span className="tabular text-xs">{money(p.amount + p.vatAmount)}<div className="text-[10px] text-muted-foreground">{t.vat}: {money(p.vatAmount)}</div></span>
-                <div className="grid gap-0.5"><StatusBadge status={p.status} label={m.enums.poStatus[p.status]} />{p.status === "DRAFT" && p.needsApproval && <span className="text-[10px] text-warning">{t.needsApproval}</span>}{p.approval?.decisionComment && <span className="text-[10px] text-muted-foreground">“{p.approval.decisionComment}”</span>}</div>
+                <div className="grid gap-0.5"><StatusBadge status={p.status} label={m.enums.poStatus[p.status]} />{p.status === "DRAFT" && p.needsApproval && <span className="text-[10px] text-warning">{t.needsApproval}</span>}{p.approval?.policyException && <ExceptionChip>{m.tasks.policy.selfApproved}</ExceptionChip>}{p.approval?.decisionComment && <span className="text-[10px] text-muted-foreground">“{p.approval.decisionComment}”</span>}</div>
                 {can && (
                   <div className="flex flex-wrap gap-1">
-                    {p.status === "DRAFT" && <Button size="xs" onClick={() => submitPo.run({ id: p.id })} disabled={submitPo.pending} data-testid="po-submit"><Send /> {t.submit}</Button>}
+                    {p.status === "DRAFT" && canPlan && <Button size="xs" onClick={() => submitPo.run({ id: p.id })} disabled={submitPo.pending} data-testid="po-submit"><Send /> {t.submit}</Button>}
                     {PO_NEXT[p.status]?.map((n) =>
                       n.to === "CANCELLED" ? (
                         <ConfirmAction
@@ -178,7 +182,7 @@ export function ProjectFinance({ orgSlug, data }: { orgSlug: string; data: D }) 
         )}
       </Section>
 
-      <Section title={`${t.expenses} (${data.expenses.length})`} actions={<Button size="sm" onClick={() => setDlg({ kind: "expense", values: { budgetCategory: "LOGISTICS", incurredAt: new Date() } })} data-testid="new-expense"><Plus /> {t.newExpense}</Button>}>
+      <Section title={`${t.expenses} (${data.expenses.length})`} actions={!data.archived && <Button size="sm" onClick={() => setDlg({ kind: "expense", values: { budgetCategory: "LOGISTICS", incurredAt: new Date() } })} data-testid="new-expense"><Plus /> {t.newExpense}</Button>}>
         {data.expenses.length === 0 ? <EmptyState title={m.common.emptyTitle} /> : (
           <ul className="divide-y">
             {data.expenses.map((e) => (
@@ -189,6 +193,7 @@ export function ProjectFinance({ orgSlug, data }: { orgSlug: string; data: D }) 
                 <button className={cn("flex items-center gap-1 text-xs hover:underline", e.evidenceCount ? "text-success" : "text-warning")} onClick={() => setEvidenceFor(e)} data-testid="expense-evidence"><Paperclip className="size-3.5" /> {e.evidenceCount || t.attachEvidence}</button>
                 <div className="flex flex-wrap items-center gap-1">
                   <StatusBadge status={e.status === "SUBMITTED" && e.approval?.status === "PENDING" ? "PENDING_APPROVAL" : e.status} label={e.status === "SUBMITTED" && e.approval?.status === "PENDING" ? m.enums.poStatus.PENDING_APPROVAL : m.enums.expenseStatus[e.status]} />
+                  {e.approval?.policyException && <ExceptionChip>{m.tasks.policy.selfApproved}</ExceptionChip>}
                   {["SUBMITTED", "REJECTED"].includes(e.status) && e.approval?.status !== "PENDING" && <Button size="xs" variant="outline" disabled={reqExp.pending || !e.evidenceCount} title={e.evidenceCount ? undefined : t.evidenceRequired} onClick={() => reqExp.run({ id: e.id })} data-testid="expense-request">{t.requestApproval}</Button>}
                   {can && e.status === "APPROVED" && <ActionButton size="xs" variant="outline" action={() => paid.run({ id: e.id })}>{t.markPaid}</ActionButton>}
                 </div>
@@ -198,7 +203,7 @@ export function ProjectFinance({ orgSlug, data }: { orgSlug: string; data: D }) 
         )}
       </Section>
 
-      <Section title={`${t.changeOrders} (${data.changeOrders.length})`} actions={can && <Button size="sm" onClick={() => setDlg({ kind: "co", values: { clientVisible: true } })}><Plus /> {t.newChangeOrder}</Button>}>
+      <Section title={`${t.changeOrders} (${data.changeOrders.length})`} actions={canPlan && <Button size="sm" onClick={() => setDlg({ kind: "co", values: { clientVisible: true } })}><Plus /> {t.newChangeOrder}</Button>}>
         {data.changeOrders.length === 0 ? <EmptyState title={m.common.emptyTitle} /> : (
           <ul className="divide-y">
             {data.changeOrders.map((c) => (
@@ -216,7 +221,7 @@ export function ProjectFinance({ orgSlug, data }: { orgSlug: string; data: D }) 
         )}
       </Section>
 
-      {dlg && <FormDialog open onOpenChange={(o) => !o && close()} title={titles[dlg.kind]} fields={fields[dlg.kind]} values={dlg.values} onSubmit={(v) => submit(dlg.kind, v)} pending={pending} errorFor={errorFor} testId={`form-${dlg.kind}`} />}
+      {dlg && <FormDialog open onOpenChange={(o) => { if (!o) { close(); budget.clearConflict(); } }} title={titles[dlg.kind]} fields={fields[dlg.kind]} values={dlg.values} onSubmit={(v) => submit(dlg.kind, v)} pending={pending} errorFor={errorFor} conflict={dlg.kind === "budget" ? budget.conflict : null} onConflictResolved={budget.clearConflict} testId={`form-${dlg.kind}`} />}
       <Dialog open={!!evidenceFor} onOpenChange={(o) => !o && setEvidenceFor(null)}>
         <DialogContent>
           <DialogHeader><DialogTitle>{t.evidence} — {evidenceFor?.description}</DialogTitle></DialogHeader>

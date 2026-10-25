@@ -77,14 +77,14 @@ describe("QA: import studio with hostile files", () => {
     expect((by(10)?.normalized as { mobile?: string })?.mobile).toBe("+966556667777"); // Arabic digits normalised
   });
 
-  // Open defect (QA S4-3): a prose "instructions" sheet placed first is auto-selected. Deferred to Milestone 2.
-  it.fails("[S4-3] known defect, Milestone 2 — a decoy instructions sheet placed first is not auto-selected", async () => {
+  // QA S4-3, fixed in Milestone 2 (BUSINESS_RULES KD-2: the sheet with the best header score is picked).
+  it("[S4-3] KD-2 a decoy instructions sheet placed first is not auto-selected", async () => {
     const { firstPick } = await nastyBatch("QA NastyDecoy");
     expect(firstPick, "decoy sheet auto-selected (UX risk)").toBe("المدعوين");
   });
 
-  // Open defect (QA S4-4): a name that is a spreadsheet formula is imported without a warning. Deferred to Milestone 2.
-  it.fails("[S4-4] known defect, Milestone 2 — a formula-looking name gets a warning", async () => {
+  // QA S4-4, fixed in Milestone 2 (BUSINESS_RULES KD-3: formula-looking text gets an import.formulaLike warning).
+  it("[S4-4] KD-3 a formula-looking name gets a warning", async () => {
     const { by } = await nastyBatch("QA NastyFormula");
     expect((by(7)?.warnings as unknown[] | undefined)?.length ?? 0, "formula-looking name gets a warning").toBeGreaterThan(0);
   });
@@ -116,8 +116,8 @@ describe("QA: import studio with hostile files", () => {
     expect(cells.some((c) => c.startsWith("="))).toBe(false);
   });
 
-  // Open defect (QA S4-2): XLSX string cells cannot execute, yet phones are exported as "'+9665…". Deferred to Milestone 2.
-  it.fails("[S4-2] known defect, Milestone 2 — XLSX exports keep phone numbers without a literal apostrophe", async () => {
+  // QA S4-2, fixed in Milestone 2 (BUSINESS_RULES KD-4: XLSX string cells, E.164 phones unprefixed).
+  it("[S4-2] KD-4 XLSX exports keep phone numbers without a literal apostrophe", async () => {
     const { cells } = await injectionExports("QA ExportPhones");
     expect(cells.filter((c) => /^'\+9665/.test(c)), "phones exported as \"'+9665…\" text").toHaveLength(0);
   });
@@ -165,7 +165,8 @@ describe("QA: import studio with hostile files", () => {
       for (let i = 0; i < n; i++) ws.addRow([`ضيف ${i}`, `055${String(1_000_000 + i).slice(-7)}`, `حي ${i % 50}`, "الرياض"]);
     });
     const tooBig = await make(20_001);
-    await expect(createImport(a.ctx, { projectId: p.id, campaignId: campaign.id, fileName: "big.xlsx", declaredType: XLSX, body: tooBig })).rejects.toThrow("errors.fileTooLarge");
+    // M2 (BUSINESS_RULES §7.1 rule 4, SW-7): the cap is IMPORT_MAX_ROWS (default 10,000), checked before parsing
+    await expect(createImport(a.ctx, { projectId: p.id, campaignId: campaign.id, fileName: "big.xlsx", declaredType: XLSX, body: tooBig })).rejects.toThrow("errors.tooManyRows");
     const t0 = Date.now();
     const { batch, preview } = await upload(a, p.id, campaign.id, "5k.xlsx", await make(5_000));
     const rows = await validate(a, batch.id, preview);

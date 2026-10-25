@@ -34,8 +34,10 @@ import { createChangeOrder, createExpense, requestExpenseApproval, saveBudget, s
 import { createChangeRequest } from "@/server/modules/portal/service";
 
 const SLUG = process.env.SEED_ORG_SLUG ?? "demo";
-const PASSWORD = process.env.SEED_PASSWORD ?? "Operra-Demo-2026";
-const DOMAIN = SLUG === "demo" ? "operra.demo" : `${SLUG}.operra.demo`;
+const PASSWORD = process.env.SEED_PASSWORD ?? "Opera-Demo-2026";
+const DOMAIN = SLUG === "demo" ? "opera.demo" : `${SLUG}.opera.demo`;
+// demo agencies seeded before the naming was standardised use this domain
+const LEGACY_DOMAIN = SLUG === "demo" ? "operra.demo" : `${SLUG}.operra.demo`;
 const DAY = 86400_000;
 const PNG = Buffer.from("89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082", "hex");
 
@@ -63,9 +65,11 @@ const evidence = (ctx: ServiceContext, projectId: string, entityType: string, en
 
 async function main() {
   // Organizations are RLS-protected for the runtime role, so the owner's (global) login is the idempotency check.
-  if (await db.user.findUnique({ where: { email: `owner@${DOMAIN}` } })) {
-    console.log(`Demo agency "${SLUG}" already exists — nothing to do. Sign in as owner@${DOMAIN}.`);
-    return;
+  for (const domain of [DOMAIN, LEGACY_DOMAIN]) {
+    if (await db.user.findUnique({ where: { email: `owner@${domain}` } })) {
+      console.log(`Demo agency "${SLUG}" already exists — nothing to do. Sign in as owner@${domain}.`);
+      return;
+    }
   }
   const now = Date.now();
   console.log("Creating demo agency …");

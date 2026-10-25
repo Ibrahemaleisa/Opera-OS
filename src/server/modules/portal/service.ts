@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { ServiceContext } from "@/server/authz/context";
 import { isClientRole } from "@/server/authz/roles";
-import { can, projectScope, type ProjectScope } from "@/server/authz/policy";
+import { assertNotArchived, can, projectScope, type ProjectScope } from "@/server/authz/policy";
 import { withTenant, type Tx } from "@/server/db/tenant";
 import { ForbiddenError, NotFoundError, ValidationError } from "@/server/errors";
 import { audit } from "@/server/modules/audit/audit";
@@ -16,9 +16,18 @@ function assertClient(ctx: ServiceContext) {
   if (!isClientRole(ctx.role) || !can(ctx, "portal.access")) throw new ForbiddenError();
 }
 
+/** LC rule 7: archived projects stay visible to their client members, read-only, for 180 days. */
+export const PORTAL_ARCHIVE_DAYS = 180;
+const archiveCutoff = (now = new Date()) => new Date(now.getTime() - PORTAL_ARCHIVE_DAYS * 86_400_000);
+
+/** The client-facing status: "at risk" is internal and never shown (LC rule 1). */
+const portalStatus = <T extends string>(status: T): T => (status === "AT_RISK" ? "ACTIVE" : status) as T;
+
 async function clientScope(tx: Tx, ctx: ServiceContext, projectId: string): Promise<ProjectScope> {
   const s = await projectScope(tx, ctx, projectId); // NotFound unless member + clientPortal enabled
   if (!s.clientView) throw new NotFoundError();
+  // past projects disappear from the portal 180 days after they were archived
+  if (s.archived && (s.project.statusChangedAt ?? s.project.archivedAt ?? new Date(0)) < archiveCutoff()) throw new NotFoundError();
   return s;
 }
 
@@ -40,14 +49,22 @@ export async function portalHome(ctx: ServiceContext) {
   assertClient(ctx);
   return withTenant(scoped(ctx), async (tx) => {
     const memberships = await tx.projectMember.findMany({ where: { userId: ctx.userId }, select: { projectId: true } });
-    const projects = await tx.project.findMany({ where: { id: { in: memberships.map((m) => m.projectId) }, clientPortal: true, archivedAt: null, clientId: ctx.clientId ?? null }, select: { id: true, code: true, name: true, nameEn: true, status: true, eventStartAt: true, deadline: true }, orderBy: { eventStartAt: "asc" } });
+    const mine = { id: { in: memberships.map((m) => m.projectId) }, clientPortal: true, clientId: ctx.clientId ?? null };
+    const select = { id: true, code: true, name: true, nameEn: true, status: true, eventStartAt: true, deadline: true, statusChangedAt: true } as const;
+    const cutoff = archiveCutoff();
+    const [projects, past] = await Promise.all([
+      tx.project.findMany({ where: { ...mine, archivedAt: null, status: { not: "DRAFT" } }, select, orderBy: { eventStartAt: "asc" } }),
+      // "Past projects": archived, read-only, for 180 days after the status change (LC-12)
+      tx.project.findMany({ where: { ...mine, archivedAt: { not: null }, OR: [{ statusChangedAt: { gte: cutoff } }, { statusChangedAt: null, archivedAt: { gte: cutoff } }] }, select, orderBy: { statusChangedAt: "desc" } }),
+    ]);
     const ids = projects.map((p) => p.id);
     const progress = await clientProgress(tx, ids);
     const pending = await tx.approval.groupBy({ by: ["projectId"], where: { projectId: { in: ids }, clientVisible: true, approverType: "CLIENT", status: "PENDING" }, _count: true });
     const org = await tx.organization.findUniqueOrThrow({ where: { id: ctx.orgId }, select: { name: true, nameEn: true, brandColor: true } });
     return {
       org,
-      projects: projects.map((p) => ({ ...p, name: (ctx.locale === "en" && p.nameEn) || p.name, progress: progress(p.id), pendingApprovals: pending.find((x) => x.projectId === p.id)?._count ?? 0 })),
+      projects: projects.map((p) => ({ ...p, status: portalStatus(p.status), name: (ctx.locale === "en" && p.nameEn) || p.name, progress: progress(p.id), pendingApprovals: pending.find((x) => x.projectId === p.id)?._count ?? 0 })),
+      pastProjects: past.map((p) => ({ id: p.id, code: p.code, name: (ctx.locale === "en" && p.nameEn) || p.name, status: p.status, statusChangedAt: p.statusChangedAt })),
     };
   });
 }
@@ -75,8 +92,10 @@ export async function portalProject(ctx: ServiceContext, projectId: string) {
     const dTotal = Object.values(d).reduce((a, b) => a + b, 0) - (d.CANCELLED ?? 0);
     const r = Object.fromEntries(rsvps.map((x) => [x.rsvpStatus ?? "NONE", x._count])) as Record<string, number>;
     return {
-      project: { id: p.id, code: p.code, name: (ctx.locale === "en" && p.nameEn) || p.name, status: p.status, eventStartAt: p.eventStartAt, deadline: p.deadline, description: p.description },
-      canApprove: s.approve,
+      project: { id: p.id, code: p.code, name: (ctx.locale === "en" && p.nameEn) || p.name, status: portalStatus(p.status), eventStartAt: p.eventStartAt, deadline: p.deadline, description: p.description, archived: s.archived },
+      // archived projects are read-only in the portal: no new change requests or decisions (LC rule 7)
+      canApprove: s.approve && !s.archived,
+      readOnly: s.archived,
       progress,
       milestones: milestones.map((m) => ({ id: m.id, title: m.title, dueAt: m.dueDate, status: m.status, completedAt: m.completedAt })),
       // in-progress internal drafts aren't shown; clients see deliverables once submitted or decided
@@ -98,6 +117,7 @@ export async function createChangeRequest(ctx: ServiceContext, input: z.output<t
   assertClient(ctx);
   return withTenant(scoped(ctx), async (tx) => {
     const s = await clientScope(tx, ctx, input.projectId);
+    assertNotArchived(s);
     const c = await tx.changeRequest.create({ data: { ...input, organizationId: ctx.orgId, requestedById: ctx.userId } });
     await audit(tx, ctx, { action: "change_request.create", entityType: "CHANGE_REQUEST", entityId: c.id, projectId: input.projectId, summary: c.title });
     const managers = await tx.projectMember.findMany({ where: { projectId: input.projectId, role: "MANAGER" }, select: { userId: true } });
@@ -112,7 +132,9 @@ export async function respondChangeRequest(ctx: ServiceContext, input: z.output<
     const c = await tx.changeRequest.findUnique({ where: { id: input.id } });
     if (!c) throw new NotFoundError();
     const s = await projectScope(tx, ctx, c.projectId);
-    if (s.clientView || !s.manage) throw new ForbiddenError();
+    if (s.clientView) throw new ForbiddenError();
+    assertNotArchived(s);
+    if (!s.manage) throw new ForbiddenError();
     if (["ACCEPTED", "DECLINED"].includes(c.status)) throw new ValidationError("errors.invalidTransition");
     if (input.status !== "UNDER_REVIEW" && !input.response?.trim()) throw new ValidationError("errors.validation", { response: ["common.required"] });
     const u = await tx.changeRequest.update({ where: { id: c.id }, data: { status: input.status, response: input.response ?? c.response, respondedById: ctx.userId } });

@@ -35,11 +35,20 @@ export interface RuleDef {
   actions: AutomationAction[];
 }
 
+/**
+ * Default rules that Milestone 2 replaced. Existing organisations still have the rows; the engine never
+ * runs them and the automation settings hide them:
+ *  - `task-overdue-escalate` repeated a notice to the owner and the PMs every day; the scheduler's
+ *    tiered ladder (BUSINESS_RULES §3.4) replaces it, each tier once per occurrence;
+ *  - `campaign-approval-notify` told every admin about a campaign approval on top of the approver
+ *    notice; `approval.requested` covers it, so nobody gets two notices for one request (§3.2 NT rule 1).
+ */
+export const RETIRED_RULE_KEYS: ReadonlySet<string> = new Set(["task-overdue-escalate", "campaign-approval-notify"]);
+
 /** Default rules installed (enabled) in every organization. Editable per org. */
 export const DEFAULT_RULES: RuleDef[] = [
   { key: "task-assigned-notify", name: "إشعار عند إسناد مهمة", nameEn: "Notify on task assignment", trigger: "task.assigned", actions: [{ type: "notify", to: ["assignee"], titleKey: "notif.taskAssigned" }] },
   { key: "task-due-soon", name: "تذكير قبل موعد الاستحقاق", nameEn: "Reminder before deadline", trigger: "task.due_soon", actions: [{ type: "notify", to: ["assignee"], titleKey: "notif.taskDueSoon" }] },
-  { key: "task-overdue-escalate", name: "تصعيد المهام المتأخرة", nameEn: "Escalate overdue tasks", trigger: "task.overdue", actions: [{ type: "escalate" }, { type: "notify", to: ["assignee", "project_managers"], titleKey: "notif.taskOverdue" }] },
   { key: "delivery-failed-followup", name: "متابعة التوصيل الفاشل", nameEn: "Follow up failed delivery", trigger: "delivery.failed", actions: [{ type: "create_task", titleKey: "auto.followUpDelivery", assignTo: "project_manager", dueInHours: 24, priority: "HIGH" }, { type: "notify", to: ["project_managers"], titleKey: "notif.deliveryFailed" }] },
   { key: "delivery-completed-progress", name: "تحديث تقدم الحملة عند التسليم", nameEn: "Update campaign progress on delivery", trigger: "delivery.delivered", actions: [{ type: "update_campaign_progress" }] },
   { key: "delivery-assigned-notify", name: "إشعار المندوب بالإسناد", nameEn: "Notify agent on assignment", trigger: "delivery.assigned", actions: [{ type: "notify", to: ["assignee"], titleKey: "notif.deliveriesAssigned" }] },
@@ -53,7 +62,6 @@ export const DEFAULT_RULES: RuleDef[] = [
   { key: "project-completed-closeout", name: "إنشاء قائمة الإقفال عند اكتمال المشروع", nameEn: "Generate closeout checklist", trigger: "project.completed", actions: [{ type: "create_closeout_checklist" }] },
   { key: "mention-notify", name: "إشعار عند الإشارة", nameEn: "Notify on mention", trigger: "comment.mentioned", actions: [{ type: "notify", to: ["mentioned"], titleKey: "notif.mentioned" }] },
   { key: "incident-reported-notify", name: "تنبيه عند تسجيل بلاغ", nameEn: "Alert on incident", trigger: "incident.reported", conditions: { severity: { in: ["HIGH", "CRITICAL"] } }, actions: [{ type: "notify", to: ["project_managers", "org_admins"], titleKey: "notif.incidentReported" }] },
-  { key: "campaign-approval-notify", name: "طلب اعتماد حملة", nameEn: "Campaign approval request", trigger: "campaign.approval_requested", actions: [{ type: "notify", to: ["org_admins"], titleKey: "notif.campaignApproval" }] },
 ];
 
 export function matchesConditions(conditions: Record<string, unknown>, payload: Record<string, unknown>): boolean {

@@ -22,6 +22,8 @@ export const projectSchema = z
     venueIds: z.array(z.string()).default([]),
     managerId: z.string().optional().nullable(),
     clientPortal: z.boolean().default(true),
+    /** the version the user loaded (BUSINESS_RULES §6); required on update, ignored on create */
+    version: z.number().int().optional(),
   })
   .refine((p) => !p.startDate || !p.deadline || p.deadline >= p.startDate, { path: ["deadline"], message: "errors.validation" })
   .refine((p) => !p.eventStartAt || !p.eventEndAt || p.eventEndAt >= p.eventStartAt, { path: ["eventEndAt"], message: "errors.validation" });
@@ -47,6 +49,7 @@ export const milestoneSchema = z.object({
   status: z.enum(["PENDING", "IN_PROGRESS", "BLOCKED", "DONE"]).default("PENDING"),
   clientVisible: z.boolean().default(true),
   workstreamId: z.string().optional().nullable(),
+  version: z.number().int().optional(),
 });
 
 export const riskSchema = z.object({
@@ -59,6 +62,7 @@ export const riskSchema = z.object({
   status: z.enum(["OPEN", "MITIGATING", "CLOSED"]).default("OPEN"),
   ownerId: z.string().optional().nullable(),
   mitigation: z.string().trim().max(2000).optional().nullable(),
+  version: z.number().int().optional(),
 });
 
 export const deliverableSchema = z.object({
@@ -71,4 +75,7 @@ export const deliverableSchema = z.object({
   clientVisible: z.boolean().default(true),
   requiresApproval: z.boolean().default(false),
   workstreamId: z.string().optional().nullable(),
+  version: z.number().int().optional(),
 });
+
+export const independentApprovalSchema = z.object({ projectId: z.string(), value: z.boolean(), version: z.number().int().optional(), reason: z.string().trim().max(1000).optional().nullable() });

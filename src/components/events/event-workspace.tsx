@@ -51,7 +51,7 @@ export function EventWorkspace({ orgSlug, data }: { orgSlug: string; data: W }) 
   const people = useMemo(() => data.people.map((p) => ({ value: p.id, label: p.name })), [data.people]);
   const nameOf = (id: string | null) => data.people.find((p) => p.id === id)?.name ?? t.unassigned;
 
-  const saveEvent = useAction(updateEventAction, { orgSlug, onSuccess: close });
+  const saveEvent = useAction(updateEventAction, { orgSlug, onSuccess: close, conflictUi: "inline" });
   const saveSession = useAction(saveSessionAction, { orgSlug, onSuccess: close });
   const saveSpeaker = useAction(saveSpeakerAction, { orgSlug, onSuccess: close });
   const saveCue = useAction(saveRunItemAction, { orgSlug, onSuccess: close });
@@ -147,7 +147,7 @@ export function EventWorkspace({ orgSlug, data }: { orgSlug: string; data: W }) 
 
   const submit = (kind: NonNullable<Dialog>["kind"], v: Record<string, unknown>) => {
     const id = (dialog?.values?.id as string | undefined) ?? undefined;
-    if (kind === "event") saveEvent.run({ ...v, id: e.id } as never);
+    if (kind === "event") saveEvent.run({ ...v, id: e.id, version: (v.version as number | undefined) ?? e.version } as never);
     if (kind === "session") saveSession.run({ ...v, id, eventId: e.id, speakerIds: (dialog?.values?.speakerIds as string[]) ?? [] } as never);
     if (kind === "speaker") saveSpeaker.run({ ...v, id, eventId: e.id } as never);
     if (kind === "cue") saveCue.run({ ...v, id, eventId: e.id, durationMin: v.durationMin ?? 15 } as never);
@@ -348,14 +348,14 @@ export function EventWorkspace({ orgSlug, data }: { orgSlug: string; data: W }) 
                   </div>
                   <div className="grid gap-1">
                     <StatusBadge status={i.status} label={m.enums.incidentStatus[i.status]} />
-                    {can && !["RESOLVED", "CLOSED"].includes(i.status) ? (
+                    {data.canHandleIncidents && !["RESOLVED", "CLOSED"].includes(i.status) ? (
                       <NativeSelect value={i.ownerId ?? ""} onChange={(ev) => incident.run({ id: i.id, ownerId: ev.target.value || null })} className="h-7 text-[11px]" aria-label={t.owner}>
                         <option value="">{t.unassigned}</option>
                         {people.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
                       </NativeSelect>
                     ) : <span className="text-[11px] text-muted-foreground">{nameOf(i.ownerId)}</span>}
                   </div>
-                  {can && (
+                  {data.canHandleIncidents && (
                     <div className="flex flex-wrap gap-1">
                       {i.status === "OPEN" && <ActionButton size="sm" variant="outline" action={() => incident.run({ id: i.id, status: "ACKNOWLEDGED" })}>{t.acknowledge}</ActionButton>}
                       {["OPEN", "ACKNOWLEDGED"].includes(i.status) && <ActionButton size="sm" variant="outline" action={() => incident.run({ id: i.id, status: "IN_PROGRESS" })}>{t.startWork}</ActionButton>}
@@ -369,7 +369,7 @@ export function EventWorkspace({ orgSlug, data }: { orgSlug: string; data: W }) 
                           testId="incident-resolve-dialog"
                         />
                       )}
-                      {!["RESOLVED", "CLOSED"].includes(i.status) && i.severity !== "CRITICAL" && (
+                      {!["RESOLVED", "CLOSED"].includes(i.status) && i.severity !== "CRITICAL" && !data.archived && (
                         <ConfirmAction
                           trigger={<Button size="sm" variant="ghost" className="text-danger"><ArrowUpCircle /> {t.escalate}</Button>}
                           title={interpolate(m.common.confirmDialog.escalateTitle, { name: i.title })}
@@ -428,6 +428,8 @@ export function EventWorkspace({ orgSlug, data }: { orgSlug: string; data: W }) 
           pending={pendingAny}
           errorFor={errorFor}
           testId={`form-${dialog.kind}`}
+          conflict={dialog.kind === "event" ? saveEvent.conflict : null}
+          onConflictResolved={saveEvent.clearConflict}
         />
       )}
     </div>

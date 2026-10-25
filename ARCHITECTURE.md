@@ -1,8 +1,8 @@
-# Operra Events OS — Architecture
+# Opera — Architecture
 
 ## 1. Shape of the system
 
-Operra is a **modular monolith**: one Next.js (App Router) application that serves
+Opera is a **modular monolith**: one Next.js (App Router) application that serves
 the agency workspace, the field (driver) PWA, the client and vendor portals and
 the public RSVP pages, plus **one background worker process** that consumes BullMQ
 queues. Both processes share the same TypeScript modules under `src/server`.
@@ -191,3 +191,23 @@ tests/e2e               Playwright
 * Stateless app containers; sessions in Postgres; files in object storage (or a
   shared volume with the local driver).
 * Health check: `/api/health` (database required, Redis reported).
+
+## 10. Naming and legacy identifiers
+
+The product is named **Opera** everywhere a person can see it (UI, e-mails, exports, documents,
+package metadata). A few identifiers from before the name was standardised are deliberately
+kept, because each one is persisted outside this repository and renaming it would break
+something real. None is shown to users.
+
+| Identifier | Where it lives | Why it stays |
+|---|---|---|
+| `operra_session`, `operra_locale`, `operra_calendar` | browser cookies | renaming signs every user out and resets their language/calendar |
+| `operra-field` | IndexedDB on drivers' phones | holds delivery updates queued offline; renaming would strand them |
+| `operra` (BullMQ queue) | Redis | jobs already queued (incl. delayed ones) would be orphaned |
+| `operra`, `operra_app` (database, roles), `operra_test` | PostgreSQL in every deployment | renaming is an infrastructure migration (roles, grants, connection strings) |
+| `operra` (Compose project name) | Docker | volume names derive from it; renaming starts on an empty database |
+| `operra-private` (default S3 bucket) | object storage configuration | existing buckets keep their name |
+| `operra.demo` logins | demo agencies seeded earlier | the seed recognises them and does not create a duplicate |
+
+Rename them only together with a planned infrastructure migration (see BUSINESS_RULES.md,
+data residency) and a one-time migration for the browser and device stores.

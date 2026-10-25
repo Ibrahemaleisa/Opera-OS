@@ -101,19 +101,21 @@ describe("VIP protocol", () => {
     const audits = await adminDb().auditEvent.count({ where: { organizationId: a.orgId, action: "protocol.restricted_view", entityId: g.id } });
     expect(audits).toBe(1);
 
-    // seating: protocol level gate and capacity
+    // seating: protocol level gate and capacity (each write carries the version the desk loaded, BUSINESS_RULES §6)
+    const ver = (id: string) => withTenant({ orgId: a.orgId }, (tx) => tx.guest.findUniqueOrThrow({ where: { id } })).then((x) => x.version);
     const front = await saveZone(a.ctx, { eventId: event.id, name: "Front row", capacity: 1, protocolLevel: 1 });
     const second = list.guests.find((x) => x.nameAr.includes("الثاني"))!;
-    await expect(assignSeat(a.ctx, { guestId: second.id, seatZoneId: front.id })).rejects.toThrow("errors.validation");
-    await assignSeat(a.ctx, { guestId: g.id, seatZoneId: front.id, seatLabel: "A1" });
+    await expect(assignSeat(a.ctx, { guestId: second.id, seatZoneId: front.id, version: second.version })).rejects.toThrow("errors.validation");
+    await assignSeat(a.ctx, { guestId: g.id, seatZoneId: front.id, seatLabel: "A1", version: g.version });
     const first = list.guests.find((x) => x.nameAr.includes("الأول"))!;
-    await expect(assignSeat(a.ctx, { guestId: first.id, seatZoneId: front.id, seatLabel: "A2" })).rejects.toThrow("errors.validation"); // full
+    await expect(assignSeat(a.ctx, { guestId: first.id, seatZoneId: front.id, seatLabel: "A2", version: first.version })).rejects.toThrow("errors.validation"); // full
 
-    // arrival desk: valid transitions only, compare-and-set on expected state
-    await setAttendance(a.ctx, { guestId: g.id, attendance: "ARRIVED", expected: "EXPECTED" });
-    await expect(setAttendance(a.ctx, { guestId: g.id, attendance: "ARRIVED", expected: "EXPECTED" })).rejects.toThrow();
-    await expect(setAttendance(a.ctx, { guestId: g.id, attendance: "CANCELLED" })).rejects.toThrow("errors.invalidTransition");
-    await setAttendance(a.ctx, { guestId: g.id, attendance: "SEATED" });
+    // arrival desk: valid transitions only, compare-and-set on the loaded version (two desks can't double-process)
+    const loaded = await ver(g.id);
+    await setAttendance(a.ctx, { guestId: g.id, attendance: "ARRIVED", version: loaded });
+    await expect(setAttendance(a.ctx, { guestId: g.id, attendance: "ARRIVED", version: loaded })).rejects.toThrow("errors.staleWrite");
+    await expect(setAttendance(a.ctx, { guestId: g.id, attendance: "CANCELLED", version: await ver(g.id) })).rejects.toThrow("errors.invalidTransition");
+    await setAttendance(a.ctx, { guestId: g.id, attendance: "SEATED", version: await ver(g.id) });
     const board = await arrivalsBoard(a.ctx);
     expect(board.guests.find((x) => x.id === g.id)?.attendance).toBe("SEATED");
 

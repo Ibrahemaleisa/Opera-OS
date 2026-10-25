@@ -11,57 +11,119 @@ import { Field, NativeSelect } from "@/components/app/field";
 import { EmptyState, Section } from "@/components/app/page";
 import { StatusBadge } from "@/components/app/status-badge";
 import { ConfirmAction } from "@/components/app/confirm-action";
+import { ConflictNotice, type ConflictRow } from "@/components/app/conflict-notice";
 import { useAction } from "@/hooks/use-action";
 import { formObject } from "@/lib/form";
 import { formatDate, parseRiyadhDate, toDateInput } from "@/lib/format";
-import { interpolate } from "@/lib/i18n";
 import { useI18n } from "@/lib/i18n/client";
 import { FormDialog, enumOptions, type FieldDef } from "@/components/app/form-dialog";
-import { saveDeliverableAction, saveMilestoneAction, saveRiskAction, setProjectStatusAction, updateProjectAction } from "../actions";
+import { saveDeliverableAction, saveMilestoneAction, saveRiskAction, setIndependentApprovalAction, setProjectStatusAction, updateProjectAction } from "../actions";
+import { moveKind, StatusImpactDialog } from "./status-dialog";
+import type { LifecycleTarget } from "@/server/modules/projects/lifecycle";
 
 const MS_STATUS = { PENDING: "PENDING", IN_PROGRESS: "IN_PROGRESS", BLOCKED: "BLOCKED", DONE: "DONE" } as const;
 
-/** Statuses that archive the project (reminders stop, approvals and launches are refused): confirm first. */
-const ARCHIVING = new Set(["COMPLETED", "CLOSED", "CANCELLED"]);
+export interface StatusTarget { to: LifecycleTarget; reason: string; preview: boolean }
 
-export function ProjectStatusMenu({ orgSlug, projectId, status }: { orgSlug: string; projectId: string; status: string }) {
+/**
+ * The project status menu (BUSINESS_RULES §1.2): only the moves the caller may make from here.
+ * Cancel, close, hold, complete, resume and reopen open the impact dialog; the rest are one click.
+ * AT_RISK is never offered (health derives it).
+ */
+export function ProjectStatusMenu({ orgSlug, projectId, code, status, version, targets }: { orgSlug: string; projectId: string; code: string; status: string; version: number; targets: StatusTarget[] }) {
   const { m } = useI18n();
-  const { run, pending } = useAction(setProjectStatusAction, { orgSlug });
-  const [confirmTo, setConfirmTo] = useState<string | null>(null);
+  const L = m.projects.lifecycle;
+  const quick = useAction(setProjectStatusAction, { orgSlug });
+  const [dialogTo, setDialogTo] = useState<LifecycleTarget | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const labels = m.enums.projectStatus as Record<string, string>;
+  if (!targets.length) return null;
+  const label = (to: LifecycleTarget) => {
+    const k = moveKind(status, to);
+    if (k === "resume") return L.to.resume;
+    if (k === "reopen") return L.to.reopen;
+    if (status === "DRAFT" && to === "PLANNING") return L.to.commit;
+    return L.to[to];
+  };
   return (
     <>
       <DropdownMenu>
-        <DropdownMenuTrigger asChild><Button ref={triggerRef} variant="ghost" size="sm" disabled={pending}>{m.projects.changeStatus} <MoreHorizontal /></Button></DropdownMenuTrigger>
+        <DropdownMenuTrigger asChild><Button ref={triggerRef} variant="ghost" size="sm" disabled={quick.pending} data-testid="project-status-menu">{m.projects.changeStatus} <MoreHorizontal /></Button></DropdownMenuTrigger>
         <DropdownMenuContent align="end">
           <DropdownMenuLabel className="text-xs">{m.projects.changeStatus}</DropdownMenuLabel>
-          {Object.entries(labels).filter(([k]) => k !== status).map(([k, v]) => (
-            <DropdownMenuItem key={k} onSelect={() => (ARCHIVING.has(k) ? setConfirmTo(k) : run({ id: projectId, status: k as never }))}>{v}</DropdownMenuItem>
+          {targets.map((t) => (
+            <DropdownMenuItem key={t.to} className={t.to === "CANCELLED" ? "text-danger" : undefined} onSelect={() => (t.preview ? setDialogTo(t.to) : quick.run({ id: projectId, status: t.to, version }))} data-testid={`project-status-${t.to}`}>
+              {label(t.to)}
+            </DropdownMenuItem>
           ))}
         </DropdownMenuContent>
       </DropdownMenu>
-      <ConfirmAction
-        open={confirmTo !== null}
-        onOpenChange={(o) => !o && setConfirmTo(null)}
-        returnFocusTo={() => triggerRef.current}
-        title={interpolate(m.common.confirmDialog.projectStatusTitle, { status: confirmTo ? labels[confirmTo] : "" })}
-        description={m.common.confirmDialog.projectArchiveBody}
-        confirmLabel={confirmTo ? labels[confirmTo] : ""}
-        destructive={confirmTo === "CANCELLED"}
-        onConfirm={() => run({ id: projectId, status: confirmTo as never })}
-        testId="project-status-dialog"
-      />
+      {dialogTo && <StatusImpactDialog key={dialogTo} orgSlug={orgSlug} projectId={projectId} code={code} from={status} target={dialogTo} onOpenChange={(o) => { if (!o) { setDialogTo(null); triggerRef.current?.focus(); } }} />}
     </>
   );
 }
 
-interface Milestone { id: string; title: string; dueDate: string | Date | null; status: string; clientVisible: boolean; workstreamId: string | null }
+/**
+ * The project's independent-approval flag (§4.2, AP rule 6): setting it needs project.delete;
+ * clearing it needs the same plus a reason.
+ */
+export function IndependentApprovalControl({ orgSlug, projectId, value, version, canSet }: { orgSlug: string; projectId: string; value: boolean; version: number; canSet: boolean }) {
+  const { m } = useI18n();
+  const I = m.projects.lifecycle.independent;
+  const set = useAction(setIndependentApprovalAction, { orgSlug });
+  return (
+    <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
+      <span>{value ? I.on : I.off}</span>
+      {canSet && (
+        <ConfirmAction
+          trigger={<Button variant="link" size="xs" className="h-auto p-0 text-xs" data-testid="independent-approval-toggle">{value ? I.clear : I.set}</Button>}
+          title={value ? I.clear : I.set}
+          description={I.setDesc}
+          confirmLabel={value ? I.clear : I.set}
+          field={value ? { type: "textarea", label: I.clearReason, required: true } : undefined}
+          onConfirm={(reason) => set.run({ projectId, value: !value, version, reason: reason || null })}
+        />
+      )}
+    </span>
+  );
+}
+
+const sameValue = (a: unknown, b: unknown) => {
+  const n = (v: unknown) => (v === undefined || v === "" ? null : v instanceof Date ? v.toISOString() : typeof v === "string" && /^\d{4}-\d{2}-\d{2}T/.test(v) ? new Date(v).toISOString() : v);
+  return JSON.stringify(n(a)) === JSON.stringify(n(b));
+};
+
+/**
+ * CE rule 4 for the inline milestone / deliverable / risk dialogs: who saved first, theirs vs yours
+ * for the fields that differ, "Save my version" (only the fields the user changed, on top of the
+ * stored record, at its version) and "Discard mine" (load the stored record).
+ */
+function PanelConflict<T extends { version?: number }>({ save, loaded, labels, show, onDiscard }: {
+  save: { conflict: import("@/server/errors").ConflictDetails | null; conflictInput: unknown; pending: boolean; run: (i: never) => unknown; clearConflict: () => void };
+  loaded: T;
+  labels: Record<string, string>;
+  show: (field: string, v: unknown) => React.ReactNode;
+  onDiscard: (stored: Record<string, unknown>) => void;
+}) {
+  const c = save.conflict;
+  if (!c) return null;
+  const mine = (save.conflictInput ?? {}) as Record<string, unknown>;
+  const base = loaded as unknown as Record<string, unknown>;
+  const rows: ConflictRow[] = c.changedFields.filter((f) => f in labels).map((f) => ({ name: f, label: labels[f], theirs: show(f, c.current[f]), yours: show(f, mine[f]) }));
+  const saveMine = () => {
+    const changedByMe = Object.keys(mine).filter((k) => k in labels && !sameValue(mine[k], base[k]));
+    const payload: Record<string, unknown> = { ...mine };
+    for (const k of Object.keys(labels)) if (!changedByMe.includes(k) && k in c.current) payload[k] = c.current[k];
+    save.run({ ...payload, version: c.current.version } as never);
+  };
+  return <ConflictNotice conflict={c} rows={rows} pending={save.pending} onSaveMine={saveMine} onDiscardMine={() => { save.clearConflict(); onDiscard(c.current); }} />;
+}
+
+interface Milestone { id: string; title: string; dueDate: string | Date | null; status: string; clientVisible: boolean; workstreamId: string | null; version: number }
 
 export function MilestonesPanel({ orgSlug, projectId, milestones, canEdit }: { orgSlug: string; projectId: string; milestones: Milestone[]; canEdit: boolean }) {
   const { m, fmt } = useI18n();
   const [edit, setEdit] = useState<Milestone | "new" | null>(null);
-  const save = useAction(saveMilestoneAction, { orgSlug, onSuccess: () => setEdit(null) });
+  const save = useAction(saveMilestoneAction, { orgSlug, conflictUi: "inline", onSuccess: () => setEdit(null) });
   const cur = edit && edit !== "new" ? edit : null;
   const statusLabel = (s: string) => ({ PENDING: m.enums.approvalStatus.PENDING, IN_PROGRESS: m.enums.statusCategory.ACTIVE, BLOCKED: m.enums.statusCategory.BLOCKED, DONE: m.enums.statusCategory.DONE })[s] ?? s;
   return (
@@ -85,10 +147,11 @@ export function MilestonesPanel({ orgSlug, projectId, milestones, canEdit }: { o
           })}
         </ol>
       )}
-      <Dialog open={!!edit} onOpenChange={(o) => !o && setEdit(null)}>
+      <Dialog open={!!edit} onOpenChange={(o) => { if (!o) { setEdit(null); save.clearConflict(); } }}>
         <DialogContent>
           <DialogHeader><DialogTitle>{cur?.title ?? m.projects.newMilestone}</DialogTitle></DialogHeader>
-          <form className="grid gap-3" onSubmit={(e) => { e.preventDefault(); const o = formObject(e.currentTarget); save.run({ id: cur?.id, projectId, title: String(o.title), dueDate: parseRiyadhDate(o.dueDate as string), status: o.status as never, clientVisible: !!o.clientVisible, workstreamId: cur?.workstreamId ?? null }); }}>
+          {cur && <PanelConflict save={save} loaded={cur} labels={{ title: m.common.title, dueDate: m.common.dueDate, status: m.common.status, clientVisible: m.common.clientVisible }} show={(f, v) => (f === "dueDate" ? formatDate(v as string | null, fmt) : f === "status" ? statusLabel(String(v)) : f === "clientVisible" ? (v ? "✓" : "—") : String(v ?? "—"))} onDiscard={(s) => setEdit({ ...cur, ...(s as Partial<Milestone>) })} />}
+          <form key={`${cur?.id}-${cur?.version}`} className="grid gap-3" onSubmit={(e) => { e.preventDefault(); const o = formObject(e.currentTarget); save.run({ id: cur?.id, version: cur?.version, projectId, title: String(o.title), dueDate: parseRiyadhDate(o.dueDate as string), status: o.status as never, clientVisible: !!o.clientVisible, workstreamId: cur?.workstreamId ?? null }); }}>
             <Field label={m.common.title} required><Input name="title" defaultValue={cur?.title} required /></Field>
             <div className="grid grid-cols-2 gap-3">
               <Field label={m.common.dueDate}><Input type="date" name="dueDate" defaultValue={toDateInput(cur?.dueDate)} dir="ltr" /></Field>
@@ -103,12 +166,12 @@ export function MilestonesPanel({ orgSlug, projectId, milestones, canEdit }: { o
   );
 }
 
-interface Deliverable { id: string; title: string; description: string | null; status: string; dueDate: string | Date | null; clientVisible: boolean; requiresApproval: boolean; workstreamId: string | null }
+interface Deliverable { id: string; title: string; description: string | null; status: string; dueDate: string | Date | null; clientVisible: boolean; requiresApproval: boolean; workstreamId: string | null; version: number }
 
 export function DeliverablesPanel({ orgSlug, projectId, deliverables, canEdit }: { orgSlug: string; projectId: string; deliverables: Deliverable[]; canEdit: boolean }) {
   const { m, fmt } = useI18n();
   const [edit, setEdit] = useState<Deliverable | "new" | null>(null);
-  const save = useAction(saveDeliverableAction, { orgSlug, onSuccess: () => setEdit(null) });
+  const save = useAction(saveDeliverableAction, { orgSlug, conflictUi: "inline", onSuccess: () => setEdit(null) });
   const cur = edit && edit !== "new" ? edit : null;
   const labels: Record<string, string> = { PENDING: m.enums.approvalStatus.PENDING, IN_PROGRESS: m.enums.statusCategory.ACTIVE, SUBMITTED: m.enums.revisionStatus.SUBMITTED, APPROVED: m.enums.approvalStatus.APPROVED, REJECTED: m.enums.approvalStatus.REJECTED };
   return (
@@ -125,10 +188,11 @@ export function DeliverablesPanel({ orgSlug, projectId, deliverables, canEdit }:
           ))}
         </ul>
       )}
-      <Dialog open={!!edit} onOpenChange={(o) => !o && setEdit(null)}>
+      <Dialog open={!!edit} onOpenChange={(o) => { if (!o) { setEdit(null); save.clearConflict(); } }}>
         <DialogContent>
           <DialogHeader><DialogTitle>{cur?.title ?? m.projects.newDeliverable}</DialogTitle></DialogHeader>
-          <form className="grid gap-3" onSubmit={(e) => { e.preventDefault(); const o = formObject(e.currentTarget); save.run({ id: cur?.id, projectId, title: String(o.title), description: (o.description as string) ?? null, dueDate: parseRiyadhDate(o.dueDate as string), status: o.status as never, clientVisible: !!o.clientVisible, requiresApproval: !!o.requiresApproval, workstreamId: cur?.workstreamId ?? null }); }}>
+          {cur && <PanelConflict save={save} loaded={cur} labels={{ title: m.common.title, description: m.common.description, dueDate: m.common.dueDate, status: m.common.status, clientVisible: m.common.clientVisible, requiresApproval: m.projects.requiresApproval }} show={(f, v) => (f === "dueDate" ? formatDate(v as string | null, fmt) : f === "status" ? labels[String(v)] ?? String(v) : typeof v === "boolean" ? (v ? "✓" : "—") : String(v ?? "—"))} onDiscard={(s) => setEdit({ ...cur, ...(s as Partial<Deliverable>) })} />}
+          <form key={`${cur?.id}-${cur?.version}`} className="grid gap-3" onSubmit={(e) => { e.preventDefault(); const o = formObject(e.currentTarget); save.run({ id: cur?.id, version: cur?.version, projectId, title: String(o.title), description: (o.description as string) ?? null, dueDate: parseRiyadhDate(o.dueDate as string), status: o.status as never, clientVisible: !!o.clientVisible, requiresApproval: !!o.requiresApproval, workstreamId: cur?.workstreamId ?? null }); }}>
             <Field label={m.common.title} required><Input name="title" defaultValue={cur?.title} required /></Field>
             <Field label={m.common.description}><Textarea name="description" defaultValue={cur?.description ?? ""} rows={2} /></Field>
             <div className="grid grid-cols-2 gap-3">
@@ -145,12 +209,12 @@ export function DeliverablesPanel({ orgSlug, projectId, deliverables, canEdit }:
   );
 }
 
-interface Risk { id: string; title: string; description: string | null; likelihood: number; impact: number; status: string; ownerId: string | null; mitigation: string | null }
+interface Risk { id: string; title: string; description: string | null; likelihood: number; impact: number; status: string; ownerId: string | null; mitigation: string | null; version: number }
 
 export function RisksPanel({ orgSlug, projectId, risks, canEdit, members }: { orgSlug: string; projectId: string; risks: Risk[]; canEdit: boolean; members: { id: string; name: string }[] }) {
   const { m } = useI18n();
   const [edit, setEdit] = useState<Risk | "new" | null>(null);
-  const save = useAction(saveRiskAction, { orgSlug, onSuccess: () => setEdit(null) });
+  const save = useAction(saveRiskAction, { orgSlug, conflictUi: "inline", onSuccess: () => setEdit(null) });
   const cur = edit && edit !== "new" ? edit : null;
   const statusLabels: Record<string, string> = { OPEN: m.enums.incidentStatus.OPEN, MITIGATING: m.enums.incidentStatus.IN_PROGRESS, CLOSED: m.enums.incidentStatus.CLOSED };
   return (
@@ -171,10 +235,11 @@ export function RisksPanel({ orgSlug, projectId, risks, canEdit, members }: { or
           })}
         </ul>
       )}
-      <Dialog open={!!edit} onOpenChange={(o) => !o && setEdit(null)}>
+      <Dialog open={!!edit} onOpenChange={(o) => { if (!o) { setEdit(null); save.clearConflict(); } }}>
         <DialogContent>
           <DialogHeader><DialogTitle>{cur?.title ?? m.projects.newRisk}</DialogTitle></DialogHeader>
-          <form className="grid gap-3" onSubmit={(e) => { e.preventDefault(); const o = formObject(e.currentTarget); save.run({ ...o, id: cur?.id, projectId } as never); }}>
+          {cur && <PanelConflict save={save} loaded={cur} labels={{ title: m.common.title, description: m.common.description, likelihood: m.projects.likelihood, impact: m.projects.impact, status: m.common.status, ownerId: m.common.owner, mitigation: m.projects.mitigation }} show={(f, v) => (f === "status" ? statusLabels[String(v)] ?? String(v) : f === "ownerId" ? members.find((x) => x.id === v)?.name ?? m.common.unassigned : String(v ?? "—"))} onDiscard={(s) => setEdit({ ...cur, ...(s as Partial<Risk>) })} />}
+          <form key={`${cur?.id}-${cur?.version}`} className="grid gap-3" onSubmit={(e) => { e.preventDefault(); const o = formObject(e.currentTarget); save.run({ ...o, ownerId: o.ownerId || null, id: cur?.id, version: cur?.version, projectId } as never); }}>
             <Field label={m.common.title} required><Input name="title" defaultValue={cur?.title} required /></Field>
             <Field label={m.common.description}><Textarea name="description" defaultValue={cur?.description ?? ""} rows={2} /></Field>
             <div className="grid grid-cols-3 gap-3">
@@ -192,13 +257,13 @@ export function RisksPanel({ orgSlug, projectId, risks, canEdit, members }: { or
   );
 }
 
-interface EditableProject { id: string; name: string; nameEn: string | null; description: string | null; clientId: string | null; type: string; priority: string; contractRef: string | null; poReference: string | null; budgetAmount: string | number | null; currency: string; startDate: string | Date | null; deadline: string | Date | null; eventStartAt: string | Date | null; eventEndAt: string | Date | null; clientPortal: boolean; venueIds: string[] }
+interface EditableProject { id: string; version: number; name: string; nameEn: string | null; description: string | null; clientId: string | null; type: string; priority: string; contractRef: string | null; poReference: string | null; budgetAmount: string | number | null; currency: string; startDate: string | Date | null; deadline: string | Date | null; eventStartAt: string | Date | null; eventEndAt: string | Date | null; clientPortal: boolean; venueIds: string[] }
 
 /** Edits project details; venues and manager are kept as they are. */
 export function EditProjectButton({ orgSlug, project, clients, canFinance }: { orgSlug: string; project: EditableProject; clients: { id: string; name: string }[]; canFinance: boolean }) {
   const { m } = useI18n();
   const [open, setOpen] = useState(false);
-  const save = useAction(updateProjectAction, { orgSlug, onSuccess: () => setOpen(false) });
+  const save = useAction(updateProjectAction, { orgSlug, conflictUi: "inline", onSuccess: () => setOpen(false) });
   const fields: FieldDef[] = [
     { name: "name", label: m.common.nameAr, required: true, wide: true },
     { name: "nameEn", label: m.common.nameEn, ltr: true, wide: true },
@@ -217,7 +282,7 @@ export function EditProjectButton({ orgSlug, project, clients, canFinance }: { o
   return (
     <>
       <Button variant="ghost" size="sm" onClick={() => setOpen(true)} data-testid="edit-project">{m.common.edit}</Button>
-      <FormDialog open={open} onOpenChange={setOpen} title={project.name} fields={fields} values={{ ...project, startDate: project.startDate && new Date(project.startDate), deadline: project.deadline && new Date(project.deadline), eventStartAt: project.eventStartAt && new Date(project.eventStartAt), eventEndAt: project.eventEndAt && new Date(project.eventEndAt) }} extra={{ id: project.id, type: project.type, currency: project.currency, venueIds: project.venueIds }} onSubmit={(v) => save.run(v as never)} pending={save.pending} errorFor={save.errorFor} testId="form-project" />
+      <FormDialog open={open} onOpenChange={setOpen} title={project.name} fields={fields} values={{ ...project, startDate: project.startDate && new Date(project.startDate), deadline: project.deadline && new Date(project.deadline), eventStartAt: project.eventStartAt && new Date(project.eventStartAt), eventEndAt: project.eventEndAt && new Date(project.eventEndAt) }} extra={{ id: project.id, version: project.version, type: project.type, currency: project.currency, venueIds: project.venueIds }} onSubmit={(v) => save.run(v as never)} pending={save.pending} errorFor={save.errorFor} conflict={save.conflict} onConflictResolved={save.clearConflict} testId="form-project" />
     </>
   );
 }

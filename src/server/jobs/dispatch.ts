@@ -33,6 +33,9 @@ export async function kickOutbox(orgId: string) {
       // no worker in inline mode: requests also release scheduled campaigns that have become due
       const { dispatchDueCampaigns } = await import("@/server/modules/digital/sender");
       await dispatchDueCampaigns(orgId);
+      // e-mail written by this request's notices goes out after commit (§3.1 rule 2)
+      const { sendDueDeliveries } = await import("@/server/modules/notifications/delivery");
+      await sendDueDeliveries(orgId, { limit: 50 });
       return;
     }
     const bucket = Math.floor(Date.now() / 1000);

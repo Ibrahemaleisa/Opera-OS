@@ -29,6 +29,21 @@ async function PortalHome({ params }: { params: Promise<{ org: string }> }) {
           ))}
         </div>
       )}
+      {data.pastProjects.length > 0 && (
+        <section className="grid gap-2" data-testid="portal-past-projects">
+          <div><h2 className="text-sm font-medium">{t.pastProjects}</h2><p className="text-xs text-muted-foreground">{t.pastHint}</p></div>
+          <ul className="divide-y rounded-xl border bg-card">
+            {data.pastProjects.map((p) => (
+              <li key={p.id}>
+                <Link href={`/portal/${org}/projects/${p.id}`} className="flex items-center justify-between gap-2 px-4 py-3 text-sm hover:bg-muted/40">
+                  <span><span className="font-medium">{p.name}</span> <span className="ltr-nums text-xs text-muted-foreground">{p.code}</span></span>
+                  <StatusBadge status={p.status} label={m.enums.projectStatus[p.status]} />
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
     </div>
   );
 }

@@ -41,9 +41,11 @@ describe("arch-audit: approval routing", () => {
     expect((await listApprovalsAwaitingDecision(pm1.ctx)).map((x) => x.id)).not.toContain(ap.id);
     expect((await listApprovalsAwaitingDecision(emp.ctx)).map((x) => x.id)).not.toContain(ap.id);
     // archived project: no longer awaiting anyone, and the decision is refused
-    await setProjectStatus(a.ctx, project.id, "CANCELLED");
+    // M2 (§1.2, §6): cancelling carries the loaded version and a reason
+    await setProjectStatus(a.ctx, project.id, "CANCELLED", { version: project.version, reason: "Cancelled for the routing probe" });
     expect((await listApprovalsAwaitingDecision(pm2.ctx)).map((x) => x.id)).not.toContain(ap.id);
-    await expect(decideApproval(pm2.ctx, { approvalId: ap.id, decision: "APPROVED" })).rejects.toThrow("errors.projectInactive");
+    // M2 (LC rule 5): an archived project refuses non-financial decisions; the cascade also cancelled the request
+    await expect(decideApproval(pm2.ctx, { approvalId: ap.id, decision: "APPROVED" })).rejects.toThrow("errors.projectArchived");
   });
 
   it("a request nobody else could decide is refused with a clear error", async () => {

@@ -1,10 +1,12 @@
 "use server";
 
 import { cookies } from "next/headers";
+import { z } from "zod";
 import { LOCALE_COOKIE } from "@/lib/i18n";
 import { changePassword, passwordSchema, profileSchema, updateProfile } from "@/server/auth/account";
 import { toActionError, zodFieldErrors, type ActionResult } from "@/server/action";
-import { getSession } from "@/server/request";
+import { getSession, requestMeta } from "@/server/request";
+import { beginMfaEnrolment, confirmMfaEnrolment, disableMfa, regenerateRecoveryCodes } from "@/server/modules/auth/mfa";
 
 async function run<T>(fn: (userId: string, sessionId: string) => Promise<T>): Promise<ActionResult<T>> {
   try {
@@ -32,4 +34,35 @@ export async function changePasswordAction(input: unknown): Promise<ActionResult
   const parsed = passwordSchema.safeParse(input);
   if (!parsed.success) return { ok: false, code: "VALIDATION", error: "errors.validation", fieldErrors: zodFieldErrors(parsed.error) };
   return run((userId, sessionId) => changePassword(userId, sessionId, parsed.data));
+}
+
+// ── Two-step verification (BUSINESS_RULES §5.2) ──────────────────────────────
+
+const credentials = z.object({ password: z.string().min(1).max(200), code: z.string().trim().min(6).max(10) });
+
+export async function beginMfaAction(input: { password: string }): Promise<ActionResult<{ secret: string; qr: string }>> {
+  const parsed = z.object({ password: z.string().min(1).max(200) }).safeParse(input);
+  if (!parsed.success) return { ok: false, code: "VALIDATION", error: "errors.validation", fieldErrors: zodFieldErrors(parsed.error) };
+  return run(async (userId) => {
+    const r = await beginMfaEnrolment(userId, parsed.data.password);
+    return { secret: r.secret, qr: r.qr };
+  });
+}
+
+export async function confirmMfaAction(input: { code: string }): Promise<ActionResult<{ recoveryCodes: string[] }>> {
+  const parsed = z.object({ code: z.string().trim().min(6).max(10) }).safeParse(input);
+  if (!parsed.success) return { ok: false, code: "VALIDATION", error: "auth.mfa.codeMismatch" };
+  return run(async (userId) => confirmMfaEnrolment(userId, parsed.data.code, await requestMeta()));
+}
+
+export async function regenerateCodesAction(input: { password: string; code: string }): Promise<ActionResult<{ recoveryCodes: string[] }>> {
+  const parsed = credentials.safeParse(input);
+  if (!parsed.success) return { ok: false, code: "VALIDATION", error: "errors.validation", fieldErrors: zodFieldErrors(parsed.error) };
+  return run(async (userId) => regenerateRecoveryCodes(userId, parsed.data, await requestMeta()));
+}
+
+export async function disableMfaAction(input: { password: string; code: string }): Promise<ActionResult<null>> {
+  const parsed = credentials.safeParse(input);
+  if (!parsed.success) return { ok: false, code: "VALIDATION", error: "errors.validation", fieldErrors: zodFieldErrors(parsed.error) };
+  return run(async (userId) => disableMfa(userId, parsed.data, await requestMeta()));
 }

@@ -1,7 +1,7 @@
 import { unstable_rethrow } from "next/navigation";
 import { z } from "zod";
 import type { ServiceContext } from "@/server/authz/context";
-import { AppError } from "@/server/errors";
+import { AppError, ConflictError, type ConflictDetails } from "@/server/errors";
 import { requireActionContext } from "@/server/request";
 import { kickOutboxAfterResponse } from "@/server/jobs/dispatch";
 import { zodI18nError } from "@/lib/zod-i18n";
@@ -11,10 +11,11 @@ z.config({ customError: zodI18nError });
 
 export type ActionResult<T> =
   | { ok: true; data: T }
-  | { ok: false; code: string; error: string; fieldErrors?: Record<string, string[]> };
+  | { ok: false; code: string; error: string; fieldErrors?: Record<string, string[]>; conflict?: ConflictDetails };
 
 export function toActionError(err: unknown): ActionResult<never> {
   unstable_rethrow(err);
+  if (err instanceof ConflictError && err.details) return { ok: false, code: err.code, error: err.message, conflict: err.details };
   if (err instanceof AppError) return { ok: false, code: err.code, error: err.message, fieldErrors: err.fieldErrors };
   if (err instanceof z.ZodError) return { ok: false, code: "VALIDATION", error: "errors.validation", fieldErrors: zodFieldErrors(err) };
   const prismaCode = (err as { code?: string })?.code;

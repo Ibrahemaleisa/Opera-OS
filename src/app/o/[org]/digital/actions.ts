@@ -2,6 +2,7 @@
 
 import { z } from "zod";
 import { orgAction } from "@/server/action";
+import { versionField } from "@/server/concurrency";
 import * as dg from "@/server/modules/digital/service";
 import { applyProviderEvent } from "@/server/modules/digital/sender";
 import { assertCan } from "@/server/authz/policy";
@@ -12,9 +13,12 @@ import { NotFoundError } from "@/server/errors";
 export const saveDigitalCampaignAction = orgAction(dg.digitalCampaignSchema, (ctx, i) => dg.saveDigitalCampaign(ctx, i).then((c) => ({ id: c.id, approvalInvalidated: "approvalInvalidated" in c ? c.approvalInvalidated : false })));
 export const addAudienceAction = orgAction(z.object({ campaignId: z.string(), recipientIds: z.array(z.string()).min(1).max(5000) }), dg.addAudience);
 export const removeAudienceAction = orgAction(z.object({ campaignId: z.string(), invitationIds: z.array(z.string()).min(1) }), dg.removeAudience);
-export const requestCampaignApprovalAction = orgAction(z.object({ campaignId: z.string() }), (ctx, i) => dg.requestCampaignApproval(ctx, i.campaignId).then(() => null));
-export const launchCampaignAction = orgAction(z.object({ campaignId: z.string() }), (ctx, i) => dg.launchCampaign(ctx, i.campaignId));
-export const cancelCampaignAction = orgAction(z.object({ campaignId: z.string() }), (ctx, i) => dg.cancelCampaign(ctx, i.campaignId));
+export const requestCampaignApprovalAction = orgAction(z.object({ campaignId: z.string(), version: versionField }), (ctx, i) => dg.requestCampaignApproval(ctx, i.campaignId, i.version).then(() => null));
+export const launchCampaignAction = orgAction(z.object({ campaignId: z.string(), version: versionField }), (ctx, i) => dg.launchCampaign(ctx, i.campaignId, i.version));
+export const cancelCampaignAction = orgAction(z.object({ campaignId: z.string(), version: versionField }), (ctx, i) => dg.cancelCampaign(ctx, i.campaignId, i.version));
+export const resumeCampaignSendAction = orgAction(z.object({ campaignId: z.string() }), (ctx, i) => dg.resumeCampaignSend(ctx, i.campaignId));
+export const cancelRemainingSendsAction = orgAction(z.object({ campaignId: z.string(), version: versionField }), (ctx, i) => dg.cancelRemainingSends(ctx, i.campaignId, i.version));
+export const resendMessageAction = orgAction(z.object({ campaignId: z.string(), invitationId: z.string() }), (ctx, i) => dg.resendMessage(ctx, i));
 export const checkInAction = orgAction(z.object({ campaignId: z.string(), code: z.string().trim().min(4).max(40) }), dg.checkIn);
 export const setProviderModeAction = orgAction(z.object({ channel: z.enum(["EMAIL", "SMS", "WHATSAPP"]), mode: z.enum(["SIMULATION", "LIVE"]), senderId: z.string().max(40).nullish() }), dg.setProviderMode);
 

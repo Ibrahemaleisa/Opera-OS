@@ -11,6 +11,7 @@ import { StatusBadge } from "@/components/app/status-badge";
 import { useAction } from "@/hooks/use-action";
 import { formatMoney, formatPercent } from "@/lib/format";
 import { useI18n } from "@/lib/i18n/client";
+import { interpolate } from "@/lib/i18n";
 import type { portalProject } from "@/server/modules/portal/service";
 import { decideApprovalAction } from "@/app/o/[org]/projects/actions";
 import { createChangeRequestAction } from "../../actions";
@@ -33,8 +34,9 @@ export function PortalProject({ orgSlug, data }: { orgSlug: string; data: D }) {
       <div className="flex flex-wrap items-center gap-2">
         <h1 className="text-xl font-medium">{p.name}</h1>
         <StatusBadge status={p.status} label={m.enums.projectStatus[p.status]} />
-        <Button size="sm" variant="outline" className="ms-auto" onClick={() => setOpen(true)} data-testid="new-change-request"><MessageSquarePlus /> {t.newRequest}</Button>
+        {!data.readOnly && <Button size="sm" variant="outline" className="ms-auto" onClick={() => setOpen(true)} data-testid="new-change-request"><MessageSquarePlus /> {t.newRequest}</Button>}
       </div>
+      {data.readOnly && <p role="status" className="rounded-lg border bg-muted/40 px-4 py-2.5 text-sm" data-testid="portal-read-only">{interpolate(t.readOnly, { status: m.enums.projectStatus[p.status] })}</p>}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         <Stat label={t.progress} value={formatPercent(data.progress.ratio, fmt)} hint={`${data.progress.done}/${data.progress.total} · ${t.progressHint}`} />
         <Stat label={t.pending} value={pendingMine.length} tone={pendingMine.length ? "warning" : "default"} />

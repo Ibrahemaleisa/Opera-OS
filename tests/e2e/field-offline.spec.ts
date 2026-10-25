@@ -3,14 +3,14 @@ import { expect, test, type Page } from "@playwright/test";
 /**
  * Driver PWA offline path: one online visit caches the shell → the app opens again without a
  * network → a status update made offline is queued on the device → it replays when the
- * connection returns. Runs against the seeded demo agency (agent1@operra.demo).
+ * connection returns. Runs against the seeded demo agency (agent1@opera.demo).
  *
  * The delivery used is cycled RESCHEDULED/ASSIGNED → OUT_FOR_DELIVERY (offline) → RESCHEDULED,
  * so repeated runs don't consume the demo data.
  */
 const ORG = process.env.E2E_FIELD_ORG ?? "demo";
-const EMAIL = process.env.E2E_FIELD_EMAIL ?? "agent1@operra.demo";
-const PASSWORD = process.env.E2E_FIELD_PASSWORD ?? process.env.SEED_PASSWORD ?? "Operra-Demo-2026";
+const EMAIL = process.env.E2E_FIELD_EMAIL ?? "agent1@opera.demo";
+const PASSWORD = process.env.E2E_FIELD_PASSWORD ?? process.env.SEED_PASSWORD ?? "Opera-Demo-2026";
 
 test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
 
@@ -41,7 +41,7 @@ test("field PWA: opens offline after one visit, queues an offline update and rep
 
   // 1. one online visit: the page hands its shell and assets to the service worker
   await expect(page.locator("[data-precached='1']")).toBeAttached({ timeout: 60_000 });
-  const cached = await page.evaluate(async () => (await (await caches.open("operra-field-v3")).keys()).map((r) => new URL(r.url).pathname));
+  const cached = await page.evaluate(async () => (await (await caches.open("opera-field-v4")).keys()).map((r) => new URL(r.url).pathname));
   expect(cached).toContain(`/field/${ORG}`);
 
   // 2. reload with no network: the shell comes from the cache, not the browser's offline page

@@ -2,12 +2,12 @@ import type { Prisma, Project } from "@/generated/prisma/client";
 import { createDefaultReadiness } from "@/server/modules/events/service";
 import { createId } from "@/lib/id";
 import type { ServiceContext } from "@/server/authz/context";
-import { assertCan, projectScope } from "@/server/authz/policy";
+import { assertCan, assertNotArchived, projectScope } from "@/server/authz/policy";
 import { withTenant, type Tx } from "@/server/db/tenant";
 import { ForbiddenError, NotFoundError, ValidationError } from "@/server/errors";
 import { audit } from "@/server/modules/audit/audit";
 import { reserveTaskNumbers } from "@/server/modules/tasks/numbering";
-import { DEFAULT_STATUSES, definitionStats, validateDefinition, type TemplateDefinition } from "./definition";
+import { DEFAULT_STATUSES, definitionStats, validateDefinition, withCancelled, type TemplateDefinition } from "./definition";
 
 const DAY = 86400_000;
 
@@ -166,7 +166,7 @@ export async function applyTemplateVersion(tx: Tx, ctx: ServiceContext, project:
     const resolved = preview.workstreams[wi].resolvedKey;
     const wsId = createId();
     wsIdByKey.set(ws.key, wsId);
-    const statuses = ws.statuses ?? DEFAULT_STATUSES;
+    const statuses = withCancelled(ws.statuses ?? DEFAULT_STATUSES);
     wsRows.push({
       id: wsId,
       organizationId: ctx.orgId,
@@ -312,7 +312,10 @@ export async function applyTemplateVersion(tx: Tx, ctx: ServiceContext, project:
 export async function applyTemplateToProject(ctx: ServiceContext, projectId: string, templateId: string) {
   return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
     const scope = await projectScope(tx, ctx, projectId);
+    assertNotArchived(scope);
     if (!scope.manage) throw new ForbiddenError();
+    // applying templates is refused on hold and once completed (BUSINESS_RULES §1.6)
+    if (scope.project.status === "ON_HOLD" || scope.project.status === "COMPLETED") throw new ValidationError("errors.projectInactive");
     const latest = await tx.templateVersion.findFirst({ where: { templateId }, orderBy: { version: "desc" } });
     if (!latest) throw new NotFoundError();
     return applyTemplateVersion(tx, ctx, scope.project, latest.id);

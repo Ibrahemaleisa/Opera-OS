@@ -1,6 +1,8 @@
 import { z } from "zod";
 import type { ServiceContext } from "@/server/authz/context";
-import { assertCan, can, projectScope, projectVisibilityWhere, type ProjectScope } from "@/server/authz/policy";
+import type { Budget } from "@/generated/prisma/client";
+import { assertCan, assertNotArchived, can, computeProjectScope, projectScope, projectVisibilityWhere, type ProjectScope } from "@/server/authz/policy";
+import { casUpdate } from "@/server/concurrency";
 import { withTenant, type Tx } from "@/server/db/tenant";
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/server/errors";
 import { audit } from "@/server/modules/audit/audit";
@@ -13,7 +15,7 @@ export { BUDGET_CATEGORIES };
 const money = z.coerce.number().min(0).max(1e11);
 const optText = (max = 500) => z.string().trim().max(max).nullish();
 
-export const budgetSchema = z.object({ projectId: z.string(), category: z.enum(BUDGET_CATEGORIES), planned: money, notes: optText(1000) });
+export const budgetSchema = z.object({ projectId: z.string(), category: z.enum(BUDGET_CATEGORIES), planned: money, notes: optText(1000), version: z.number().int().optional() });
 export const poSchema = z.object({ projectId: z.string(), vendorId: z.string(), title: z.string().trim().min(2).max(200), budgetCategory: z.enum(BUDGET_CATEGORIES), amount: money.refine((n) => n > 0, "finance.amountPositive"), vatAmount: money.default(0) });
 export const expenseSchema = z.object({ projectId: z.string(), budgetCategory: z.enum(BUDGET_CATEGORIES), vendorId: z.string().nullish(), purchaseOrderId: z.string().nullish(), description: z.string().trim().min(3).max(500), amount: money.refine((n) => n > 0, "finance.amountPositive"), vatAmount: money.default(0), incurredAt: z.coerce.date() });
 export const changeOrderSchema = z.object({ projectId: z.string(), title: z.string().trim().min(3).max(200), description: optText(4000), amountDelta: z.coerce.number().min(-1e11).max(1e11), costDelta: z.coerce.number().min(-1e11).max(1e11).default(0), clientVisible: z.boolean().default(true) });
@@ -29,9 +31,16 @@ async function financeScope(tx: Tx, ctx: ServiceContext, projectId: string): Pro
   return s;
 }
 
-async function managedFinance(tx: Tx, ctx: ServiceContext, projectId: string) {
+/**
+ * Finance management on a project. In archived projects only the financial tail stays open
+ * (BUSINESS_RULES §1.5: PO transitions, expense decisions and payment, change-order decisions):
+ * pass `tail: true` from those paths; everything else is refused with errors.projectArchived.
+ */
+async function managedFinance(tx: Tx, ctx: ServiceContext, projectId: string, opts: { tail?: boolean } = {}) {
   assertCan(ctx, "finance.manage");
-  return financeScope(tx, ctx, projectId);
+  const s = await financeScope(tx, ctx, projectId);
+  if (!opts.tail) assertNotArchived(s);
+  return s;
 }
 
 async function threshold(tx: Tx, orgId: string) {
@@ -52,13 +61,14 @@ export async function getProjectFinance(ctx: ServiceContext, projectId: string) 
   return withTenant(scoped(ctx), async (tx) => {
     const scope = await financeScope(tx, ctx, projectId);
     const [summary] = await computeSummary(tx, [projectId]);
-    const [pos, expenses, changeOrders, vendors, approvals, limit] = await Promise.all([
+    const [pos, expenses, changeOrders, vendors, approvals, limit, budgets] = await Promise.all([
       tx.purchaseOrder.findMany({ where: { projectId }, orderBy: { createdAt: "desc" } }),
       tx.expense.findMany({ where: { projectId }, orderBy: { incurredAt: "desc" } }),
       tx.changeOrder.findMany({ where: { projectId }, orderBy: { createdAt: "desc" } }),
       tx.vendor.findMany({ select: { id: true, name: true, status: true }, orderBy: { name: "asc" } }),
       tx.approval.findMany({ where: { projectId, entityType: { in: ["PURCHASE_ORDER", "EXPENSE", "CHANGE_ORDER"] } }, orderBy: { createdAt: "desc" } }),
       threshold(tx, ctx.orgId),
+      tx.budget.findMany({ where: { projectId }, select: { category: true, version: true, notes: true } }),
     ]);
     const evidence = await tx.attachment.findMany({ where: { entityType: "EXPENSE", entityId: { in: expenses.map((e) => e.id) }, deletedAt: null }, orderBy: { createdAt: "desc" } });
     const approvalOf = (type: string, id: string) => approvals.find((a) => a.entityType === type && a.entityId === id) ?? null;
@@ -66,6 +76,11 @@ export async function getProjectFinance(ctx: ServiceContext, projectId: string) 
     return {
       project: { id: scope.project.id, code: scope.project.code, name: scope.project.name, currency: scope.project.currency },
       canManage: can(ctx, "finance.manage"),
+      // archived projects keep only the financial tail (§1.5): no new budget, POs, expenses or change orders
+      archived: scope.archived,
+      // the version each budget line was loaded at (§6): an update carries it
+      budgetVersions: Object.fromEntries(budgets.map((b) => [b.category, b.version])) as Record<string, number>,
+      budgetNotes: Object.fromEntries(budgets.map((b) => [b.category, b.notes])) as Record<string, string | null>,
       canApprove: can(ctx, "finance.approve"),
       threshold: limit,
       summary,
@@ -81,18 +96,25 @@ export async function getProjectFinance(ctx: ServiceContext, projectId: string) 
 export async function financeOverview(ctx: ServiceContext) {
   assertCan(ctx, "finance.view");
   return withTenant(scoped(ctx), async (tx) => {
-    const projects = await tx.project.findMany({ where: { ...projectVisibilityWhere(ctx), archivedAt: null }, select: { id: true, code: true, name: true, currency: true, status: true }, orderBy: { createdAt: "desc" } });
-    const visible: typeof projects = [];
-    for (const p of projects) {
+    const projects = await tx.project.findMany({ where: { ...projectVisibilityWhere(ctx), archivedAt: null }, orderBy: { createdAt: "desc" } });
+    // finance scope for every project from one membership query, evaluated in memory (KD-5):
+    // the statement count stays constant in the number of projects
+    const members = await tx.projectMember.findMany({ where: { userId: ctx.userId, projectId: { in: projects.map((p) => p.id) } } });
+    const byProject = new Map(members.map((m) => [m.projectId, m]));
+    const visible = projects.filter((p) => {
       try {
-        if ((await projectScope(tx, ctx, p.id)).finance) visible.push(p);
+        return computeProjectScope(ctx, p, byProject.get(p.id) ?? null).finance;
       } catch {
-        // no access → not listed
+        return false; // no access → not listed
       }
-    }
-    const summaries = await computeSummary(tx, visible.map((p) => p.id));
-    const pending = await tx.approval.findMany({ where: { projectId: { in: visible.map((p) => p.id) }, status: "PENDING", entityType: { in: ["PURCHASE_ORDER", "EXPENSE", "CHANGE_ORDER"] } }, orderBy: { createdAt: "asc" } });
-    return { projects: visible.map((p) => ({ ...p, ...summaries.find((s) => s.projectId === p.id)! })), pendingApprovals: pending };
+    });
+    const ids = visible.map((p) => p.id);
+    const [summaries, pending] = await Promise.all([
+      computeSummary(tx, ids),
+      tx.approval.findMany({ where: { projectId: { in: ids }, status: "PENDING", entityType: { in: ["PURCHASE_ORDER", "EXPENSE", "CHANGE_ORDER"] } }, orderBy: { createdAt: "asc" } }),
+    ]);
+    const byId = new Map(summaries.map((s) => [s.projectId, s]));
+    return { projects: visible.map((p) => ({ id: p.id, code: p.code, name: p.name, currency: p.currency, status: p.status, ...byId.get(p.id)! })), pendingApprovals: pending };
   });
 }
 
@@ -101,8 +123,12 @@ export async function financeOverview(ctx: ServiceContext) {
 export async function saveBudget(ctx: ServiceContext, input: z.output<typeof budgetSchema>) {
   return withTenant(scoped(ctx), async (tx) => {
     await managedFinance(tx, ctx, input.projectId);
+    const { version, ...line } = input;
     const before = await tx.budget.findUnique({ where: { projectId_category: { projectId: input.projectId, category: input.category } } });
-    const b = await tx.budget.upsert({ where: { projectId_category: { projectId: input.projectId, category: input.category } }, create: { ...input, organizationId: ctx.orgId }, update: { planned: input.planned, notes: input.notes ?? null } });
+    // an existing line is a protected record (§6): updating it needs the version the user loaded
+    const b = before
+      ? await casUpdate<Budget>({ tx, ctx, model: "budget", id: before.id, version, data: { planned: line.planned, notes: line.notes ?? null }, entityType: "BUDGET" })
+      : await tx.budget.create({ data: { ...line, organizationId: ctx.orgId } });
     await audit(tx, ctx, { action: "budget.set", entityType: "BUDGET", entityId: b.id, projectId: b.projectId, summary: b.category, before: { planned: before ? n(before.planned) : null }, after: { planned: input.planned } });
     return b;
   });
@@ -161,7 +187,8 @@ export async function setPurchaseOrderStatus(ctx: ServiceContext, input: { id: s
   return withTenant(scoped(ctx), async (tx) => {
     const po = await tx.purchaseOrder.findUnique({ where: { id: input.id } });
     if (!po) throw new NotFoundError();
-    await managedFinance(tx, ctx, po.projectId);
+    // receive / close / cancel are the financial tail (§1.5); issuing new spend is not
+    await managedFinance(tx, ctx, po.projectId, { tail: input.status !== "ISSUED" });
     if (!PO_FLOW[po.status]?.includes(input.status)) throw new ValidationError("errors.invalidTransition");
     const r = await tx.purchaseOrder.updateMany({ where: { id: po.id, status: po.status }, data: { status: input.status, ...(input.status === "ISSUED" ? { issuedAt: new Date() } : {}) } });
     if (!r.count) throw new ConflictError();
@@ -176,8 +203,9 @@ export async function setPurchaseOrderStatus(ctx: ServiceContext, input: { id: s
 export async function createExpense(ctx: ServiceContext, input: z.output<typeof expenseSchema>) {
   return withTenant(scoped(ctx), async (tx) => {
     const s = await projectScope(tx, ctx, input.projectId);
-    if (!s.finance && !(s.operate && can(ctx, "task.manage"))) throw new ForbiddenError();
     if (s.clientView || s.fieldOnly) throw new NotFoundError();
+    assertNotArchived(s);
+    if (!s.finance && !(s.operate && can(ctx, "task.manage"))) throw new ForbiddenError();
     if (input.purchaseOrderId) {
       const po = await tx.purchaseOrder.findFirst({ where: { id: input.purchaseOrderId, projectId: input.projectId, status: { in: [...COMMITTED] } } });
       if (!po) throw new ValidationError("errors.validation", { purchaseOrderId: ["finance.poNotCommitted"] });
@@ -210,7 +238,7 @@ export async function markExpensePaid(ctx: ServiceContext, expenseId: string) {
   return withTenant(scoped(ctx), async (tx) => {
     const e = await tx.expense.findUnique({ where: { id: expenseId } });
     if (!e) throw new NotFoundError();
-    await managedFinance(tx, ctx, e.projectId);
+    await managedFinance(tx, ctx, e.projectId, { tail: true });
     const r = await tx.expense.updateMany({ where: { id: e.id, status: "APPROVED" }, data: { status: "PAID" } });
     if (!r.count) throw new ValidationError("errors.invalidTransition");
     await audit(tx, ctx, { action: "expense.paid", entityType: "EXPENSE", entityId: e.id, projectId: e.projectId, summary: e.description });
@@ -235,7 +263,8 @@ export async function submitChangeOrder(ctx: ServiceContext, input: { id: string
   return withTenant(scoped(ctx), async (tx) => {
     const c = await tx.changeOrder.findUnique({ where: { id: input.id } });
     if (!c) throw new NotFoundError();
-    const s = await managedFinance(tx, ctx, c.projectId);
+    // submitting an existing change order for its decision belongs to the financial tail (§1.5)
+    const s = await managedFinance(tx, ctx, c.projectId, { tail: true });
     if (c.status !== "PENDING" || c.approvalId) throw new ValidationError("errors.invalidTransition");
     if (input.approverType === "CLIENT" && (!c.clientVisible || !s.project.clientPortal)) throw new ValidationError("finance.clientApprovalUnavailable");
     return requestApprovalTx(tx, ctx, { projectId: c.projectId, entityType: "CHANGE_ORDER", entityId: c.id, title: `${c.code} — ${c.title}`, description: c.description, approverType: input.approverType, approverUserId: input.approverUserId ?? null, dueAt: null });

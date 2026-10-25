@@ -1,13 +1,14 @@
 import { z } from "zod";
 import type { Approval, ApprovalStatus, Prisma, Project, ProjectMember } from "@/generated/prisma/client";
 import type { ServiceContext } from "@/server/authz/context";
-import { can, computeProjectScope, projectScope, type ProjectScope } from "@/server/authz/policy";
+import { can, computeProjectScope, isArchivedStatus, ProjectArchivedError, projectScope, type ProjectScope } from "@/server/authz/policy";
 import { withTenant, type Tx } from "@/server/db/tenant";
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/server/errors";
 import { audit } from "@/server/modules/audit/audit";
 import { emit } from "@/server/modules/automation/outbox";
 import { notify } from "@/server/modules/notifications/notify";
-import { DEFAULT_STATUSES, type StatusDef } from "@/server/modules/templates/definition";
+import { withCancelled, type StatusDef } from "@/server/modules/templates/definition";
+import { decidePolicyFor, EXCEPTION_LIMITS, exceptionActive, loadApprovalSettings, type ApprovalSettings, type DecidePolicy } from "./policy";
 
 export const ENTITY_TYPES = ["TASK", "DELIVERABLE", "DESIGN_REVISION", "CAMPAIGN", "PURCHASE_ORDER", "EXPENSE", "CHANGE_ORDER", "MILESTONE"] as const;
 /** Entity types that may be routed through the generic "request approval" action. The others go through their module's own submit flow. */
@@ -15,8 +16,30 @@ export const GENERIC_ENTITY_TYPES = ["TASK", "DELIVERABLE", "MILESTONE"] as cons
 /** Spend approvals: visible and decidable only with finance scope. */
 export const FINANCIAL_ENTITY_TYPES = ["PURCHASE_ORDER", "EXPENSE", "CHANGE_ORDER"] as const;
 const FINANCIAL = new Set<string>(FINANCIAL_ENTITY_TYPES);
-/** Projects in these states are archived: their approvals can no longer be decided. */
-export const INACTIVE_PROJECT_STATUSES = ["CLOSED", "CANCELLED", "COMPLETED"] as const;
+/**
+ * Project statuses in which campaigns are neither launched nor released (BUSINESS_RULES §1.1, §1.6).
+ * Approvals no longer use this list (COMPLETED left it in M2): see {@link approvalProjectGate}.
+ */
+export const NO_CAMPAIGN_LAUNCH_STATUSES = ["DRAFT", "ON_HOLD", "COMPLETED", "CLOSED", "CANCELLED"] as const;
+/** @deprecated kept for existing importers (campaign launch); use NO_CAMPAIGN_LAUNCH_STATUSES. */
+export const INACTIVE_PROJECT_STATUSES = NO_CAMPAIGN_LAUNCH_STATUSES;
+
+/**
+ * Whether approvals of this type may be requested or decided in a project with this status (§1.5, §1.6):
+ * archived projects keep only the financial tail (spend approvals); COMPLETED keeps every type except
+ * CAMPAIGN; everything else is open. Returns the error key, or null when allowed.
+ */
+export function approvalProjectGate(status: string, entityType: string): "errors.projectArchived" | "errors.projectInactive" | null {
+  if (isArchivedStatus(status)) return FINANCIAL.has(entityType) ? null : "errors.projectArchived";
+  if (status === "COMPLETED" && entityType === "CAMPAIGN") return "errors.projectInactive";
+  return null;
+}
+
+function assertApprovalProjectGate(status: string, entityType: string) {
+  const gate = approvalProjectGate(status, entityType);
+  if (gate === "errors.projectArchived") throw new ProjectArchivedError();
+  if (gate) throw new ValidationError(gate);
+}
 
 export const requestInput = z.object({
   projectId: z.string(),
@@ -33,8 +56,7 @@ export const requestInput = z.object({
 export const genericRequestInput = requestInput.extend({ entityType: z.enum(GENERIC_ENTITY_TYPES) });
 
 function statusesOf(ws: { statuses: unknown } | null | undefined): StatusDef[] {
-  const s = ws?.statuses as StatusDef[] | undefined;
-  return Array.isArray(s) && s.length ? s : DEFAULT_STATUSES;
+  return withCancelled(ws?.statuses as StatusDef[] | undefined);
 }
 
 // ── Authority ──────────────────────────────────────────────────────────────
@@ -50,9 +72,11 @@ type ApprovalLike = Pick<Approval, "entityType" | "approverType" | "approverUser
  *    campaigns → campaign.approve; financial → finance.approve with finance visibility;
  *    tasks / deliverables / milestones / design revisions → project approve scope.
  */
-export function mayDecide(actor: Pick<ServiceContext, "userId" | "permissions">, scope: ProjectScope | null, a: ApprovalLike, entityCreatorId: string | null): boolean {
+export function mayDecide(actor: Pick<ServiceContext, "userId" | "permissions">, scope: ProjectScope | null, a: ApprovalLike, entityCreatorId: string | null, policy?: DecidePolicy): boolean {
   if (!scope || scope.fieldOnly) return false;
   if (a.requestedById === actor.userId) return false;
+  // STRICT (org policy or the project's independent-approval flag): the performer never decides (§4.2)
+  if (policy?.strict && a.approverType === "INTERNAL" && policy.performers.includes(actor.userId)) return false;
   if (a.approverUserId && a.approverUserId !== actor.userId) return false;
   if (a.approverType === "CLIENT") return scope.clientView && scope.approve && a.clientVisible;
   if (scope.clientView) return false;
@@ -102,14 +126,116 @@ function scopeFor(c: Candidate, project: Project): ProjectScope | null {
  * request is refused). `notify` is who gets told: for project work (tasks, deliverables, milestones,
  * revisions) the eligible project members, falling back to everyone eligible (ops directors, owners).
  */
-export async function resolveApproverSet(tx: Tx, project: Project, a: ApprovalLike & { entityId: string }): Promise<{ eligible: string[]; notify: string[] }> {
+export async function resolveApproverSet(
+  tx: Tx,
+  project: Project,
+  a: ApprovalLike & { entityId: string },
+  opts: { settings?: ApprovalSettings; policy?: DecidePolicy; excludeUserIds?: string[] } = {},
+): Promise<{ eligible: string[]; notify: string[] }> {
   const creator = await entityCreator(tx, a.entityType, a.entityId);
-  const all = await candidates(tx, project.organizationId, project.id);
-  const ok = all.filter((c) => mayDecide(c.ctx, scopeFor(c, project), a, creator));
+  const policy = opts.policy ?? (await decidePolicyFor(tx, opts.settings ?? (await loadApprovalSettings(tx, project.organizationId)), project, a));
+  const excluded = new Set(opts.excludeUserIds ?? []);
+  const all = (await candidates(tx, project.organizationId, project.id)).filter((c) => !excluded.has(c.ctx.userId));
+  const ok = all.filter((c) => mayDecide(c.ctx, scopeFor(c, project), a, creator, policy));
   const eligible = ok.map((c) => c.ctx.userId);
   const projectWork = a.approverType === "INTERNAL" && a.entityType !== "CAMPAIGN" && !FINANCIAL.has(a.entityType);
   const members = ok.filter((c) => c.member).map((c) => c.ctx.userId);
   return { eligible, notify: projectWork && members.length ? members : eligible };
+}
+
+/**
+ * PENDING approvals that nobody could decide right now (§2.1 H4, §4.3 after the exception lapses),
+ * evaluated in batch: one membership query, one project-member query, creators per type. Used by
+ * the Operations home, where per-approval resolution would grow with the number of approvals.
+ */
+export async function approvalsWithoutApprover(tx: Tx, orgId: string, approvals: Approval[], projects: Project[]): Promise<Set<string>> {
+  const out = new Set<string>();
+  const pending = approvals.filter((a) => a.status === "PENDING" && !a.approverUserId);
+  if (!pending.length) return out;
+  const pmap = new Map(projects.map((p) => [p.id, p]));
+  const projectIds = [...new Set(pending.map((a) => a.projectId))];
+  const [memberships, pms, settings] = await Promise.all([
+    tx.membership.findMany({ where: { organizationId: orgId, status: "ACTIVE" }, include: { role: true } }),
+    tx.projectMember.findMany({ where: { projectId: { in: projectIds } } }),
+    loadApprovalSettings(tx, orgId),
+  ]);
+  const creators = new Map<string, string | null>();
+  const byType = (t: string) => pending.filter((a) => a.entityType === t).map((a) => a.entityId);
+  const [pos, exps, cos] = await Promise.all([
+    byType("PURCHASE_ORDER").length ? tx.purchaseOrder.findMany({ where: { id: { in: byType("PURCHASE_ORDER") } }, select: { id: true, createdById: true } }) : [],
+    byType("EXPENSE").length ? tx.expense.findMany({ where: { id: { in: byType("EXPENSE") } }, select: { id: true, submittedById: true } }) : [],
+    byType("CHANGE_ORDER").length ? tx.changeOrder.findMany({ where: { id: { in: byType("CHANGE_ORDER") } }, select: { id: true, createdById: true } }) : [],
+  ]);
+  pos.forEach((x) => creators.set(x.id, x.createdById));
+  exps.forEach((x) => creators.set(x.id, x.submittedById));
+  cos.forEach((x) => creators.set(x.id, x.createdById));
+  for (const a of pending) {
+    const project = pmap.get(a.projectId);
+    if (!project) continue;
+    const policy = await decidePolicyFor(tx, settings, project, a);
+    const anyone = memberships.some((m) => {
+      const c: Candidate = {
+        member: pms.find((p) => p.projectId === a.projectId && p.userId === m.userId) ?? null,
+        ctx: { userId: m.userId, userName: "", locale: "ar", orgId, orgSlug: "", orgName: "", membershipId: m.id, role: m.role.baseRole, roleKey: m.role.key, clientId: m.clientId, vendorId: m.vendorId, permissions: new Set(m.role.permissions), isPlatformAdmin: false },
+      };
+      return mayDecide(c.ctx, scopeFor(c, project), a, creators.get(a.entityId) ?? null, policy);
+    });
+    if (!anyone) out.add(a.id);
+  }
+  return out;
+}
+
+// ── Small-organisation exception (§4.3) ──────────────────────────────────────
+
+/** The spend amount (SAR incl. VAT) or campaign audience an exception cap is checked against. */
+async function exceptionMeasure(tx: Tx, entityType: string, entityId: string): Promise<{ amount?: number; audience?: number }> {
+  if (entityType === "PURCHASE_ORDER") {
+    const po = await tx.purchaseOrder.findUnique({ where: { id: entityId }, select: { amount: true, vatAmount: true } });
+    return { amount: Number(po?.amount ?? 0) + Number(po?.vatAmount ?? 0) };
+  }
+  if (entityType === "EXPENSE") {
+    const e = await tx.expense.findUnique({ where: { id: entityId }, select: { amount: true, vatAmount: true } });
+    return { amount: Number(e?.amount ?? 0) + Number(e?.vatAmount ?? 0) };
+  }
+  if (entityType === "CHANGE_ORDER") {
+    const c = await tx.changeOrder.findUnique({ where: { id: entityId }, select: { amountDelta: true, costDelta: true } });
+    return { amount: Math.max(Math.abs(Number(c?.amountDelta ?? 0)), Math.abs(Number(c?.costDelta ?? 0))) };
+  }
+  if (entityType === "CAMPAIGN") {
+    const [digital, physical] = await Promise.all([tx.digitalInvitation.count({ where: { campaignId: entityId } }), tx.delivery.count({ where: { campaignId: entityId } })]);
+    return { audience: digital + physical };
+  }
+  return {};
+}
+
+/**
+ * Whether the requester may decide their own request under the small-organisation exception
+ * (§4.3). Every precondition is re-checked at decision time: enabled and not expired; type in scope;
+ * under the caps; never for CLIENT approvals, flagged projects or designated approvers; the standard
+ * approver set is empty; and the requester holds the authority for the type.
+ */
+export async function exceptionEligible(
+  tx: Tx,
+  requester: Pick<ServiceContext, "userId" | "permissions">,
+  requesterScope: ProjectScope | null,
+  project: Project,
+  a: ApprovalLike & { entityId: string },
+  settings: ApprovalSettings,
+  standardEligible?: string[],
+): Promise<boolean> {
+  const ex = settings.exception;
+  if (!exceptionActive(ex)) return false;
+  if (a.approverType !== "INTERNAL" || a.approverUserId || project.independentApprovalRequired) return false;
+  if (!(ex.types as string[]).includes(a.entityType)) return false;
+  // the requester's own authority for the type, as if someone else had asked
+  const creator = await entityCreator(tx, a.entityType, a.entityId);
+  const asOther = { ...a, requestedById: "__exception__" };
+  if (!mayDecide(requester, requesterScope, asOther, creator === requester.userId ? null : creator)) return false;
+  const m = await exceptionMeasure(tx, a.entityType, a.entityId);
+  if (m.amount !== undefined && m.amount > Math.min(ex.spendCap, EXCEPTION_LIMITS.maxSpendCap)) return false;
+  if (m.audience !== undefined && m.audience > Math.min(ex.audienceCap, EXCEPTION_LIMITS.maxAudienceCap)) return false;
+  const eligible = standardEligible ?? (await resolveApproverSet(tx, project, a, { settings })).eligible;
+  return eligible.length === 0;
 }
 
 // ── Request ────────────────────────────────────────────────────────────────
@@ -138,28 +264,44 @@ export async function requestApprovalTx(tx: Tx, ctx: ServiceContext, input: z.ou
   const open = await tx.approval.findFirst({ where: { entityType: input.entityType, entityId: input.entityId, status: "PENDING" } });
   if (open) throw new ConflictError();
   const project = await tx.project.findUniqueOrThrow({ where: { id: input.projectId } });
-  if ((INACTIVE_PROJECT_STATUSES as readonly string[]).includes(project.status)) throw new ValidationError("errors.projectInactive");
+  assertApprovalProjectGate(project.status, input.entityType);
+  const settings = await loadApprovalSettings(tx, ctx.orgId);
   const like = { entityType: input.entityType, entityId: input.entityId, approverType: input.approverType, approverUserId: input.approverUserId ?? null, requestedById: ctx.userId, clientVisible: input.approverType === "CLIENT" };
-  const { eligible: approvers, notify: notifyIds } = await resolveApproverSet(tx, project, like);
+  const { eligible: approvers, notify: notifyIds } = await resolveApproverSet(tx, project, like, { settings });
+  let viaException = false;
   if (!approvers.length) {
     // a named approver who can't decide is a different mistake than "nobody can decide"
     if (input.approverUserId) throw new ValidationError("errors.validation", { approverUserId: ["errors.approverNotEligible"] });
-    throw new ValidationError("errors.noEligibleApprover");
+    // the small-organisation exception (§4.3) accepts the request instead, for the requester to decide
+    let requesterScope: ProjectScope | null = null;
+    try {
+      requesterScope = await projectScope(tx, ctx, project.id);
+    } catch {
+      requesterScope = null;
+    }
+    viaException = await exceptionEligible(tx, ctx, requesterScope, project, like, settings, approvers);
+    if (!viaException) throw new ValidationError("errors.noEligibleApprover");
   }
+  // default due date from the organisation's approval SLA (§3.4), unless the requester set one
+  const dueAt = input.dueAt ?? new Date(Date.now() + settings.slaHours * 3_600_000);
   const a = await tx.approval.create({
-    data: { ...input, organizationId: ctx.orgId, requestedById: ctx.userId, clientVisible: input.approverType === "CLIENT" },
+    data: { ...input, dueAt, organizationId: ctx.orgId, requestedById: ctx.userId, clientVisible: input.approverType === "CLIENT" },
   });
   await tx.approvalDecision.create({ data: { organizationId: ctx.orgId, approvalId: a.id, decision: "PENDING", actorId: ctx.userId, comment: input.description ?? null } });
-  if (input.entityType === "DELIVERABLE") await tx.deliverable.update({ where: { id: input.entityId }, data: { status: "SUBMITTED" } });
+  // entity writes bump `version` so a form already open on the record notices the change (§6)
+  if (input.entityType === "DELIVERABLE") await tx.deliverable.update({ where: { id: input.entityId }, data: { status: "SUBMITTED", version: { increment: 1 } } });
   if (input.entityType === "DESIGN_REVISION") await tx.designRevision.update({ where: { id: input.entityId }, data: { status: "SUBMITTED", approvalId: a.id } });
-  if (input.entityType === "CAMPAIGN") await tx.invitationCampaign.update({ where: { id: input.entityId }, data: { status: "PENDING_APPROVAL" } });
+  if (input.entityType === "CAMPAIGN") await tx.invitationCampaign.update({ where: { id: input.entityId }, data: { status: "PENDING_APPROVAL", version: { increment: 1 } } });
   if (input.entityType === "PURCHASE_ORDER") await tx.purchaseOrder.update({ where: { id: input.entityId }, data: { status: "PENDING_APPROVAL", approvalId: a.id } });
   if (input.entityType === "CHANGE_ORDER") await tx.changeOrder.update({ where: { id: input.entityId }, data: { approvalId: a.id } });
-  await audit(tx, ctx, { action: "approval.request", entityType: input.entityType, entityId: input.entityId, projectId: input.projectId, summary: input.title, meta: { approvalId: a.id, approverType: input.approverType, approvers: approvers.length } });
-  await emit(tx, ctx, "approval.requested", {
-    approvalId: a.id, projectId: input.projectId, approverUserId: input.approverUserId ?? null, approverUserIds: notifyIds, requestedById: ctx.userId, title: input.title,
-    entityType: input.entityType, entityId: input.entityId, link: `/projects/${input.projectId}/approvals`,
-  });
+  await audit(tx, ctx, { action: "approval.request", entityType: input.entityType, entityId: input.entityId, projectId: input.projectId, summary: input.title, meta: { approvalId: a.id, approverType: input.approverType, approvers: approvers.length, ...(viaException ? { exceptionEligible: true } : {}) } });
+  // an exception-eligible request has nobody else to tell: the requester decides it with a justification
+  if (!viaException) {
+    await emit(tx, ctx, "approval.requested", {
+      approvalId: a.id, projectId: input.projectId, approverUserId: input.approverUserId ?? null, approverUserIds: notifyIds, requestedById: ctx.userId, title: input.title,
+      entityType: input.entityType, entityId: input.entityId, link: `/projects/${input.projectId}/approvals`,
+    });
+  }
   return a;
 }
 
@@ -176,7 +318,13 @@ export async function requestApproval(ctx: ServiceContext, input: z.output<typeo
 
 // ── Decide ─────────────────────────────────────────────────────────────────
 
-export const decideInput = z.object({ approvalId: z.string(), decision: z.enum(["APPROVED", "REJECTED"]), comment: z.string().trim().max(4000).optional().nullable() });
+export const decideInput = z.object({
+  approvalId: z.string(),
+  decision: z.enum(["APPROVED", "REJECTED"]),
+  comment: z.string().trim().max(4000).optional().nullable(),
+  /** self-approval under the small-organisation exception (§4.3): a one-line note + explicit confirmation */
+  exception: z.object({ justification: z.string().trim().max(2000), confirm: z.literal(true) }).optional().nullable(),
+});
 
 export async function decideApproval(ctx: ServiceContext, input: z.output<typeof decideInput>) {
   return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
@@ -184,20 +332,56 @@ export async function decideApproval(ctx: ServiceContext, input: z.output<typeof
     if (!a) throw new NotFoundError();
     const scope = await projectScope(tx, ctx, a.projectId);
     if (a.approverType === "INTERNAL" && scope.clientView) throw new NotFoundError();
-    if (!mayDecide(ctx, scope, a, await entityCreator(tx, a.entityType, a.entityId))) throw new ForbiddenError();
+    const settings = await loadApprovalSettings(tx, ctx.orgId);
+    const creator = await entityCreator(tx, a.entityType, a.entityId);
+    let selfApproval = false;
+    if (input.exception && a.requestedById === ctx.userId) {
+      // the requester decides their own request: only under the exception, approve only, justified
+      if (input.decision !== "APPROVED") throw new ValidationError("errors.exceptionNotApplicable");
+      if (!(await exceptionEligible(tx, ctx, scope, scope.project, a, settings))) throw new ValidationError("errors.exceptionNotApplicable");
+      if (input.exception.justification.length < EXCEPTION_LIMITS.decisionNote) throw new ValidationError("errors.validation", { justification: ["errors.justificationTooShort"] });
+      selfApproval = true;
+    } else if (!mayDecide(ctx, scope, a, creator, await decidePolicyFor(tx, settings, scope.project, a))) {
+      throw new ForbiddenError();
+    }
+    // the project gate first: in an archived project the reason a decision is refused is the archive
+    assertApprovalProjectGate(scope.project.status, a.entityType);
     if (a.status !== "PENDING") throw new ConflictError();
-    if ((INACTIVE_PROJECT_STATUSES as readonly string[]).includes(scope.project.status)) throw new ValidationError("errors.projectInactive");
+    // clients make no decisions in archived projects (LC rule 7); the financial tail is internal
+    if (scope.archived && a.approverType === "CLIENT") throw new ProjectArchivedError();
     if (input.decision === "REJECTED" && !input.comment) throw new ValidationError("errors.validation", { comment: ["common.required"] });
+    const exceptionReason = selfApproval ? input.exception!.justification.slice(0, 2000) : null;
     // compare-and-set on PENDING so two approvers can't both decide
-    const res = await tx.approval.updateMany({ where: { id: a.id, status: "PENDING" }, data: { status: input.decision, decidedById: ctx.userId, decidedAt: new Date(), decisionComment: input.comment ?? null } });
+    const res = await tx.approval.updateMany({
+      where: { id: a.id, status: "PENDING" },
+      data: { status: input.decision, decidedById: ctx.userId, decidedAt: new Date(), decisionComment: input.comment ?? exceptionReason, ...(selfApproval ? { policyException: true, policyExceptionReason: exceptionReason } : {}) },
+    });
     if (!res.count) throw new ConflictError();
-    await tx.approvalDecision.create({ data: { organizationId: ctx.orgId, approvalId: a.id, decision: input.decision, comment: input.comment ?? null, actorId: ctx.userId } });
+    await tx.approvalDecision.create({ data: { organizationId: ctx.orgId, approvalId: a.id, decision: input.decision, comment: input.comment ?? exceptionReason, actorId: ctx.userId } });
     await applyDecision(tx, a.entityType, a.entityId, input.decision, ctx.userId);
-    await audit(tx, ctx, { action: `approval.${input.decision.toLowerCase()}`, entityType: a.entityType, entityId: a.entityId, projectId: a.projectId, summary: a.title, meta: { approvalId: a.id, comment: input.comment } });
+    await audit(tx, ctx, { action: `approval.${input.decision.toLowerCase()}`, entityType: a.entityType, entityId: a.entityId, projectId: a.projectId, summary: a.title, meta: { approvalId: a.id, comment: input.comment, ...(selfApproval ? { policyException: true } : {}) } });
+    if (selfApproval) await recordSelfApproval(tx, ctx, a, exceptionReason!);
     const payload = { approvalId: a.id, projectId: a.projectId, requestedById: a.requestedById, status: input.decision, title: a.title, entityType: a.entityType, entityId: a.entityId, link: a.entityType === "TASK" ? `/tasks/${a.entityId}` : `/projects/${a.projectId}/approvals` };
     await emit(tx, ctx, "approval.decided", payload);
     if (input.decision === "REJECTED") await emit(tx, ctx, "approval.rejected", payload);
     return tx.approval.findUniqueOrThrow({ where: { id: a.id } });
+  });
+}
+
+/** Owners other than the decider, active. */
+async function otherOwners(tx: Tx, orgId: string, exceptUserId: string) {
+  const owners = await tx.membership.findMany({ where: { organizationId: orgId, status: "ACTIVE", role: { baseRole: "OWNER" }, userId: { not: exceptUserId } }, select: { userId: true } });
+  return owners.map((o) => o.userId);
+}
+
+/** §4.3 visibility: the self-approval is audited and every other owner is told (mandatory). */
+async function recordSelfApproval(tx: Tx, ctx: ServiceContext, a: Approval, justification: string) {
+  const m = await exceptionMeasure(tx, a.entityType, a.entityId);
+  await audit(tx, ctx, { action: "approval.self_approved", entityType: a.entityType, entityId: a.entityId, projectId: a.projectId, summary: a.title, meta: { approvalId: a.id, ...m, justification } });
+  await notify(tx, {
+    orgId: ctx.orgId, userIds: await otherOwners(tx, ctx.orgId, ctx.userId), type: "approval.self_approved", titleKey: "tasks.policy.notices.selfApproved",
+    params: { title: a.title, name: ctx.userName }, link: `/projects/${a.projectId}/approvals`, entityType: a.entityType, entityId: a.entityId,
+    dedupeKey: `approval.self_approved:${a.id}`, priority: "HIGH", mandatory: true,
   });
 }
 
@@ -219,23 +403,23 @@ async function applyDecision(tx: Tx, entityType: string, entityId: string, decis
       return;
     }
     case "DELIVERABLE":
-      return cas(tx.deliverable.updateMany({ where: { id: entityId, status: "SUBMITTED" }, data: { status: approved ? "APPROVED" : "REJECTED" } }));
+      return cas(tx.deliverable.updateMany({ where: { id: entityId, status: "SUBMITTED" }, data: { status: approved ? "APPROVED" : "REJECTED", version: { increment: 1 } } }));
     case "MILESTONE":
-      if (approved) await cas(tx.milestone.updateMany({ where: { id: entityId, status: { not: "DONE" } }, data: { status: "DONE", completedAt: new Date() } }));
+      if (approved) await cas(tx.milestone.updateMany({ where: { id: entityId, status: { not: "DONE" } }, data: { status: "DONE", completedAt: new Date(), version: { increment: 1 } } }));
       return;
     case "DESIGN_REVISION": {
       await cas(tx.designRevision.updateMany({ where: { id: entityId, status: "SUBMITTED" }, data: { status: approved ? "APPROVED" : "REJECTED" } }));
       const rev = await tx.designRevision.findUniqueOrThrow({ where: { id: entityId } });
       if (approved) {
         await tx.designRevision.updateMany({ where: { boothId: rev.boothId, id: { not: rev.id }, status: "APPROVED" }, data: { status: "SUPERSEDED" } });
-        await tx.booth.updateMany({ where: { id: rev.boothId, stage: { in: ["BRIEF", "DESIGN", "CLIENT_APPROVAL"] } }, data: { stage: "PROCUREMENT" } });
+        await tx.booth.updateMany({ where: { id: rev.boothId, stage: { in: ["BRIEF", "DESIGN", "CLIENT_APPROVAL"] } }, data: { stage: "PROCUREMENT", version: { increment: 1 } } });
       } else {
-        await tx.booth.updateMany({ where: { id: rev.boothId, stage: "CLIENT_APPROVAL" }, data: { stage: "DESIGN" } });
+        await tx.booth.updateMany({ where: { id: rev.boothId, stage: "CLIENT_APPROVAL" }, data: { stage: "DESIGN", version: { increment: 1 } } });
       }
       return;
     }
     case "CAMPAIGN":
-      return cas(tx.invitationCampaign.updateMany({ where: { id: entityId, status: "PENDING_APPROVAL" }, data: approved ? { status: "APPROVED", approvedById: actorId, approvedAt: new Date() } : { status: "DRAFT" } }));
+      return cas(tx.invitationCampaign.updateMany({ where: { id: entityId, status: "PENDING_APPROVAL" }, data: approved ? { status: "APPROVED", approvedById: actorId, approvedAt: new Date(), version: { increment: 1 } } : { status: "DRAFT", version: { increment: 1 } } }));
     case "PURCHASE_ORDER":
       return cas(tx.purchaseOrder.updateMany({ where: { id: entityId, status: "PENDING_APPROVAL" }, data: { status: approved ? "APPROVED" : "DRAFT" } }));
     case "EXPENSE":
@@ -249,9 +433,9 @@ async function applyDecision(tx: Tx, entityType: string, entityId: string, decis
 
 /** Puts an entity back into the state it had before the request (withdrawn / re-routed approvals). */
 async function revertEntity(tx: Tx, a: Approval) {
-  if (a.entityType === "DELIVERABLE") await tx.deliverable.updateMany({ where: { id: a.entityId, status: "SUBMITTED" }, data: { status: "IN_PROGRESS" } });
+  if (a.entityType === "DELIVERABLE") await tx.deliverable.updateMany({ where: { id: a.entityId, status: "SUBMITTED" }, data: { status: "IN_PROGRESS", version: { increment: 1 } } });
   if (a.entityType === "DESIGN_REVISION") await tx.designRevision.updateMany({ where: { id: a.entityId, status: "SUBMITTED" }, data: { status: "DRAFT", approvalId: null } });
-  if (a.entityType === "CAMPAIGN") await tx.invitationCampaign.updateMany({ where: { id: a.entityId, status: "PENDING_APPROVAL" }, data: { status: "DRAFT" } });
+  if (a.entityType === "CAMPAIGN") await tx.invitationCampaign.updateMany({ where: { id: a.entityId, status: "PENDING_APPROVAL" }, data: { status: "DRAFT", version: { increment: 1 } } });
   if (a.entityType === "PURCHASE_ORDER") await tx.purchaseOrder.updateMany({ where: { id: a.entityId, status: "PENDING_APPROVAL" }, data: { status: "DRAFT", approvalId: null } });
   if (a.entityType === "CHANGE_ORDER") await tx.changeOrder.updateMany({ where: { id: a.entityId, status: "PENDING", approvalId: a.id }, data: { approvalId: null } });
 }
@@ -261,14 +445,14 @@ async function revertEntity(tx: Tx, a: Approval) {
  * telling the requester. `revert` puts the entity back to its pre-request state (withdraw / re-route);
  * leave it off when the entity itself is being cancelled or changed.
  */
-export async function cancelPendingApprovalsTx(tx: Tx, ctx: ServiceContext, where: Prisma.ApprovalWhereInput, opts: { reason: string; revert?: boolean; action?: string }) {
+export async function cancelPendingApprovalsTx(tx: Tx, ctx: ServiceContext, where: Prisma.ApprovalWhereInput, opts: { reason: string; revert?: boolean; action?: string; cause?: string }) {
   const pending = await tx.approval.findMany({ where: { ...where, status: "PENDING" } });
   for (const a of pending) {
     const r = await tx.approval.updateMany({ where: { id: a.id, status: "PENDING" }, data: { status: "CANCELLED", decidedById: ctx.userId === "system" ? null : ctx.userId, decidedAt: new Date(), decisionComment: opts.reason.slice(0, 4000) } });
     if (!r.count) continue;
     await tx.approvalDecision.create({ data: { organizationId: ctx.orgId, approvalId: a.id, decision: "CANCELLED", comment: opts.reason.slice(0, 4000), actorId: ctx.userId } });
     if (opts.revert) await revertEntity(tx, a);
-    await audit(tx, ctx, { action: opts.action ?? "approval.cancel", entityType: a.entityType, entityId: a.entityId, projectId: a.projectId, summary: a.title, meta: { approvalId: a.id, reason: opts.reason } });
+    await audit(tx, ctx, { action: opts.action ?? "approval.cancel", entityType: a.entityType, entityId: a.entityId, projectId: a.projectId, summary: a.title, meta: { approvalId: a.id, reason: opts.reason, ...(opts.cause ? { cause: opts.cause } : {}) } });
     await notify(tx, { orgId: ctx.orgId, userIds: [a.requestedById, a.approverUserId], type: "approval.cancelled", titleKey: "tasks.approvalNotices.cancelled", params: { title: a.title }, link: `/projects/${a.projectId}/approvals`, entityType: a.entityType, entityId: a.entityId, excludeUserId: ctx.userId });
   }
   return pending.length;
@@ -294,12 +478,12 @@ export async function withdrawApproval(ctx: ServiceContext, input: z.output<type
  * An APPROVED decision stops covering an entity once the entity is reopened/changed: it becomes
  * SUPERSEDED (audited) and the decider (and, for client approvals, the client) is told.
  */
-export async function supersedeApprovalsTx(tx: Tx, ctx: ServiceContext, entityType: string, entityId: string, reason: string) {
+export async function supersedeApprovalsTx(tx: Tx, ctx: ServiceContext, entityType: string, entityId: string, reason: string, opts: { cause?: string } = {}) {
   const approved = await tx.approval.findMany({ where: { entityType, entityId, status: "APPROVED" } });
   for (const a of approved) {
     await tx.approval.update({ where: { id: a.id }, data: { status: "SUPERSEDED" } });
     await tx.approvalDecision.create({ data: { organizationId: ctx.orgId, approvalId: a.id, decision: "SUPERSEDED", comment: reason.slice(0, 4000), actorId: ctx.userId } });
-    await audit(tx, ctx, { action: "approval.superseded", entityType, entityId, projectId: a.projectId, summary: a.title, meta: { approvalId: a.id, reason } });
+    await audit(tx, ctx, { action: "approval.superseded", entityType, entityId, projectId: a.projectId, summary: a.title, meta: { approvalId: a.id, reason, ...(opts.cause ? { cause: opts.cause } : {}) } });
     await notify(tx, { orgId: ctx.orgId, userIds: [a.decidedById, a.approverUserId, a.requestedById], type: "approval.superseded", titleKey: "tasks.approvalNotices.superseded", params: { title: a.title }, link: entityType === "TASK" ? `/tasks/${entityId}` : `/projects/${a.projectId}/approvals`, entityType, entityId, excludeUserId: ctx.userId });
   }
   return approved.length;
@@ -321,11 +505,24 @@ export async function listProjectApprovals(ctx: ServiceContext, projectId: strin
     const users = await tx.user.findMany({ where: { id: { in: userIds } }, select: { id: true, name: true, nameAr: true } });
     const creators = new Map<string, string | null>();
     for (const a of approvals.filter((x) => x.status === "PENDING" && FINANCIAL.has(x.entityType))) creators.set(a.id, await entityCreator(tx, a.entityType, a.entityId));
-    const active = !(INACTIVE_PROJECT_STATUSES as readonly string[]).includes(scope.project.status);
+    const settings = await loadApprovalSettings(tx, ctx.orgId);
+    const pending = approvals.filter((a) => a.status === "PENDING");
+    const policies = new Map<string, DecidePolicy>();
+    const selfOk = new Set<string>();
+    const noApprover = new Set<string>();
+    for (const a of pending) {
+      policies.set(a.id, await decidePolicyFor(tx, settings, scope.project, a));
+      if (scope.clientView || approvalProjectGate(scope.project.status, a.entityType)) continue;
+      if (a.requestedById === ctx.userId && (await exceptionEligible(tx, ctx, scope, scope.project, a, settings))) selfOk.add(a.id);
+      // an approval nobody can decide right now is flagged (§2.1 H4, §4.3 after disabling or expiry)
+      else if (!a.approverUserId && !(await resolveApproverSet(tx, scope.project, a, { settings, policy: policies.get(a.id) })).eligible.length) noApprover.add(a.id);
+    }
     return {
       approvals: approvals.map((a) => ({
         ...a,
-        canDecide: a.status === "PENDING" && active && mayDecide(ctx, scope, a, creators.get(a.id) ?? null),
+        canDecide: a.status === "PENDING" && !approvalProjectGate(scope.project.status, a.entityType) && mayDecide(ctx, scope, a, creators.get(a.id) ?? null, policies.get(a.id)),
+        canSelfApprove: selfOk.has(a.id),
+        noEligibleApprover: noApprover.has(a.id),
         canWithdraw: a.status === "PENDING" && !scope.clientView && (a.requestedById === ctx.userId || scope.manage),
       })),
       users: Object.fromEntries(users.map((u) => [u.id, (ctx.locale === "ar" ? u.nameAr : null) ?? u.name])),
@@ -363,9 +560,10 @@ export async function listApprovalsAwaitingDecision(ctx: ServiceContext, opts?: 
     });
     if (!pending.length) return [];
     const projectIds = [...new Set(pending.map((a) => a.projectId))];
-    const [projects, members] = await Promise.all([
-      tx.project.findMany({ where: { id: { in: projectIds }, status: { notIn: [...INACTIVE_PROJECT_STATUSES] } } }),
+    const [projects, members, settings] = await Promise.all([
+      tx.project.findMany({ where: { id: { in: projectIds } } }),
       tx.projectMember.findMany({ where: { projectId: { in: projectIds }, userId: ctx.userId } }),
+      loadApprovalSettings(tx, ctx.orgId),
     ]);
     const scopes = new Map<string, ProjectScope | null>();
     for (const p of projects) {
@@ -378,9 +576,11 @@ export async function listApprovalsAwaitingDecision(ctx: ServiceContext, opts?: 
     const out: (typeof pending)[number][] = [];
     for (const a of pending) {
       const scope = scopes.get(a.projectId);
-      if (!scope) continue;
+      if (!scope || approvalProjectGate(scope.project.status, a.entityType)) continue;
       const creator = FINANCIAL.has(a.entityType) ? await entityCreator(tx, a.entityType, a.entityId) : null;
-      if (mayDecide(ctx, scope, a, creator)) out.push(a);
+      if (!mayDecide(ctx, scope, a, creator)) continue;
+      // STRICT is checked only for approvals the M1 rule already allows (it can only narrow)
+      if (mayDecide(ctx, scope, a, creator, await decidePolicyFor(tx, settings, scope.project, a))) out.push(a);
       if (out.length >= limit) break;
     }
     const users = await tx.user.findMany({ where: { id: { in: [...new Set(out.map((a) => a.requestedById))] } }, select: { id: true, name: true, nameAr: true } });

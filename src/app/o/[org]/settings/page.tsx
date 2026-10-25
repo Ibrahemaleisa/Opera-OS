@@ -4,6 +4,8 @@ import { assertCan } from "@/server/authz/policy";
 import { getOrganization, readSettings } from "@/server/modules/org/service";
 import { requirePageContext } from "@/server/request";
 import { OrgSettingsForm } from "./settings-form";
+import { ApprovalSettings } from "./approval-settings";
+import { getApprovalSettingsView } from "@/server/modules/approvals/settings";
 import { guardPage } from "@/server/page-guard";
 
 async function SettingsPage({ params }: { params: Promise<{ org: string }> }) {
@@ -13,6 +15,7 @@ async function SettingsPage({ params }: { params: Promise<{ org: string }> }) {
   const { m } = await getI18n();
   const org = await getOrganization(ctx);
   const s = readSettings(org.settings);
+  const approvals = JSON.parse(JSON.stringify(await getApprovalSettingsView(ctx))) as Awaited<ReturnType<typeof getApprovalSettingsView>>;
   return (
     <>
       <PageHeader title={m.org.settingsTitle} description={m.org.settingsDesc} />
@@ -24,6 +27,9 @@ async function SettingsPage({ params }: { params: Promise<{ org: string }> }) {
           calendar: org.calendar as "gregory" | "islamic-umalqura", financeApprovalThreshold: s.financeApprovalThreshold, recipientRetentionDays: s.recipientRetentionDays,
         }}
       />
+      <div className="mt-5 max-w-4xl">
+        <ApprovalSettings orgSlug={slug} view={approvals} />
+      </div>
     </>
   );
 }

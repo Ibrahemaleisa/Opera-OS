@@ -6,16 +6,18 @@ import { shortCode } from "@/lib/id";
 import { randomToken, sha256Hex } from "@/server/auth/crypto";
 import { enforceRateLimit } from "@/server/auth/rate-limit";
 import type { ServiceContext } from "@/server/authz/context";
-import { assertCan, can, projectScope, projectVisibilityWhere } from "@/server/authz/policy";
+import { assertCan, assertNotArchived, can, projectScope, projectVisibilityWhere } from "@/server/authz/policy";
 import { db } from "@/server/db/client";
 import { withTenant, type Tx } from "@/server/db/tenant";
+import { assertVersion, casUpdate, versionField } from "@/server/concurrency";
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/server/errors";
 import { audit } from "@/server/modules/audit/audit";
 import { emit } from "@/server/modules/automation/outbox";
-import { cancelPendingApprovalsTx, INACTIVE_PROJECT_STATUSES, requestApprovalTx, supersedeApprovalsTx } from "@/server/modules/approvals/service";
+import { cancelPendingApprovalsTx, NO_CAMPAIGN_LAUNCH_STATUSES, requestApprovalTx, supersedeApprovalsTx } from "@/server/modules/approvals/service";
 import { enqueue } from "@/server/jobs/dispatch";
 import { jobsMode } from "@/server/jobs/queue";
 import { providerStatus } from "./providers";
+import { campaignSendState } from "./send-state";
 
 export { VARIABLES } from "@/lib/digital-vars";
 
@@ -31,6 +33,7 @@ export const digitalCampaignSchema = z.object({
   rsvpDeadline: z.coerce.date().nullish(),
   qrEnabled: z.boolean().default(false),
   eventId: z.string().nullish(),
+  version: versionField,
 });
 
 function appUrl() {
@@ -66,21 +69,23 @@ async function invalidateCampaignApproval(tx: Tx, ctx: ServiceContext, c: Pick<I
   if (!APPROVAL_LOCKED.includes(c.status)) return false;
   await cancelPendingApprovalsTx(tx, ctx, { entityType: "CAMPAIGN", entityId: c.id }, { reason, action: "approval.invalidated" });
   await supersedeApprovalsTx(tx, ctx, "CAMPAIGN", c.id, reason);
-  const r = await tx.invitationCampaign.updateMany({ where: { id: c.id, status: c.status }, data: { status: "DRAFT", approvedById: null, approvedAt: null } });
+  const r = await tx.invitationCampaign.updateMany({ where: { id: c.id, status: c.status }, data: { status: "DRAFT", approvedById: null, approvedAt: null, version: { increment: 1 } } });
   if (!r.count) throw new ConflictError();
   await audit(tx, ctx, { action: "campaign.approval_invalidated", entityType: "CAMPAIGN", entityId: c.id, projectId: c.projectId, summary: c.name, before: { status: c.status }, after: { status: "DRAFT" }, meta: { reason } });
   return true;
 }
 
 function projectActive(status: string) {
-  return !(INACTIVE_PROJECT_STATUSES as readonly string[]).includes(status);
+  return !(NO_CAMPAIGN_LAUNCH_STATUSES as readonly string[]).includes(status);
 }
 
-async function loadCampaign(tx: Tx, ctx: ServiceContext, campaignId: string) {
+async function loadCampaign(tx: Tx, ctx: ServiceContext, campaignId: string, mode: "read" | "write" = "read") {
   const c = await tx.invitationCampaign.findUnique({ where: { id: campaignId } });
   if (!c || c.type !== "DIGITAL") throw new NotFoundError();
   const scope = await projectScope(tx, ctx, c.projectId);
   if (scope.clientView || scope.fieldOnly) throw new NotFoundError();
+  // LC rule 5: campaigns of archived projects are read-only (no edits, sends, cancels or check-ins)
+  if (mode === "write") assertNotArchived(scope);
   return { c, scope };
 }
 
@@ -88,9 +93,10 @@ export async function saveDigitalCampaign(ctx: ServiceContext, input: z.output<t
   assertCan(ctx, "campaign.manage");
   return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
     const scope = await projectScope(tx, ctx, input.projectId);
+    assertNotArchived(scope);
     if (!scope.operate) throw new ForbiddenError();
     if (input.channel === "EMAIL" && !input.subject) throw new ValidationError("errors.validation", { subject: ["common.required"] });
-    const { id, projectId, ...data } = input;
+    const { id, projectId, version, ...data } = input;
     if (data.eventId && !(await tx.event.findFirst({ where: { id: data.eventId, projectId } }))) throw new NotFoundError();
     if (id) {
       const existing = await tx.invitationCampaign.findFirst({ where: { id, projectId, type: "DIGITAL" } });
@@ -102,8 +108,11 @@ export async function saveDigitalCampaign(ctx: ServiceContext, input: z.output<t
         (existing.eventId ?? null) !== (data.eventId ?? null) || existing.rsvpEnabled !== data.rsvpEnabled || existing.qrEnabled !== data.qrEnabled ||
         // the send time is part of what was approved (a save that omits it keeps it)
         (data.scheduledAt !== undefined && (existing.scheduledAt?.getTime() ?? null) !== (data.scheduledAt ? new Date(data.scheduledAt as Date).getTime() : null));
+      // the user's write is a compare-and-set on the version they loaded; voiding the approval after it
+      // is a consequence of that write (it bumps the version again, as a system write)
+      await casUpdate<InvitationCampaign>({ tx, ctx, model: "invitationCampaign", id, version, data: { ...data, subject: data.subject ?? null }, entityType: "CAMPAIGN" });
       const approvalInvalidated = contentChanged ? await invalidateCampaignApproval(tx, ctx, existing, "content changed after the approval request") : false;
-      const c = await tx.invitationCampaign.update({ where: { id }, data: { ...data, subject: data.subject ?? null } });
+      const c = await tx.invitationCampaign.findUniqueOrThrow({ where: { id } });
       if (existing.channel !== c.channel) await readdressAudience(tx, c);
       await audit(tx, ctx, { action: "campaign.update", entityType: "CAMPAIGN", entityId: id, projectId, summary: c.name, meta: { approvalInvalidated } });
       return Object.assign(c, { approvalInvalidated });
@@ -132,7 +141,7 @@ async function readdressAudience(tx: Tx, c: { id: string; channel: Channel | nul
 export async function addAudience(ctx: ServiceContext, input: { campaignId: string; recipientIds: string[] }) {
   assertCan(ctx, "campaign.manage");
   return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
-    const { c } = await loadCampaign(tx, ctx, input.campaignId);
+    const { c } = await loadCampaign(tx, ctx, input.campaignId, "write");
     if (["SENDING", "COMPLETED", "CANCELLED"].includes(c.status)) throw new ValidationError("errors.importState");
     const approvalInvalidated = await invalidateCampaignApproval(tx, ctx, c, "audience changed after the approval request");
     const recipients = await tx.recipient.findMany({ where: { id: { in: input.recipientIds }, projectId: c.projectId, deletedAt: null, anonymizedAt: null } });
@@ -158,7 +167,7 @@ export async function addAudience(ctx: ServiceContext, input: { campaignId: stri
 export async function removeAudience(ctx: ServiceContext, input: { campaignId: string; invitationIds: string[] }) {
   assertCan(ctx, "campaign.manage");
   return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
-    const { c } = await loadCampaign(tx, ctx, input.campaignId);
+    const { c } = await loadCampaign(tx, ctx, input.campaignId, "write");
     if (["SENDING", "COMPLETED", "CANCELLED"].includes(c.status)) throw new ValidationError("errors.importState");
     const approvalInvalidated = await invalidateCampaignApproval(tx, ctx, c, "audience changed after the approval request");
     const r = await tx.digitalInvitation.deleteMany({ where: { id: { in: input.invitationIds }, campaignId: c.id, status: { in: ["QUEUED", "SUPPRESSED"] }, messages: { none: {} } } });
@@ -167,13 +176,17 @@ export async function removeAudience(ctx: ServiceContext, input: { campaignId: s
   });
 }
 
-export async function requestCampaignApproval(ctx: ServiceContext, campaignId: string) {
+export async function requestCampaignApproval(ctx: ServiceContext, campaignId: string, version?: number) {
   assertCan(ctx, "campaign.manage");
   return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
-    const { c } = await loadCampaign(tx, ctx, campaignId);
+    const { c } = await loadCampaign(tx, ctx, campaignId, "write");
+    await assertVersion(tx, { model: "invitationCampaign", id: c.id, version, stored: c.version, entityType: "CAMPAIGN", data: { status: "PENDING_APPROVAL" } });
     if (c.status !== "DRAFT") throw new ValidationError("errors.importState");
     const audience = await tx.digitalInvitation.count({ where: { campaignId, status: "QUEUED" } });
     if (!audience) throw new ValidationError("errors.noRowsSelected");
+    // DRAFT → PENDING_APPROVAL is a transition of a protected record: claim the loaded version first
+    // (the row stays locked until commit, so a second request waits and then conflicts)
+    await casUpdate<InvitationCampaign>({ tx, ctx, model: "invitationCampaign", id: c.id, version, data: {}, entityType: "CAMPAIGN" });
     const a = await requestApprovalTx(tx, ctx, { projectId: c.projectId, entityType: "CAMPAIGN", entityId: c.id, title: `${c.name} (${audience})`, description: c.bodyTemplate?.slice(0, 500) ?? null, approverType: "INTERNAL", approverUserId: null });
     await emit(tx, ctx, "campaign.approval_requested", { projectId: c.projectId, title: c.name, link: `/projects/${c.projectId}/digital/${c.id}` });
     return a;
@@ -181,17 +194,17 @@ export async function requestCampaignApproval(ctx: ServiceContext, campaignId: s
 }
 
 /** Sends (or schedules) an APPROVED campaign. Never sends unapproved bulk outbound messages. */
-export async function launchCampaign(ctx: ServiceContext, campaignId: string) {
+export async function launchCampaign(ctx: ServiceContext, campaignId: string, version?: number) {
   assertCan(ctx, "campaign.send");
   const c = await withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
-    const { c, scope } = await loadCampaign(tx, ctx, campaignId);
-    if (!projectActive(scope.project.status)) throw new ValidationError("errors.projectInactive");
+    const { c, scope } = await loadCampaign(tx, ctx, campaignId, "write");
+    await assertVersion(tx, { model: "invitationCampaign", id: c.id, version, stored: c.version, entityType: "CAMPAIGN", data: { status: "SENDING" } });
+    if (!projectActive(scope.project.status)) throw new ValidationError("errors.projectNotSending");
     if (c.status !== "APPROVED") throw new ValidationError("errors.campaignNotApproved");
     const approval = await tx.approval.findFirst({ where: { entityType: "CAMPAIGN", entityId: c.id, status: "APPROVED" }, orderBy: { decidedAt: "desc" } });
     if (!approval) throw new ValidationError("errors.campaignNotApproved");
     const next = c.scheduledAt && c.scheduledAt > new Date() ? "SCHEDULED" : "SENDING";
-    const r = await tx.invitationCampaign.updateMany({ where: { id: c.id, status: "APPROVED" }, data: { status: next } });
-    if (!r.count) throw new ConflictError();
+    await casUpdate<InvitationCampaign>({ tx, ctx, model: "invitationCampaign", id: c.id, version, data: { status: next }, entityType: "CAMPAIGN" });
     await audit(tx, ctx, { action: next === "SCHEDULED" ? "campaign.schedule" : "campaign.launch", entityType: "CAMPAIGN", entityId: c.id, projectId: c.projectId, summary: c.name, meta: { scheduledAt: c.scheduledAt, approvalId: approval.id } });
     return { ...c, status: next };
   });
@@ -203,17 +216,74 @@ export async function launchCampaign(ctx: ServiceContext, campaignId: string) {
   return { status: c.status, mode };
 }
 
-export async function cancelCampaign(ctx: ServiceContext, campaignId: string) {
+export async function cancelCampaign(ctx: ServiceContext, campaignId: string, version?: number) {
   assertCan(ctx, "campaign.manage");
   return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
-    const { c } = await loadCampaign(tx, ctx, campaignId);
+    const { c } = await loadCampaign(tx, ctx, campaignId, "write");
+    await assertVersion(tx, { model: "invitationCampaign", id: c.id, version, stored: c.version, entityType: "CAMPAIGN", data: { status: "CANCELLED" } });
     if (["COMPLETED", "CANCELLED"].includes(c.status)) throw new ValidationError("errors.invalidTransition");
-    const u = await tx.invitationCampaign.updateMany({ where: { id: c.id, status: c.status }, data: { status: "CANCELLED" } });
-    if (!u.count) throw new ConflictError();
+    await casUpdate<InvitationCampaign>({ tx, ctx, model: "invitationCampaign", id: c.id, version, data: { status: "CANCELLED" }, entityType: "CAMPAIGN" });
     await cancelPendingApprovalsTx(tx, ctx, { entityType: "CAMPAIGN", entityId: c.id }, { reason: "campaign cancelled" });
     const r = await tx.messageJob.updateMany({ where: { invitation: { campaignId: c.id }, status: "QUEUED" }, data: { status: "CANCELLED" } });
     await audit(tx, ctx, { action: "campaign.cancel", entityType: "CAMPAIGN", entityId: c.id, projectId: c.projectId, summary: `${r.count} queued messages cancelled`, before: { status: c.status }, after: { status: "CANCELLED" } });
   });
+}
+
+// ── Stalled sends: manual actions (BUSINESS_RULES §7.2) ─────────────────────
+
+/** "Resume sending" for a SENDING campaign whose dispatch stopped (also after the automatic attempts ran out). */
+export async function resumeCampaignSend(ctx: ServiceContext, campaignId: string) {
+  assertCan(ctx, "campaign.send");
+  const ok = await withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
+    const { c, scope } = await loadCampaign(tx, ctx, campaignId, "write");
+    if (c.status !== "SENDING") throw new ValidationError("errors.invalidTransition");
+    const state = campaignSendState(c, scope.project.status);
+    if (!state.paused && !state.stalled) return false; // a live dispatch holds it: nothing to do
+    await audit(tx, ctx, { action: "campaign.resume", entityType: "CAMPAIGN", entityId: c.id, projectId: c.projectId, summary: c.name, meta: { attempts: c.dispatchAttempts } });
+    return true;
+  });
+  if (!ok) return { resumed: false };
+  const { dispatchCampaign } = await import("./sender");
+  const r = await dispatchCampaign(ctx.orgId, ctx.userId, campaignId);
+  return { resumed: r.claimed };
+}
+
+/**
+ * "Cancel remaining sends": queued messages and invitations not yet sent become CANCELLED; what was
+ * sent stays sent and the campaign goes on (ACTIVE), or is CANCELLED when nothing went out.
+ */
+export async function cancelRemainingSends(ctx: ServiceContext, campaignId: string, version?: number) {
+  assertCan(ctx, "campaign.send");
+  return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
+    const { c } = await loadCampaign(tx, ctx, campaignId, "write");
+    await assertVersion(tx, { model: "invitationCampaign", id: c.id, version, stored: c.version, entityType: "CAMPAIGN", data: { status: "ACTIVE" } });
+    if (c.status !== "SENDING") throw new ValidationError("errors.invalidTransition");
+    const jobs = await tx.messageJob.findMany({ where: { invitation: { campaignId: c.id }, status: "QUEUED" }, select: { id: true, invitationId: true } });
+    await tx.messageJob.updateMany({ where: { id: { in: jobs.map((j) => j.id) }, status: "QUEUED" }, data: { status: "CANCELLED" } });
+    const invIds = jobs.map((j) => j.invitationId).filter((x): x is string => !!x);
+    await tx.digitalInvitation.updateMany({ where: { OR: [{ id: { in: invIds } }, { campaignId: c.id, status: "QUEUED", messages: { none: {} } }] }, data: { status: "CANCELLED" } });
+    const sent = await tx.messageJob.count({ where: { invitation: { campaignId: c.id }, status: { in: ["SENDING", "SENT", "DELIVERED", "READ", "FAILED"] } } });
+    const next = sent ? "ACTIVE" : "CANCELLED";
+    await casUpdate<InvitationCampaign>({ tx, ctx, model: "invitationCampaign", id: c.id, version, data: { status: next, dispatchLeaseUntil: null }, entityType: "CAMPAIGN" });
+    await audit(tx, ctx, { action: "campaign.cancel_remaining", entityType: "CAMPAIGN", entityId: c.id, projectId: c.projectId, summary: `${jobs.length} queued messages cancelled`, before: { status: c.status }, after: { status: next } });
+    return { cancelled: jobs.length, status: next };
+  });
+}
+
+/** Manual review of a message whose outcome is unknown (§7.2 rule 3): re-send that one message. */
+export async function resendMessage(ctx: ServiceContext, input: { campaignId: string; invitationId: string }) {
+  assertCan(ctx, "campaign.send");
+  const jobId = await withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
+    const { c } = await loadCampaign(tx, ctx, input.campaignId, "write");
+    const job = await tx.messageJob.findFirst({ where: { invitationId: input.invitationId, invitation: { campaignId: c.id }, status: "FAILED", lastError: "outcome_unknown" } });
+    if (!job) throw new NotFoundError();
+    await tx.messageJob.updateMany({ where: { id: job.id, status: "FAILED" }, data: { status: "QUEUED", lastError: null, maxAttempts: job.attempts + 1 } });
+    await tx.digitalInvitation.update({ where: { id: input.invitationId }, data: { status: "QUEUED" } });
+    await audit(tx, ctx, { action: "message.resend", entityType: "CAMPAIGN", entityId: c.id, projectId: c.projectId, summary: job.id, meta: { reason: "outcome_unknown" } });
+    return job.id;
+  });
+  await enqueue("message.send", { orgId: ctx.orgId, messageJobId: jobId }, { jobId: `msg-${jobId}-resend-${Date.now()}`, attempts: 1 });
+  return { resent: true };
 }
 
 // ── Queries ─────────────────────────────────────────────────────────────────
@@ -256,7 +326,9 @@ export async function getDigitalCampaign(ctx: ServiceContext, campaignId: string
     const mask = (v: string) => (scope.vip ? v : v.includes("@") ? v.replace(/^(.).*(@.*)$/, "$1•••$2") : `•••${v.slice(-4)}`);
     return {
       campaign: c,
-      scope: { vip: scope.vip, manage: can(ctx, "campaign.manage"), approve: can(ctx, "campaign.approve"), send: can(ctx, "campaign.send"), export: scope.export },
+      /** stalled / paused / late send (BUSINESS_RULES §7.2, UX note 8) */
+      send: campaignSendState(c, scope.project.status),
+      scope: { vip: scope.vip, manage: can(ctx, "campaign.manage") && !scope.archived, approve: can(ctx, "campaign.approve"), send: can(ctx, "campaign.send") && !scope.archived, export: scope.export },
       providerMode: provider?.mode === "LIVE" && live ? "LIVE" : "SIMULATION",
       simulatedMessages: simulated,
       event: event ? { id: event.id, name: event.name, startsAt: event.startsAt } : null,
@@ -311,11 +383,23 @@ export async function getRsvpPage(token: string) {
       tx.invitationCampaign.findUniqueOrThrow({ where: { id: inv.campaignId } }),
       tx.organization.findUniqueOrThrow({ where: { id: pt.organizationId }, select: { name: true, nameEn: true, brandColor: true } }),
     ]);
+    // §1.3: the invitation of a cancelled project (or a cancelled campaign) is no longer active. The page
+    // says only that: no event details, no entry code, no responses
+    if (await invitationInactive(tx, c)) {
+      return { org, recipient: r, campaign: { name: null, qrEnabled: false, rsvpEnabled: false, deadline: null }, event: null, rsvpStatus: null, qrCode: null, closed: true, inactive: true, suppressed: inv.status === "SUPPRESSED" };
+    }
     const event = c.eventId ? await tx.event.findUnique({ where: { id: c.eventId } }) : await tx.event.findFirst({ where: { projectId: c.projectId }, orderBy: { startsAt: "asc" } });
     const venue = event?.venueId ? await tx.venue.findUnique({ where: { id: event.venueId }, select: { name: true, city: true } }) : null;
     const closed = !!(c.rsvpDeadline && c.rsvpDeadline < new Date()) || c.status === "CANCELLED";
-    return { org, recipient: r, campaign: { name: c.name, qrEnabled: c.qrEnabled, rsvpEnabled: c.rsvpEnabled, deadline: c.rsvpDeadline }, event: event ? { name: event.name, startsAt: event.startsAt, venue } : null, rsvpStatus: inv.rsvpStatus, qrCode: inv.rsvpStatus === "ATTENDING" ? inv.qrCode : null, closed, suppressed: inv.status === "SUPPRESSED" };
+    return { org, recipient: r, campaign: { name: c.name as string | null, qrEnabled: c.qrEnabled, rsvpEnabled: c.rsvpEnabled, deadline: c.rsvpDeadline }, event: event ? { name: event.name, startsAt: event.startsAt, venue } : null, rsvpStatus: inv.rsvpStatus, qrCode: inv.rsvpStatus === "ATTENDING" ? inv.qrCode : null, closed, inactive: false, suppressed: inv.status === "SUPPRESSED" };
   });
+}
+
+/** A cancelled campaign, or any campaign of a cancelled project, takes no more responses or check-ins. */
+async function invitationInactive(tx: Tx, c: Pick<InvitationCampaign, "status" | "projectId">) {
+  if (c.status === "CANCELLED") return true;
+  const p = await tx.project.findUnique({ where: { id: c.projectId }, select: { status: true } });
+  return !p || p.status === "CANCELLED";
 }
 
 export const rsvpSchema = z.object({ token: z.string().min(10).max(100), response: z.enum(["ATTENDING", "DECLINED", "MAYBE"]), guestsCount: z.coerce.number().int().min(1).max(10).default(1), note: z.string().trim().max(500).nullish() });
@@ -328,7 +412,7 @@ export async function submitRsvp(input: z.output<typeof rsvpSchema>, ip: string 
     const inv = await tx.digitalInvitation.findUnique({ where: { id: pt.refId } });
     if (!inv) throw new NotFoundError("errors.tokenInvalid");
     const c = await tx.invitationCampaign.findUniqueOrThrow({ where: { id: inv.campaignId } });
-    if (!c.rsvpEnabled || c.status === "CANCELLED" || (c.rsvpDeadline && c.rsvpDeadline < new Date())) throw new ValidationError("errors.tokenInvalid");
+    if (!c.rsvpEnabled || (await invitationInactive(tx, c)) || (c.rsvpDeadline && c.rsvpDeadline < new Date())) throw new ValidationError("errors.tokenInvalid");
     await tx.rSVP.create({ data: { organizationId: pt.organizationId, invitationId: inv.id, response: input.response, guestsCount: input.guestsCount, note: input.note ?? null, ip } });
     await tx.digitalInvitation.update({ where: { id: inv.id }, data: { rsvpStatus: input.response, respondedAt: new Date(), qrCode: input.response === "ATTENDING" && c.qrEnabled && !inv.qrCode ? `QR-${shortCode(10)}` : inv.qrCode } });
     await tx.auditEvent.create({ data: { organizationId: pt.organizationId, actorName: "RSVP", action: "rsvp.submit", entityType: "DIGITAL_INVITATION", entityId: inv.id, projectId: inv.projectId, summary: input.response, ip } });
@@ -358,7 +442,7 @@ export async function optOut(token: string, ip: string | null) {
 export async function checkIn(ctx: ServiceContext, input: { campaignId: string; code: string }) {
   if (!can(ctx, "event.manage") && !can(ctx, "campaign.manage")) throw new ForbiddenError();
   return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
-    const { c } = await loadCampaign(tx, ctx, input.campaignId);
+    const { c } = await loadCampaign(tx, ctx, input.campaignId, "write");
     const inv = await tx.digitalInvitation.findFirst({ where: { campaignId: c.id, qrCode: input.code.trim().toUpperCase() } });
     if (!inv) throw new NotFoundError();
     const r = await tx.recipient.findUnique({ where: { id: inv.recipientId }, select: { nameAr: true, nameEn: true, honorific: true, vipTier: true } });
@@ -366,7 +450,7 @@ export async function checkIn(ctx: ServiceContext, input: { campaignId: string; 
     const at = new Date();
     await tx.digitalInvitation.update({ where: { id: inv.id }, data: { checkedInAt: at } });
     const guest = await tx.guest.findFirst({ where: { recipientId: inv.recipientId, projectId: c.projectId } });
-    if (guest) await tx.guest.update({ where: { id: guest.id }, data: { attendance: "ARRIVED" } });
+    if (guest) await tx.guest.update({ where: { id: guest.id }, data: { attendance: "ARRIVED", version: { increment: 1 } } });
     await audit(tx, ctx, { action: "checkin.scan", entityType: "DIGITAL_INVITATION", entityId: inv.id, projectId: c.projectId });
     return { already: false, checkedInAt: at, rsvp: inv.rsvpStatus, recipient: r };
   });

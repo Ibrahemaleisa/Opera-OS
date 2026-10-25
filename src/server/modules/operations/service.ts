@@ -2,7 +2,9 @@ import type { Prisma } from "@/generated/prisma/client";
 import type { ServiceContext } from "@/server/authz/context";
 import { can, computeProjectScope, projectVisibilityWhere, type ProjectScope } from "@/server/authz/policy";
 import { withTenant, type Tx } from "@/server/db/tenant";
-import { listApprovalsAwaitingDecision } from "@/server/modules/approvals/service";
+import { approvalsWithoutApprover, listApprovalsAwaitingDecision } from "@/server/modules/approvals/service";
+import { campaignSendState } from "@/server/modules/digital/send-state";
+import { importLeaseState } from "@/server/modules/delivery/imports/service";
 import { loadFinanceSummaries } from "@/server/modules/finance/forecast";
 import { loadProjectHealth, type ProjectHealth } from "@/server/modules/projects/health";
 import { riyadhDayStart } from "@/lib/format";
@@ -78,14 +80,22 @@ function visibleTasks(ctx: ServiceContext, projects: ScopedProject[]): Prisma.Ta
 
 // ── Board ──────────────────────────────────────────────────────────────────
 
-export type ExceptionKind = "incident" | "overdueTask" | "approvalOverdue" | "readiness" | "deliveryLate" | "deliveryFailed" | "blockedTask" | "unownedTask" | "milestone" | "overContract" | "overPlan";
-export const EXCEPTION_ORDER: ExceptionKind[] = ["incident", "overdueTask", "approvalOverdue", "readiness", "deliveryLate", "deliveryFailed", "blockedTask", "unownedTask", "milestone", "overContract", "overPlan"];
+export type ExceptionKind =
+  | "incident" | "overdueTask" | "approvalOverdue" | "readiness" | "deliveryLate" | "deliveryFailed" | "blockedTask" | "unownedTask" | "milestone" | "overContract" | "overPlan"
+  // Milestone 2 stewardship rows (BUSINESS_RULES §1.3, §1.6, §2.2, §4.3)
+  | "noApprover" | "selfApproved" | "unownedAfterDeparture" | "pmChanged" | "onHold" | "openCommitment" | "stalledWork";
+export const EXCEPTION_ORDER: ExceptionKind[] = ["incident", "overdueTask", "approvalOverdue", "noApprover", "readiness", "deliveryLate", "deliveryFailed", "stalledWork", "blockedTask", "unownedAfterDeparture", "unownedTask", "milestone", "pmChanged", "onHold", "overContract", "overPlan", "openCommitment", "selfApproved"];
 export type ExceptionAction = "open" | "assign" | "review" | "acknowledge" | "dispatch" | "chase" | "prepare";
 export type ExceptionGroupKey = "tasks" | "decisions" | "events" | "delivery" | "money";
 export const EXCEPTION_GROUP: Record<ExceptionKind, ExceptionGroupKey> = {
   incident: "events", readiness: "events", overdueTask: "tasks", blockedTask: "tasks", unownedTask: "tasks", milestone: "tasks",
   approvalOverdue: "decisions", deliveryLate: "delivery", deliveryFailed: "delivery", overContract: "money", overPlan: "money",
+  noApprover: "decisions", selfApproved: "decisions", unownedAfterDeparture: "tasks", pmChanged: "tasks", onHold: "tasks", openCommitment: "money", stalledWork: "delivery",
 };
+
+/** Self-approvals stay visible this long (§4.3); a PM change this long (§2.2 HO rule 6). */
+const SELF_APPROVED_DAYS = 30;
+const PM_CHANGED_DAYS = 7;
 
 export interface ExceptionRow {
   kind: ExceptionKind;
@@ -254,7 +264,121 @@ async function loadExceptions(tx: Tx, ctx: ServiceContext, projects: ScopedProje
     tone: "warning", meta: { overrun: f.totals.forecast - f.totals.planned }, href: `/projects/${f.projectId}/finance`, action: "open",
   })));
 
+  for (const g of await loadStewardship(tx, ctx, projects, now)) push(g.kind, g.count, g.rows);
+
   return EXCEPTION_ORDER.map((k) => groups.find((g) => g.kind === k)).filter((g): g is ExceptionGroup => !!g);
+}
+
+/**
+ * Milestone 2 rows: approvals nobody can decide, self-approvals under the exception (owners and
+ * directors), work left unowned after a departure, PM changes, projects on hold, and open
+ * commitments in archived projects (finance scope only).
+ */
+async function loadStewardship(tx: Tx, ctx: ServiceContext, projects: ScopedProject[], now: Date): Promise<ExceptionGroup[]> {
+  const ids = projects.map((p) => p.id);
+  const leader = ctx.role === "OWNER" || ctx.role === "OPS_DIRECTOR";
+  const out: ExceptionGroup[] = [];
+  const pmap = new Map(projects.map((p) => [p.id, p]));
+  const proj = (id: string) => {
+    const p = pmap.get(id);
+    return p ? { id: p.id, code: p.code, name: p.name } : null;
+  };
+
+  // approvals with no eligible approver (H4, §4.3 after the exception lapses)
+  const pending = ids.length ? await tx.approval.findMany({ where: { projectId: { in: ids }, status: "PENDING", approverUserId: null }, take: 300 }) : [];
+  if (pending.length) {
+    const full = await tx.project.findMany({ where: { id: { in: [...new Set(pending.map((a) => a.projectId))] } } });
+    const stuck = await approvalsWithoutApprover(tx, ctx.orgId, pending, full);
+    const finance = new Set(projects.filter((p) => p.scope.finance).map((p) => p.id));
+    const rows = pending.filter((a) => stuck.has(a.id) && (finance.has(a.projectId) || !["PURCHASE_ORDER", "EXPENSE", "CHANGE_ORDER"].includes(a.entityType)));
+    if (rows.length) out.push({ kind: "noApprover", count: rows.length, rows: rows.map((a) => ({ kind: "noApprover", id: a.id, title: a.title, project: proj(a.projectId)!, owner: null, ownerExpected: true, at: a.createdAt, tone: "warning", meta: { entityType: a.entityType }, href: `/projects/${a.projectId}/approvals`, action: "review" })) });
+  }
+
+  // self-approvals under the exception, for owners and directors (30 days)
+  if (leader) {
+    const since = new Date(now.getTime() - SELF_APPROVED_DAYS * C.DAY_MS);
+    const self = await tx.approval.findMany({ where: { policyException: true, decidedAt: { gte: since } }, orderBy: { decidedAt: "desc" }, take: LIST_CAP });
+    if (self.length) {
+      const [ps, us] = await Promise.all([
+        tx.project.findMany({ where: { id: { in: [...new Set(self.map((a) => a.projectId))] } }, select: { id: true, code: true, name: true, nameEn: true } }),
+        tx.user.findMany({ where: { id: { in: [...new Set(self.map((a) => a.decidedById).filter((x): x is string => !!x))] } }, select: { id: true, name: true, nameAr: true } }),
+      ]);
+      out.push({
+        kind: "selfApproved", count: self.length,
+        rows: self.map((a) => {
+          const p = ps.find((x) => x.id === a.projectId)!;
+          return { kind: "selfApproved" as const, id: a.id, title: a.title, project: { id: p.id, code: p.code, name: (ctx.locale === "en" && p.nameEn) || p.name }, owner: personName(ctx, us.find((u) => u.id === a.decidedById)), ownerExpected: false, at: a.decidedAt, tone: "neutral" as const, meta: { justification: a.policyExceptionReason ?? null, entityType: a.entityType }, href: `/projects/${a.projectId}/approvals`, action: "review" as const };
+        }),
+      });
+    }
+  }
+
+  // open tasks left unowned by a departure (HO-4), with the departed person's name
+  if (ids.length) {
+    const left = await tx.taskAssignmentHistory.findMany({ where: { reason: "handover", toUserId: null, task: { projectId: { in: ids }, ownerId: null, statusCategory: C.OPEN_TASK_CATEGORIES } }, include: { task: { select: { id: true, number: true, title: true, projectId: true, dueAt: true } } }, orderBy: { createdAt: "desc" }, take: LIST_CAP });
+    const seen = new Set<string>();
+    const rows = left.filter((h) => !seen.has(h.taskId) && seen.add(h.taskId));
+    if (rows.length) {
+      const people = await tx.user.findMany({ where: { id: { in: [...new Set(rows.map((r) => r.fromUserId).filter((x): x is string => !!x))] } }, select: { id: true, name: true, nameAr: true } });
+      out.push({ kind: "unownedAfterDeparture", count: rows.length, rows: rows.map((h) => ({ kind: "unownedAfterDeparture" as const, id: h.task.id, title: h.task.title, project: proj(h.task.projectId)!, owner: null, ownerExpected: true, at: h.task.dueAt, tone: "warning" as const, meta: { number: h.task.number, departed: personName(ctx, people.find((u) => u.id === h.fromUserId)) }, href: `/tasks/${h.task.id}`, action: "assign" as const })) });
+    }
+    // the PM changed by a handover in the last 7 days
+    const changes = await tx.auditEvent.findMany({ where: { projectId: { in: ids }, action: { in: ["project.member_add", "project.member_update"] }, createdAt: { gte: new Date(now.getTime() - PM_CHANGED_DAYS * C.DAY_MS) }, meta: { path: ["cause"], equals: "handover" }, after: { path: ["role"], equals: "MANAGER" } }, orderBy: { createdAt: "desc" } });
+    const byProject = [...new Map(changes.map((c) => [c.projectId!, c])).values()];
+    if (byProject.length) out.push({ kind: "pmChanged", count: byProject.length, rows: byProject.map((c) => ({ kind: "pmChanged" as const, id: c.projectId!, title: proj(c.projectId!)!.name, project: proj(c.projectId!)!, owner: null, ownerExpected: false, at: c.createdAt, tone: "neutral" as const, meta: {}, href: `/projects/${c.projectId}`, action: "open" as const })) });
+  }
+
+  // stalled imports and sends (§7.1, §7.2): one row for owners and directors, linking to System health
+  if (leader) {
+    const now2 = now;
+    const [campaigns, imports] = await Promise.all([
+      tx.invitationCampaign.findMany({ where: { status: { in: ["SCHEDULED", "SENDING"] } }, select: { status: true, scheduledAt: true, dispatchLeaseUntil: true, dispatchAttempts: true, updatedAt: true, projectId: true } }),
+      tx.importBatch.findMany({ where: { status: { in: ["VALIDATING", "COMMITTING"] } }, select: { status: true, leaseUntil: true, updatedAt: true, attempts: true } }),
+    ]);
+    const statuses = campaigns.length ? new Map((await tx.project.findMany({ where: { id: { in: [...new Set(campaigns.map((c) => c.projectId))] } }, select: { id: true, status: true } })).map((p) => [p.id, p.status])) : new Map<string, string>();
+    const sends = campaigns.filter((c) => {
+      const st = campaignSendState(c, statuses.get(c.projectId) ?? "ACTIVE", now2);
+      return st.late || st.stalled || st.paused;
+    }).length;
+    const stalledImports = imports.filter((b) => importLeaseState(b, now2).paused).length;
+    const n = sends + stalledImports;
+    if (n) out.push({ kind: "stalledWork", count: n, rows: [{ kind: "stalledWork", id: "stalled", title: "", project: { id: "", code: "", name: "" }, owner: null, ownerExpected: false, at: null, count: n, tone: "warning", meta: { sends, imports: stalledImports }, href: "/settings/health", action: "open" }] });
+  }
+
+  // projects on hold, with their reason (§1.6: listed, no exceptions raised for them)
+  const held = await tx.project.findMany({ where: { ...projectVisibilityWhere(ctx), status: "ON_HOLD" }, select: { id: true, code: true, name: true, nameEn: true, statusReason: true, statusChangedAt: true }, take: LIST_CAP });
+  if (held.length) out.push({ kind: "onHold", count: held.length, rows: held.map((p) => ({ kind: "onHold" as const, id: p.id, title: (ctx.locale === "en" && p.nameEn) || p.name, project: { id: p.id, code: p.code, name: (ctx.locale === "en" && p.nameEn) || p.name }, owner: null, ownerExpected: false, at: p.statusChangedAt, tone: "neutral" as const, meta: { reason: p.statusReason ?? null }, href: `/projects/${p.id}`, action: "open" as const })) });
+
+  // open commitments in archived projects (§1.3 "listed", §1.4 G5–G7), finance scope only
+  if (can(ctx, "finance.view")) {
+    const archived = await tx.project.findMany({ where: { ...projectVisibilityWhere(ctx), status: { in: ["CLOSED", "CANCELLED"] } }, include: { members: { where: { userId: ctx.userId } } }, take: 500 });
+    const finance = archived.filter((p) => {
+      try {
+        return computeProjectScope(ctx, p, p.members[0] ?? null).finance;
+      } catch {
+        return false;
+      }
+    });
+    if (finance.length) {
+      const fids = finance.map((p) => p.id);
+      const [pos, exps, wos] = await Promise.all([
+        tx.purchaseOrder.groupBy({ by: ["projectId"], where: { projectId: { in: fids }, status: { in: ["APPROVED", "ISSUED", "PARTIALLY_RECEIVED"] } }, _count: true, _sum: { amount: true, vatAmount: true } }),
+        tx.expense.groupBy({ by: ["projectId"], where: { projectId: { in: fids }, status: "SUBMITTED" }, _count: true }),
+        tx.workOrder.groupBy({ by: ["projectId"], where: { projectId: { in: fids }, status: { in: ["ISSUED", "ACCEPTED", "IN_PROGRESS", "DELIVERED"] } }, _count: true }),
+      ]);
+      const rows = finance.flatMap((p) => {
+        const po = pos.find((x) => x.projectId === p.id);
+        const ex = exps.find((x) => x.projectId === p.id)?._count ?? 0;
+        const wo = wos.find((x) => x.projectId === p.id)?._count ?? 0;
+        const n = (po?._count ?? 0) + ex + wo;
+        if (!n) return [];
+        const name = (ctx.locale === "en" && p.nameEn) || p.name;
+        return [{ kind: "openCommitment" as const, id: p.id, title: name, project: { id: p.id, code: p.code, name }, owner: null, ownerExpected: false, at: p.statusChangedAt, count: n, tone: "warning" as const, meta: { pos: po?._count ?? 0, amount: Number(po?._sum.amount ?? 0) + Number(po?._sum.vatAmount ?? 0), expenses: ex, workOrders: wo, status: p.status }, href: `/projects/${p.id}/finance`, action: "open" as const }];
+      });
+      if (rows.length) out.push({ kind: "openCommitment", count: rows.length, rows });
+    }
+  }
+  return out;
 }
 
 export interface NextEvent {

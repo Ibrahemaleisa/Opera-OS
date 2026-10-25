@@ -27,9 +27,9 @@ export function UploadImport({ orgSlug, projectId, campaigns, defaultCampaign }:
     try {
       const res = await fetch(`/api/o/${orgSlug}/imports`, { method: "POST", body: fd });
       // a proxy or size-limit rejection may not be JSON
-      const json = (await res.json().catch(() => ({ ok: false, error: res.status === 413 ? "errors.fileTooLarge" : "errors.unexpected" }))) as { ok: boolean; error?: string; data?: { batchId: string } };
+      const json = (await res.json().catch(() => ({ ok: false, error: res.status === 413 ? "errors.fileTooLarge" : "errors.unexpected" }))) as { ok: boolean; error?: string; fieldErrors?: Record<string, string[]>; data?: { batchId: string } };
       if (json.ok && json.data) router.push(`/o/${orgSlug}/projects/${projectId}/delivery/imports/${json.data.batchId}`);
-      else toast.error(tk(json.error ?? "errors.unexpected"));
+      else toast.error(tk(json.error ?? "errors.unexpected", { max: json.fieldErrors?.max?.[0] }));
     } catch {
       // network failure: keep the chosen file so the user can retry
       toast.error(tk("common.net.unreachable"));

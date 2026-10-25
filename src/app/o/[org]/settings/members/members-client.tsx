@@ -21,6 +21,8 @@ import { TimeAgo } from "@/components/app/time-ago";
 import { ConfirmAction } from "@/components/app/confirm-action";
 import { interpolate } from "@/lib/i18n";
 import { changeRoleAction, inviteMemberAction, revokeInvitationAction, saveRoleAction, setMemberStatusAction } from "../actions";
+import { handoverPreviewAction } from "./actions";
+import { HandoverDialog, holdsAnything, type Candidate } from "./handover-dialog";
 
 interface Member { id: string; userId: string; name: string; nameEn: string; email: string; status: string; roleId: string; baseRole: string; lastLoginAt: string | null; clientId: string | null; vendorId: string | null }
 interface Role { id: string; key: string; nameAr: string; nameEn: string; baseRole: string; isSystem: boolean; permissions: string[] }
@@ -52,10 +54,25 @@ export function MembersClient(p: Props) {
   // suspend / revoke are confirmed first; focus goes back to the row's actions button afterwards
   const [statusAsk, setStatusAsk] = useState<{ member: Member; status: "SUSPENDED" | "REVOKED" } | null>(null);
   const askedFor = useRef<string | null>(null);
-  const ask = (member: Member, status: "SUSPENDED" | "REVOKED") => {
+  // someone who holds work leaves through the handover dialog (§2); with nothing held, a plain confirmation
+  const preview = useAction(handoverPreviewAction, { orgSlug: p.orgSlug, success: false, refresh: false });
+  const [handover, setHandover] = useState<{ member: Member; status: "SUSPENDED" | "REVOKED"; preview: Awaited<ReturnType<typeof handoverPreviewAction>> & { ok: true } } | null>(null);
+  const ask = async (member: Member, status: "SUSPENDED" | "REVOKED") => {
     askedFor.current = member.id;
+    if (member.status === "ACTIVE") {
+      const r = await preview.run({ membershipId: member.id });
+      if (!r.ok) return;
+      if (holdsAnything(r.data)) return setHandover({ member, status, preview: r });
+    }
     setStatusAsk({ member, status });
   };
+  const candidatesFor = (departing: string): Candidate[] =>
+    p.members
+      .filter((x) => x.status === "ACTIVE" && x.id !== departing && !["CLIENT", "CLIENT_APPROVER", "VENDOR", "FIELD_AGENT"].includes(x.baseRole))
+      .map((x) => {
+        const role = p.roles.find((r) => r.id === x.roleId);
+        return { userId: x.userId, name: locale === "ar" ? x.name : x.nameEn, roleName: roleName(x.roleId), canManageProjects: !!role && (role.permissions.includes("project.manage") || role.permissions.includes("*")) };
+      });
 
   const columns = useMemo<ColumnDef<Member, unknown>[]>(
     () => [
@@ -103,11 +120,11 @@ export function MembersClient(p: Props) {
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
                 {row.original.status === "ACTIVE" ? (
-                  <DropdownMenuItem onSelect={() => ask(row.original, "SUSPENDED")}>{m.org.suspend}</DropdownMenuItem>
-                ) : (
+                  <DropdownMenuItem onSelect={() => void ask(row.original, "SUSPENDED")} data-testid="member-suspend">{m.org.suspend}</DropdownMenuItem>
+                ) : row.original.status === "SUSPENDED" ? (
                   <DropdownMenuItem onSelect={() => setStatus.run({ membershipId: row.original.id, status: "ACTIVE" })}>{m.org.activate}</DropdownMenuItem>
-                )}
-                <DropdownMenuItem variant="destructive" onSelect={() => ask(row.original, "REVOKED")}>{m.org.revokeAccess}</DropdownMenuItem>
+                ) : null}
+                {row.original.status !== "REVOKED" && <DropdownMenuItem variant="destructive" onSelect={() => void ask(row.original, "REVOKED")} data-testid="member-revoke">{m.org.revokeAccess}</DropdownMenuItem>}
               </DropdownMenuContent>
             </DropdownMenu>
           ) : null,
@@ -136,6 +153,23 @@ export function MembersClient(p: Props) {
         onConfirm={() => (statusAsk ? setStatus.run({ membershipId: statusAsk.member.id, status: statusAsk.status }) : undefined)}
         testId="member-status-confirm"
       />
+      {handover && (
+        <HandoverDialog
+          orgSlug={p.orgSlug}
+          membershipId={handover.member.id}
+          roleName={roleName(handover.member.roleId)}
+          status={handover.status}
+          candidates={candidatesFor(handover.member.id)}
+          initial={handover.preview.data}
+          open
+          onOpenChange={(o) => {
+            if (!o) {
+              setHandover(null);
+              document.querySelector<HTMLElement>(`[data-member-actions="${askedFor.current}"]`)?.focus();
+            }
+          }}
+        />
+      )}
 
       {p.invitations.length > 0 && (
         <Section title={`${m.org.pendingInvites} (${p.invitations.length})`}>

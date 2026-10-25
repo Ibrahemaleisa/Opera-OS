@@ -1,11 +1,12 @@
 import { z } from "zod";
 import type { Booth, BoothStage } from "@/generated/prisma/client";
 import type { ServiceContext } from "@/server/authz/context";
-import { assertCan, can, projectScope, projectVisibilityWhere, type ProjectScope } from "@/server/authz/policy";
+import { assertCan, assertNotArchived, can, projectScope, projectVisibilityWhere, type ProjectScope } from "@/server/authz/policy";
 import { withTenant, type Tx } from "@/server/db/tenant";
 import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/server/errors";
 import { audit } from "@/server/modules/audit/audit";
 import { requestApprovalTx } from "@/server/modules/approvals/service";
+import { assertVersion, casUpdate, versionField } from "@/server/concurrency";
 
 export const STAGES: BoothStage[] = ["BRIEF", "DESIGN", "CLIENT_APPROVAL", "PROCUREMENT", "FABRICATION", "LOGISTICS", "INSTALLATION", "INSPECTION", "HANDOVER", "LIVE", "DISMANTLING", "CLOSED"];
 export const BOQ_CATEGORIES = ["STRUCTURE", "FINISHES", "AV", "LIGHTING", "GRAPHICS", "FURNITURE", "FABRICATION", "LOGISTICS"] as const;
@@ -20,6 +21,7 @@ const money = z.coerce.number().min(0).max(1e11);
 
 export const boothSchema = z.object({
   id: z.string().optional(),
+  version: versionField,
   projectId: z.string(),
   name: z.string().trim().min(2).max(200),
   kind: z.enum(["BOOTH", "PAVILION"]).default("BOOTH"),
@@ -68,6 +70,7 @@ async function loadBooth(tx: Tx, ctx: ServiceContext, boothId: string): Promise<
 async function editableBooth(tx: Tx, ctx: ServiceContext, boothId: string) {
   assertCan(ctx, "booth.manage");
   const r = await loadBooth(tx, ctx, boothId);
+  assertNotArchived(r.scope); // LC rule 5: booths are read-only in archived projects
   if (!r.scope.operate) throw new ForbiddenError();
   return r;
 }
@@ -191,12 +194,14 @@ export async function saveBooth(ctx: ServiceContext, input: z.output<typeof boot
   assertDateOrder(input);
   return withTenant(scoped(ctx), async (tx) => {
     const scope = await projectScope(tx, ctx, input.projectId);
+    assertNotArchived(scope);
     if (!scope.operate || scope.clientView) throw new ForbiddenError();
-    const { id, projectId, ...data } = input;
+    const { id, projectId, version, ...data } = input;
     if (id) {
       const existing = await tx.booth.findFirst({ where: { id, projectId } });
       if (!existing) throw new NotFoundError();
-      const b = await tx.booth.update({ where: { id }, data });
+      // CE-1..3: the update carries the version the form loaded
+      const b = await casUpdate<Booth>({ tx, ctx, model: "booth", id, version, data, entityType: "BOOTH" });
       await audit(tx, ctx, { action: "booth.update", entityType: "BOOTH", entityId: id, projectId, summary: b.name, before: { permitStatus: existing.permitStatus }, after: { permitStatus: b.permitStatus } });
       return b;
     }
@@ -211,9 +216,10 @@ export async function saveBooth(ctx: ServiceContext, input: z.output<typeof boot
  * Moves a booth through production. Forward moves must pass every gate up to the target;
  * moving backwards is allowed (e.g. a failed inspection sends work back) and is audited with a reason.
  */
-export async function setBoothStage(ctx: ServiceContext, input: { boothId: string; stage: BoothStage; reason?: string | null }) {
+export async function setBoothStage(ctx: ServiceContext, input: { boothId: string; stage: BoothStage; reason?: string | null; version?: number }) {
   return withTenant(scoped(ctx), async (tx) => {
     const { booth } = await editableBooth(tx, ctx, input.boothId);
+    await assertVersion(tx, { model: "booth", id: booth.id, version: input.version, stored: booth.version, entityType: "BOOTH", data: { stage: input.stage } });
     const from = STAGES.indexOf(booth.stage);
     const to = STAGES.indexOf(input.stage);
     if (to === from) return booth;
@@ -223,10 +229,9 @@ export async function setBoothStage(ctx: ServiceContext, input: { boothId: strin
     } else if (!input.reason?.trim()) {
       throw new ValidationError("errors.validation", { reason: ["booths.reasonRequired"] });
     }
-    const r = await tx.booth.updateMany({ where: { id: booth.id, stage: booth.stage }, data: { stage: input.stage } });
-    if (!r.count) throw new ConflictError();
+    const b = await casUpdate<Booth>({ tx, ctx, model: "booth", id: booth.id, version: input.version, data: { stage: input.stage }, entityType: "BOOTH" });
     await audit(tx, ctx, { action: "booth.stage", entityType: "BOOTH", entityId: booth.id, projectId: booth.projectId, summary: `${booth.stage} → ${input.stage}`, meta: { reason: input.reason ?? null } });
-    return tx.booth.findUniqueOrThrow({ where: { id: booth.id } });
+    return b;
   });
 }
 
@@ -236,7 +241,8 @@ export async function createRevision(ctx: ServiceContext, input: { boothId: stri
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`rev:${booth.id}`}))`;
     const last = await tx.designRevision.findFirst({ where: { boothId: booth.id }, orderBy: { revisionNo: "desc" } });
     const rev = await tx.designRevision.create({ data: { organizationId: ctx.orgId, boothId: booth.id, revisionNo: (last?.revisionNo ?? 0) + 1, title: input.title, notes: input.notes ?? null, createdById: ctx.userId } });
-    if (["BRIEF"].includes(booth.stage)) await tx.booth.update({ where: { id: booth.id }, data: { stage: "DESIGN" } });
+    // system step: bumps the version so an open booth form can't overwrite it (CE-5)
+    if (["BRIEF"].includes(booth.stage)) await tx.booth.update({ where: { id: booth.id }, data: { stage: "DESIGN", version: { increment: 1 } } });
     await audit(tx, ctx, { action: "revision.create", entityType: "DESIGN_REVISION", entityId: rev.id, projectId: booth.projectId, summary: `R${rev.revisionNo} ${rev.title}` });
     return rev;
   });
@@ -256,7 +262,7 @@ export async function submitRevision(ctx: ServiceContext, input: { revisionId: s
       await tx.attachment.updateMany({ where: { entityType: "REVISION", entityId: rev.id }, data: { clientVisible: true } });
     }
     const a = await requestApprovalTx(tx, ctx, { projectId: booth.projectId, entityType: "DESIGN_REVISION", entityId: rev.id, title: `${booth.name} — R${rev.revisionNo}: ${rev.title}`, description: rev.notes, approverType: input.approverType, approverUserId: input.approverUserId ?? null, dueAt: null });
-    await tx.booth.updateMany({ where: { id: booth.id, stage: { in: ["BRIEF", "DESIGN"] } }, data: { stage: "CLIENT_APPROVAL" } });
+    await tx.booth.updateMany({ where: { id: booth.id, stage: { in: ["BRIEF", "DESIGN"] } }, data: { stage: "CLIENT_APPROVAL", version: { increment: 1 } } });
     return a;
   });
 }
@@ -338,13 +344,14 @@ export async function setSnagStatus(ctx: ServiceContext, input: { id: string; st
 }
 
 /** Records the handover sign-off. All handover gates must be green. */
-export async function signHandover(ctx: ServiceContext, input: { boothId: string; signedBy: string }) {
+export async function signHandover(ctx: ServiceContext, input: { boothId: string; signedBy: string; version?: number }) {
   return withTenant(scoped(ctx), async (tx) => {
     const { booth } = await editableBooth(tx, ctx, input.boothId);
+    await assertVersion(tx, { model: "booth", id: booth.id, version: input.version, stored: booth.version, entityType: "BOOTH", data: { handoverSignedBy: input.signedBy } });
     const unmet = (await handoverReadiness(tx, booth)).filter((c) => !c.ok).map((c) => c.key);
     if (unmet.length) throw new ValidationError("booths.gateBlocked", { stage: unmet });
     if (booth.handoverSignedAt) throw new ConflictError();
-    const b = await tx.booth.update({ where: { id: booth.id }, data: { handoverSignedBy: input.signedBy, handoverSignedAt: new Date(), stage: STAGES.indexOf(booth.stage) < STAGES.indexOf("HANDOVER") ? "HANDOVER" : booth.stage } });
+    const b = await casUpdate<Booth>({ tx, ctx, model: "booth", id: booth.id, version: input.version, data: { handoverSignedBy: input.signedBy, handoverSignedAt: new Date(), stage: STAGES.indexOf(booth.stage) < STAGES.indexOf("HANDOVER") ? "HANDOVER" : booth.stage }, entityType: "BOOTH" });
     await audit(tx, ctx, { action: "booth.handover", entityType: "BOOTH", entityId: booth.id, projectId: booth.projectId, summary: `${booth.name} — ${input.signedBy}` });
     return b;
   });

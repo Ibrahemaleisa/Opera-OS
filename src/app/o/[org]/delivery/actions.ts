@@ -21,4 +21,5 @@ export const updateImportRowAction = orgAction(z.object({ batchId: z.string(), r
 export const resolveImportRowsAction = orgAction(z.object({ batchId: z.string(), rowIds: z.array(z.string()).optional(), scope: z.enum(["ALL_DUPLICATES", "ALL_INVALID"]).optional(), resolution: z.enum(["SKIP", "IMPORT_AS_NEW", "LINK_EXISTING", "PENDING"]) }), imp.resolveRows);
 export const commitImportAction = orgAction(imp.commitSchema, imp.commitImport);
 export const rollbackImportAction = orgAction(z.object({ batchId: z.string() }), (ctx, i) => imp.rollbackImport(ctx, i.batchId));
+export const resumeImportAction = orgAction(z.object({ batchId: z.string() }), (ctx, i) => imp.resumeImport(ctx, i.batchId));
 export const importStatusAction = orgAction(z.object({ batchId: z.string() }), (ctx, i) => imp.importStatus(ctx, i.batchId));

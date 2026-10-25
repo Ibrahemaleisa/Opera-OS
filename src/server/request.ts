@@ -6,8 +6,10 @@ import { loadServiceContext } from "@/server/authz/load-context";
 import type { ServiceContext } from "@/server/authz/context";
 import { can } from "@/server/authz/policy";
 import { homePathFor, isClientRole } from "@/server/authz/roles";
-import { UnauthenticatedError, NotFoundError } from "@/server/errors";
+import { ForbiddenError, UnauthenticatedError, NotFoundError } from "@/server/errors";
+import { mfaGateFor, type MfaGate } from "@/server/modules/auth/mfa-policy";
 
+// legacy identifier, kept so existing deployments and devices keep working (ARCHITECTURE.md §10): renaming signs everyone out
 export const SESSION_COOKIE = "operra_session";
 
 export const getSession = cache(async () => {
@@ -22,6 +24,19 @@ export async function requestMeta() {
   const ip = h.get("x-forwarded-for")?.split(",")[0]?.trim() || h.get("x-real-ip") || null;
   return { ip, userAgent: h.get("user-agent") };
 }
+
+/**
+ * The organisation's MFA requirement for the signed-in member (BUSINESS_RULES §5.2). After the grace
+ * period an un-enrolled privileged member is enrolment-only: pages redirect to the enrolment
+ * interstitial and actions/route handlers are refused. Fail-closed: a lookup error is an error, never
+ * a pass.
+ */
+export const getMfaGate = cache(async (orgSlug: string): Promise<MfaGate> => {
+  const session = await getSession();
+  const ctx = await getOrgContext(orgSlug);
+  if (!session || !ctx) return { state: "none" };
+  return mfaGateFor(ctx, session.user.mfaEnabledAt ?? null);
+});
 
 export const getOrgContext = cache(async (orgSlug: string): Promise<ServiceContext | null> => {
   const session = await getSession();
@@ -61,6 +76,7 @@ export async function requirePageContext(orgSlug: string, surface: Surface = "wo
   if (!session) redirect(`/login?next=${SURFACE_ROOT[surface]}/${encodeURIComponent(orgSlug)}`);
   const ctx = await getOrgContext(orgSlug);
   if (!ctx) notFound();
+  if ((await getMfaGate(orgSlug)).state === "enforced") redirect(`/mfa-setup?next=${encodeURIComponent(`${SURFACE_ROOT[surface]}/${orgSlug}`)}`);
   if (!fitsSurface(ctx, surface)) {
     const home = homePathFor(ctx.role, ctx.orgSlug);
     // a role whose home is this very surface but lacks its permission (custom role) must not loop
@@ -76,6 +92,7 @@ export async function requireActionContext(orgSlug: string): Promise<ServiceCont
   if (!session) throw new UnauthenticatedError();
   const ctx = await getOrgContext(orgSlug);
   if (!ctx) throw new NotFoundError();
+  if ((await getMfaGate(orgSlug)).state === "enforced") throw new ForbiddenError("auth.mfa.enrolmentRequired");
   return ctx;
 }
 

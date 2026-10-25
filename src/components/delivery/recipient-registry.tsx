@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useMemo, useRef, useState } from "react";
 import type { ColumnDef } from "@tanstack/react-table";
 import { Eye, ShieldOff } from "lucide-react";
 import { toast } from "sonner";
@@ -19,8 +20,10 @@ import { useI18n } from "@/lib/i18n/client";
 import type { listRecipients, MaskedRecipient } from "@/server/modules/delivery/service";
 import { anonymizeAction, generateDeliveriesAction, revealRecipientAction, updateRecipientAction } from "@/app/o/[org]/delivery/actions";
 import { ActionButton } from "@/components/app/action-button";
+import { ConflictNotice, type ConflictRow } from "@/components/app/conflict-notice";
 
 type Row = Awaited<ReturnType<typeof listRecipients>>["rows"][number];
+const CONTACT = ["mobile", "address", "mapsUrl", "deliveryInstructions"] as const;
 
 export function RecipientRegistry({ orgSlug, rows, vip, campaigns, projectId, canManage, showProject }: { orgSlug: string; rows: Row[]; vip: boolean; campaigns: { id: string; name: string }[]; projectId?: string; canManage: boolean; showProject?: boolean }) {
   const { m, fmt, tk } = useI18n();
@@ -31,7 +34,57 @@ export function RecipientRegistry({ orgSlug, rows, vip, campaigns, projectId, ca
   const gen = useAction(generateDeliveriesAction, { orgSlug, success: false, onSuccess: (d) => toast.success(interpolate(m.delivery.generated, d)) });
   const reveal = useAction(revealRecipientAction, { orgSlug, success: false, refresh: false, onSuccess: (d) => setRevealed((x) => ({ ...x, [d.id]: d })) });
   const anonymize = useAction(anonymizeAction, { orgSlug, success: false, onSuccess: (d) => { toast.success(interpolate(r.anonymized, { n: d.anonymized })); setAnon(null); } });
-  const save = useAction(updateRecipientAction, { orgSlug, onSuccess: () => setEdit(null) });
+  const save = useAction(updateRecipientAction, { orgSlug, onSuccess: () => setEdit(null), conflictUi: "inline" });
+  // edit conflicts (BUSINESS_RULES §6): the version to send, and stored values loaded by "Discard mine"
+  const router = useRouter();
+  const formRef = useRef<HTMLFormElement>(null);
+  const verRef = useRef<number | undefined>(undefined);
+  const [override, setOverride] = useState<Record<string, unknown>>({});
+  const [formKey, setFormKey] = useState(0);
+  const openEdit = (x: Row) => {
+    verRef.current = undefined;
+    setOverride({});
+    save.clearConflict();
+    setEdit(x);
+  };
+  const labels: Record<string, string> = {
+    nameAr: m.common.nameAr, nameEn: m.common.nameEn, honorific: m.common.title, jobTitle: m.org.jobTitle, organizationName: m.projects.client, vipTier: r.tier, city: m.common.city, district: m.common.district,
+    preferredWindow: m.delivery.field.window, mobile: m.common.phone, address: m.common.address, mapsUrl: m.org.mapsUrl, deliveryInstructions: m.delivery.field.instructions, priority: m.common.priority, verificationStatus: r.verification,
+  };
+  // edit conflict handlers (BUSINESS_RULES §6): compare, use theirs, save mine, discard mine
+  const conflictRows: ConflictRow[] = (() => {
+    if (!save.conflict) return [];
+    const current = save.conflict.current;
+    const mine = (save.conflictInput ?? {}) as Record<string, unknown>;
+    const shown = (v: unknown) => (v === null || v === undefined || v === "" ? m.common.conflict.empty : String(v));
+    return Object.keys(mine)
+      .filter((k) => k !== "id" && k !== "version" && k in current && String(current[k] ?? "") !== String(mine[k] ?? ""))
+      .map((k) => ({ name: k, label: labels[k] ?? k, theirs: shown(current[k]), yours: shown(mine[k]) }));
+  })();
+  const useTheirs = (k: string) => {
+    const el = formRef.current?.elements.namedItem(k);
+    if (el instanceof HTMLInputElement || el instanceof HTMLSelectElement) el.value = String(save.conflict?.current[k] ?? "");
+  };
+  const saveMine = () => {
+    const v = save.conflict?.current.version;
+    verRef.current = typeof v === "number" ? v : undefined;
+    save.clearConflict();
+    formRef.current?.requestSubmit();
+  };
+  const discardMine = () => {
+    const current = save.conflict?.current;
+    if (!current) return;
+    setOverride(Object.fromEntries(Object.entries(current).filter(([k]) => k !== "id" && k !== "version" && k !== "updatedAt")));
+    verRef.current = typeof current.version === "number" ? current.version : undefined;
+    setFormKey((n) => n + 1);
+    save.clearConflict();
+    router.refresh();
+  };
+  const loadedOf = (x: Row, k: string): unknown => {
+    if (k in override) return override[k];
+    const src = (CONTACT as readonly string[]).includes(k) ? (revealed[x.id] ?? x) : x;
+    return (src as unknown as Record<string, unknown>)[k];
+  };
   const columns = useMemo<ColumnDef<Row, unknown>[]>(() => [
     { accessorKey: "code", header: r.code, size: 90, cell: ({ getValue }) => <span className="ltr-nums font-mono text-xs text-muted-foreground">{getValue() as string}</span> },
     { id: "name", accessorFn: (x) => `${x.nameAr ?? ""} ${x.nameEn ?? ""}`, header: m.common.name, cell: ({ row }) => row.original.anonymized ? <span className="text-xs text-muted-foreground italic">{m.common.sensitiveHidden}</span> : <div><div className="font-medium">{row.original.honorific ? `${row.original.honorific} ` : ""}{row.original.nameAr ?? row.original.nameEn}</div>{row.original.nameEn && row.original.nameAr && <div className="text-[11px] text-muted-foreground" dir="ltr">{row.original.nameEn}</div>}</div> },
@@ -61,7 +114,7 @@ export function RecipientRegistry({ orgSlug, rows, vip, campaigns, projectId, ca
           columns={columns}
           getRowId={(x) => x.id}
           selectable={canManage && !!projectId}
-          onRowClick={canManage && projectId ? (x) => !x.anonymized && setEdit(x) : undefined}
+          onRowClick={canManage && projectId ? (x) => !x.anonymized && openEdit(x) : undefined}
           initialHidden={["retention", "verificationStatus"]}
           toolbar={canManage && projectId && <Button size="sm" variant="ghost" onClick={() => setAnon("expired")}><ShieldOff /> {r.anonymizeExpired}</Button>}
           bulkActions={(sel, clear) => (
@@ -81,30 +134,34 @@ export function RecipientRegistry({ orgSlug, rows, vip, campaigns, projectId, ca
           <DialogFooter><Button variant="destructive" disabled={anonymize.pending} onClick={() => projectId && anonymize.run(anon === "expired" ? { projectId, expiredOnly: true } : { projectId, recipientIds: anon as string[] })}>{m.common.confirm}</Button></DialogFooter>
         </DialogContent>
       </Dialog>
-      <Dialog open={!!edit} onOpenChange={(o) => !o && setEdit(null)}>
+      <Dialog open={!!edit} onOpenChange={(o) => { if (!o) { setEdit(null); save.clearConflict(); } }}>
         <DialogContent className="max-w-xl">
           <DialogHeader><DialogTitle>{r.edit} · <span className="ltr-nums font-mono">{edit?.code}</span></DialogTitle></DialogHeader>
+          {edit && save.conflict && <ConflictNotice conflict={save.conflict} rows={conflictRows} pending={save.pending} onUseTheirs={useTheirs} onSaveMine={saveMine} onDiscardMine={discardMine} />}
           {edit && (
-            <form className="grid gap-3 sm:grid-cols-2" onSubmit={(e) => {
+            <form key={formKey} ref={formRef} className="grid gap-3 sm:grid-cols-2" onSubmit={(e) => {
               e.preventDefault();
               const fd = new FormData(e.currentTarget);
-              const patch: Record<string, unknown> = { id: edit.id };
-              for (const k of ["nameAr", "nameEn", "honorific", "jobTitle", "organizationName", "vipTier", "city", "district", "preferredWindow", "notes", ...(vip ? ["mobile", "address", "mapsUrl", "deliveryInstructions"] : [])]) {
+              // only the fields the user changed (so "Save my version" re-applies exactly those)
+              const patch: Record<string, unknown> = { id: edit.id, version: verRef.current ?? edit.version };
+              for (const k of ["nameAr", "nameEn", "honorific", "jobTitle", "organizationName", "vipTier", "city", "district", "preferredWindow", ...(vip ? CONTACT : [])]) {
                 const v = fd.get(k);
-                if (v !== null && String(v) !== String((edit as Record<string, unknown>)[k] ?? "")) patch[k] = String(v) || null;
+                if (v !== null && String(v) !== String(loadedOf(edit, k) ?? "")) patch[k] = String(v) || null;
               }
-              patch.priority = fd.get("priority");
-              patch.verificationStatus = fd.get("verificationStatus");
+              for (const k of ["priority", "verificationStatus"]) {
+                const v = fd.get(k);
+                if (v !== null && v !== loadedOf(edit, k)) patch[k] = v;
+              }
               save.run(patch as never);
             }}>
               {([["nameAr", m.common.nameAr], ["nameEn", m.common.nameEn], ["honorific", m.common.title], ["jobTitle", m.org.jobTitle], ["organizationName", m.projects.client], ["vipTier", r.tier], ["city", m.common.city], ["district", m.common.district], ["preferredWindow", m.delivery.field.window]] as const).map(([k, l]) => (
-                <Field key={k} label={l}><Input name={k} defaultValue={(edit as Record<string, unknown>)[k] as string ?? ""} /></Field>
+                <Field key={k} label={l}><Input name={k} defaultValue={(loadedOf(edit, k) as string) ?? ""} /></Field>
               ))}
-              {vip && (["mobile", "address", "mapsUrl", "deliveryInstructions"] as const).map((k) => (
-                <Field key={k} label={k === "mobile" ? m.common.phone : k === "address" ? m.common.address : k === "mapsUrl" ? m.org.mapsUrl : m.delivery.field.instructions} error={save.errorFor(k)}><Input name={k} defaultValue={(revealed[edit.id] ?? edit)[k] ?? ""} dir={k === "mobile" || k === "mapsUrl" ? "ltr" : undefined} /></Field>
+              {vip && CONTACT.map((k) => (
+                <Field key={k} label={labels[k]} error={save.errorFor(k)}><Input name={k} defaultValue={(loadedOf(edit, k) as string) ?? ""} dir={k === "mobile" || k === "mapsUrl" ? "ltr" : undefined} /></Field>
               ))}
-              <Field label={m.common.priority}><NativeSelect name="priority" defaultValue={edit.priority}>{Object.entries(m.enums.priority).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</NativeSelect></Field>
-              <Field label={r.verification}><NativeSelect name="verificationStatus" defaultValue={edit.verificationStatus}>{["UNVERIFIED", "VERIFIED", "INVALID"].map((v) => <option key={v}>{v}</option>)}</NativeSelect></Field>
+              <Field label={m.common.priority}><NativeSelect name="priority" defaultValue={loadedOf(edit, "priority") as string}>{Object.entries(m.enums.priority).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</NativeSelect></Field>
+              <Field label={r.verification}><NativeSelect name="verificationStatus" defaultValue={loadedOf(edit, "verificationStatus") as string}>{["UNVERIFIED", "VERIFIED", "INVALID"].map((v) => <option key={v}>{v}</option>)}</NativeSelect></Field>
               <DialogFooter className="sm:col-span-2"><Button type="submit" disabled={save.pending}>{m.common.save}</Button></DialogFooter>
             </form>
           )}

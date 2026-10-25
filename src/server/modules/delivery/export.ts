@@ -1,5 +1,5 @@
 import ExcelJS from "exceljs";
-import { neutralizeFormula, toCsv } from "@/lib/csv";
+import { toCsv } from "@/lib/csv";
 import { formatDateTime } from "@/lib/format";
 import { getMessages } from "@/lib/i18n";
 import type { ServiceContext } from "@/server/authz/context";
@@ -9,6 +9,27 @@ import { ForbiddenError } from "@/server/errors";
 import { audit } from "@/server/modules/audit/audit";
 import { listDeliveries } from "./service";
 import { campaignKpis } from "./analytics";
+
+/**
+ * A user value for an XLSX string cell (KD-4). String cells never execute, so an E.164 phone in a
+ * phone column is written as is ("+9665…", no apostrophe); any other value starting with `=` or `@`
+ * keeps the `'` neutralisation as defence in depth. CSV keeps the full OWASP rule (`toCsv`).
+ */
+export function xlsxText(value: unknown, opts: { phone?: boolean } = {}): string {
+  if (value === null || value === undefined) return "";
+  const s = value instanceof Date ? value.toISOString() : String(value);
+  if (opts.phone && /^\+\d{8,15}$/.test(s)) return s;
+  return /^[=@]/.test(s) ? `'${s}` : s;
+}
+
+/** Writes a row of user values as string cells; numbers given by the system stay numbers. */
+export function addXlsxRow(ws: ExcelJS.Worksheet, values: unknown[], phoneColumns: ReadonlySet<number> = new Set()) {
+  const row = ws.addRow(values.map((v, i) => (typeof v === "number" ? v : xlsxText(v, { phone: phoneColumns.has(i) }))));
+  row.eachCell((cell) => {
+    if (typeof cell.value === "string") cell.numFmt = "@";
+  });
+  return row;
+}
 
 /**
  * Delivery report export. Requires export permission (org + project). Contact data is only
@@ -30,10 +51,11 @@ export async function exportDeliveries(ctx: ServiceContext, input: { projectId: 
   const stamp = new Date().toISOString().slice(0, 10);
   if (input.format === "csv") return { body: toCsv(headers, rows), fileName: `deliveries-${stamp}.csv`, contentType: "text/csv; charset=utf-8" };
   const wb = new ExcelJS.Workbook();
-  wb.creator = "Operra";
+  wb.creator = "Opera";
   const ws = wb.addWorksheet(m.delivery.cards, { views: [{ rightToLeft: ctx.locale === "ar", state: "frozen", ySplit: 1 }] });
   ws.addRow(headers).font = { bold: true };
-  for (const r of rows) ws.addRow(r.map((v) => (typeof v === "number" ? v : neutralizeFormula(v))));
+  const phoneColumns = new Set([7]);
+  for (const r of rows) addXlsxRow(ws, r, phoneColumns);
   ws.columns.forEach((c) => (c.width = 18));
   if (input.campaignId) {
     const k = await campaignKpis(ctx, input.campaignId);
@@ -42,7 +64,7 @@ export async function exportDeliveries(ctx: ServiceContext, input: { projectId: 
     [[m.common.total, k.total], [m.delivery.delivered, k.delivered], [m.delivery.failed, k.failed], [m.enums.deliveryStatus.RESCHEDULED, k.rescheduled], [m.delivery.completion, pct(k.completion)], [m.delivery.firstAttempt, pct(k.firstAttemptSuccess)], [m.delivery.sla, pct(k.slaCompliance)]].forEach((r) => s.addRow(r));
     s.addRow([]);
     s.addRow([m.delivery.agent, m.delivery.registry.deliveries, m.delivery.delivered, m.delivery.failed]).font = { bold: true };
-    k.agents.forEach((a) => s.addRow([neutralizeFormula(a.name), a.assigned, a.delivered, a.failed]));
+    k.agents.forEach((a) => addXlsxRow(s, [a.name, a.assigned, a.delivered, a.failed]));
     s.columns.forEach((c) => (c.width = 24));
   }
   return { body: Buffer.from(await wb.xlsx.writeBuffer()), fileName: `deliveries-${stamp}.xlsx`, contentType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" };

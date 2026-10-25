@@ -51,9 +51,9 @@ describe("arch-audit: SQL statements per page-level service call", () => {
     }
   }, 300_000);
 
-  // Open defect (register §3 "Performance"): financeOverview is N+1 (≈90 statements for 40 projects). Deferred to Milestone 2.
-  // [QA gate] converted to it.fails; the assertion is unchanged and turns this red once fixed.
-  it.fails("[arch · financeOverview N+1] known defect, Milestone 2 — reports statement counts (40 projects) and flags N+1 growth", async () => {
+  // Fixed in Milestone 2 (BUSINESS_RULES KD-5): finance scope for every project comes from one membership query,
+  // evaluated in memory, so financeOverview stays under 30 statements whatever the number of projects.
+  it("[arch · financeOverview N+1] KD-5 reports statement counts (40 projects); financeOverview stays under 30", async () => {
     const user = await db.user.findUniqueOrThrow({ where: { id: a.userId } });
     const rows: [string, number][] = [];
     rows.push(["loadServiceContext (every request)", await measure(() => loadServiceContext(user, a.slug))]);
@@ -70,7 +70,7 @@ describe("arch-audit: SQL statements per page-level service call", () => {
     rows.push(["financeOverview (40 projects)", fin]);
     rows.push(["empty withTenant() round trip", await measure(() => withTenant({ orgId: a.orgId }, async () => null))]);
     console.log("\n[arch-audit] SQL statements per call\n" + rows.map(([k, v]) => `  ${String(v).padStart(4)}  ${k}`).join("\n"));
-    // financeOverview runs projectScope (2 queries) per project inside one transaction
+    // KD-5: < 30 statements for 40 projects, constant in the number of projects
     expect(fin).toBeLessThan(30);
   }, 120_000);
 });

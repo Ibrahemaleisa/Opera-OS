@@ -10,6 +10,7 @@
  * mutations stay untouched until their owner signs in, and a mutation the server rejects moves to
  * a visible "needs attention" state instead of being dropped.
  */
+// legacy identifier, kept so existing deployments and devices keep working (ARCHITECTURE.md §10): renaming would strand updates queued offline on drivers' phones
 const DB = "operra-field";
 const VERSION = 1;
 

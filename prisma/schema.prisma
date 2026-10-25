@@ -1,4 +1,4 @@
-// Operra Events OS — data model
+// Opera — data model
 // Conventions:
 //  * Every tenant-owned model has `organizationId` (enforced by Postgres RLS, see prisma/sql/rls.sql).
 //  * Global (pre-tenant) models: User, Session, PublicToken, Permission.
@@ -280,6 +280,7 @@ enum PublicTokenKind {
   INVITATION
   RSVP
   PASSWORD_RESET
+  MFA_CHALLENGE
 }
 
 // ───────────────────────────── Global (pre-tenant) ─────────────────────────────
@@ -299,6 +300,14 @@ model User {
   lastLoginAt     DateTime?
   failedLogins    Int       @default(0)
   lockedUntil     DateTime?
+  passwordChangedAt DateTime?
+  /// TOTP secret, encrypted with a key derived from APP_SECRET; null when MFA is off
+  mfaSecretEnc    String?
+  mfaEnabledAt    DateTime?
+  /// SHA-256 hashes of unused one-time recovery codes
+  mfaRecoveryCodes String[] @default([])
+  /// last accepted TOTP time step (replay protection)
+  mfaLastStep     Int?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
@@ -632,9 +641,14 @@ model Notification {
   entityId       String?
   readAt         DateTime?
   emailedAt      DateTime?
+  /// same notice to the same person is created once per key (e.g. "approval-overdue:<id>:tier1")
+  dedupeKey      String?
+  priority       String    @default("NORMAL") // NORMAL | HIGH | CRITICAL
+  escalationLevel Int      @default(0)
   createdAt      DateTime  @default(now())
   user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@unique([organizationId, dedupeKey])
   @@index([organizationId, userId, readAt])
 }
 
@@ -694,6 +708,12 @@ model Project {
   createdAt         DateTime       @default(now())
   updatedAt         DateTime       @updatedAt
   archivedAt        DateTime?
+  version           Int            @default(0) // optimistic concurrency (BUSINESS_RULES.md §6)
+  statusReason      String? // why it was held, cancelled, closed or reopened
+  statusChangedAt   DateTime?
+  statusChangedById String?
+  /// contractual or regulatory work: approval exceptions never apply
+  independentApprovalRequired Boolean @default(false)
   organization      Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   client            Client?        @relation(fields: [clientId], references: [id])
   members           ProjectMember[]
@@ -755,6 +775,7 @@ model Risk {
   mitigation     String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
+  version        Int      @default(0)
   project        Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   @@index([organizationId, projectId])
@@ -773,6 +794,7 @@ model Milestone {
   completedAt      DateTime?
   sortOrder        Int       @default(0)
   createdAt        DateTime  @default(now())
+  version          Int       @default(0) // optimistic concurrency (BUSINESS_RULES.md §6)
   project          Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   @@index([organizationId, projectId])
@@ -792,6 +814,7 @@ model Deliverable {
   requiresApproval Boolean @default(false)
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
+  version        Int       @default(0)
   project        Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   @@index([organizationId, projectId])
@@ -925,6 +948,7 @@ model Task {
   recurrenceParentId String?
   blockedReason    String?
   escalatedAt      DateTime?
+  escalationLevel Int       @default(0) // 0 none · 1 owner reminded · 2 PM · 3 ops director
   completedAt      DateTime?
   sortOrder        Float              @default(0)
   version          Int                @default(1)
@@ -1073,6 +1097,9 @@ model Approval {
   decidedAt      DateTime?
   decisionComment String?
   clientVisible  Boolean            @default(false)
+  /// decided by the requester under the organisation's small-team exception (BUSINESS_RULES.md §4)
+  policyException       Boolean @default(false)
+  policyExceptionReason String?
   createdAt      DateTime           @default(now())
   updatedAt      DateTime           @updatedAt
   decisions      ApprovalDecision[]
@@ -1122,6 +1149,10 @@ model InvitationCampaign {
   createdById      String
   createdAt        DateTime       @default(now())
   updatedAt        DateTime       @updatedAt
+  version          Int            @default(0)
+  /// dispatch lease: a send that stops renewing it is resumed by the recovery sweep
+  dispatchLeaseUntil DateTime?
+  dispatchAttempts Int            @default(0)
 
   @@index([organizationId, projectId])
 }
@@ -1163,6 +1194,7 @@ model Recipient {
   createdById          String
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
+  version              Int       @default(0)
   anonymizedAt         DateTime?
   deletedAt            DateTime?
   deliveries           Delivery[]
@@ -1219,6 +1251,10 @@ model ImportBatch {
   rolledBackById String?
   createdAt      DateTime      @default(now())
   updatedAt      DateTime      @updatedAt
+  /// processing lease for VALIDATING / COMMITTING; an expired lease is resumed or failed by the recovery sweep
+  leaseUntil     DateTime?
+  leaseOwner     String?
+  attempts       Int           @default(0)
   rows           ImportRow[]
 
   @@index([organizationId, projectId, createdAt])
@@ -1499,6 +1535,7 @@ model Event {
   expectedGuests Int?
   createdAt      DateTime   @default(now())
   updatedAt      DateTime   @updatedAt
+  version        Int        @default(0)
 
   @@index([organizationId, projectId])
 }
@@ -1647,6 +1684,7 @@ model Guest {
   restrictedNotes     String? // visible only with protocol.viewRestricted, access is audited
   createdAt           DateTime        @default(now())
   updatedAt           DateTime        @updatedAt
+  version             Int             @default(0)
   assignments         ProtocolAssignment[]
 
   @@index([organizationId, projectId])
@@ -1710,6 +1748,7 @@ model Booth {
   handoverSignedAt DateTime?
   createdAt      DateTime   @default(now())
   updatedAt      DateTime   @updatedAt
+  version        Int        @default(0)
   revisions      DesignRevision[]
   boqItems       BOQItem[]
   snags          Snag[]
@@ -1899,6 +1938,7 @@ model Budget {
   planned        Decimal  @db.Decimal(14, 2)
   notes          String?
   updatedAt      DateTime @updatedAt
+  version        Int      @default(0)
 
   @@unique([projectId, category])
 }
@@ -1993,4 +2033,53 @@ model AutomationExecution {
 
   @@index([organizationId, createdAt])
   @@index([organizationId, ruleId])
+}
+
+/// Outgoing e-mail for an in-app notification (tenant-scoped). Tracks delivery, retries and dead letters.
+model NotificationDelivery {
+  id                String    @id @default(cuid())
+  organizationId    String
+  notificationId    String?
+  userId            String
+  channel           String    @default("EMAIL")
+  to                String
+  template          String
+  params            Json      @default("{}")
+  locale            String    @default("ar")
+  status            String    @default("PENDING") // PENDING | SENDING | SENT | SIMULATED | FAILED | DEAD | SUPPRESSED
+  attempts          Int       @default(0)
+  nextAttemptAt     DateTime  @default(now())
+  lastError         String?
+  providerMessageId String?
+  dedupeKey         String
+  sentAt            DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@unique([organizationId, dedupeKey])
+  @@index([organizationId, status, nextAttemptAt])
+  @@index([organizationId, userId, createdAt])
+}
+
+/// Account e-mail sent before any organisation is selected (password reset, security notices).
+/// Global, like Session: no organizationId. Never stores secrets (reset links are not persisted).
+model SystemEmail {
+  id                String    @id @default(cuid())
+  userId            String?
+  to                String
+  template          String
+  /// render parameters for a retry; never a secret (a reset link is sent once and not stored)
+  params            Json      @default("{}")
+  locale            String    @default("ar")
+  status            String    @default("PENDING") // PENDING | SENT | SIMULATED | FAILED | DEAD
+  nextAttemptAt     DateTime  @default(now())
+  attempts          Int       @default(0)
+  lastError         String?
+  providerMessageId String?
+  dedupeKey         String    @unique
+  sentAt            DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@index([userId, createdAt])
 }

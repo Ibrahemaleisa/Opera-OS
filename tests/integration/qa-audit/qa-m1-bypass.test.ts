@@ -26,6 +26,11 @@ import { sha256Hex } from "@/server/auth/crypto";
 import { addMember, createAgency } from "../../helpers";
 import { blankProject, clientUser, createClientCompany, membershipId, recipients, task, templateId, type Agency } from "./qa-helpers";
 
+/** The campaign version a user would have loaded: launch, approval requests and edits carry it (BUSINESS_RULES §6). */
+// Milestone 2 (BUSINESS_RULES §1.2, §6): project status changes carry the loaded version and, for cancel, a reason
+const projectVersion = async (id: string) => (await adminDb().project.findUniqueOrThrow({ where: { id }, select: { version: true } })).version;
+const cver = (id: string) => adminDb().invitationCampaign.findUniqueOrThrow({ where: { id } }).then((x) => x.version);
+
 const DAY = 86_400_000;
 const BODY = "{{honorific}} {{name}}، يسرنا دعوتكم. للتأكيد: {{rsvp_link}}";
 type Role = "MANAGER" | "LEAD" | "MEMBER" | "FREELANCER" | "CLIENT_APPROVER";
@@ -37,8 +42,8 @@ async function campaignSetup(a: Agency, name: string, opts: { scheduledAt?: Date
   const p = await blankProject(a.ctx, name, { templateIds: [await templateId(a, "vip-digital-campaign")], eventStartAt: new Date(Date.now() + 30 * DAY) });
   const rs = await recipients(a, p.id, 3);
   const draft = await withTenant({ orgId: a.orgId }, (tx) => tx.invitationCampaign.findFirstOrThrow({ where: { projectId: p.id, type: "DIGITAL" } }));
-  const save = (ctx = a.ctx, extra: Partial<Parameters<typeof saveDigitalCampaign>[1]> = {}) =>
-    saveDigitalCampaign(ctx, { id: draft.id, projectId: p.id, name: "VIP gala invitation", channel: "SMS", bodyTemplate: BODY, rsvpEnabled: true, qrEnabled: true, scheduledAt: opts.scheduledAt ?? null, ...extra });
+  const save = async (ctx = a.ctx, extra: Partial<Parameters<typeof saveDigitalCampaign>[1]> = {}) =>
+    saveDigitalCampaign(ctx, { id: draft.id, version: await cver(draft.id), projectId: p.id, name: "VIP gala invitation", channel: "SMS", bodyTemplate: BODY, rsvpEnabled: true, qrEnabled: true, scheduledAt: opts.scheduledAt ?? null, ...extra });
   const c = await save();
   const sent = () => adminDb().messageJob.count({ where: { invitation: { campaignId: c.id } } });
   const status = async () => (await adminDb().invitationCampaign.findUniqueOrThrow({ where: { id: c.id } })).status;
@@ -50,7 +55,7 @@ async function approvedCampaign(name: string, opts: { scheduledAt?: Date | null 
   const director = await addMember(a.ctx, "ops_director", "Approving director");
   const s = await campaignSetup(a, name, opts);
   await addAudience(a.ctx, { campaignId: s.c.id, recipientIds: s.rs.map((r) => r.id) });
-  const appr = await requestCampaignApproval(a.ctx, s.c.id);
+  const appr = await requestCampaignApproval(a.ctx, s.c.id, await cver(s.c.id));
   await decideApproval(director.ctx, { approvalId: appr.id, decision: "APPROVED", comment: null });
   return { a, director, ...s };
 }
@@ -106,15 +111,17 @@ describe("QA M1 · F-02 approval bypass attempts", () => {
     await upsertProjectMember(a.ctx, member(p.id, pm.userId, "MANAGER", { canApprove: true }));
     const d = await saveDeliverable(a.ctx, { projectId: p.id, title: "Seating plan", status: "IN_PROGRESS", clientVisible: false, requiresApproval: true });
     const appr = await requestApproval(a.ctx, { projectId: p.id, entityType: "DELIVERABLE", entityId: d.id, title: "Seating", approverType: "INTERNAL" });
-    const edited = await saveDeliverable(a.ctx, { id: d.id, projectId: p.id, title: "Seating plan v2", status: "IN_PROGRESS", clientVisible: false, requiresApproval: true }).then(() => true, () => false);
+    const loaded = (await adminDb().deliverable.findUniqueOrThrow({ where: { id: d.id } })).version; // M2: edits carry the loaded version (§6)
+    const edited = await saveDeliverable(a.ctx, { id: d.id, projectId: p.id, title: "Seating plan v2", status: "IN_PROGRESS", clientVisible: false, requiresApproval: true, version: loaded }).then(() => true, () => false);
     if (edited) await expect(decideApproval(pm.ctx, { approvalId: appr.id, decision: "APPROVED", comment: null })).rejects.toThrow();
     const now = await withTenant({ orgId: a.orgId }, (tx) => tx.deliverable.findUniqueOrThrow({ where: { id: d.id } }));
     expect(now.status).not.toBe("APPROVED");
   });
 
-  // Open (S3, F-02 residual): separation of duties for project work keys on the requester only, not on the task owner.
-  // Depends on owner decision #4 (PRODUCT_AUDIT §7). Proposed for Milestone 2.
-  it.fails("[F-02 residual · owner decision #4] known defect, Milestone 2 — the person who did the work cannot approve it when a colleague pressed 'request approval'", async () => {
+  // F-02 residual #1, resolved by owner decision [D4] (BUSINESS_RULES §4.1 rule 4, KD-6): under the default STANDARD
+  // policy the performer MAY decide when someone else requested (AP-1); STRICT or the project flag refuse it (AP-3/AP-4,
+  // tests/integration/stream-l/approval-policy.test.ts). The expectation is inverted because the rule changed.
+  it("[F-02 residual · D4] AP-1 the person who did the work may approve it when a colleague pressed 'request approval' (default policy)", async () => {
     const a = await createAgency("QA M1 OwnWork");
     const pm = await addMember(a.ctx, "project_manager", "PM who did the work");
     const emp = await addMember(a.ctx, "employee", "Coordinator");
@@ -124,13 +131,13 @@ describe("QA M1 · F-02 approval bypass attempts", () => {
     const t = await task(a.ctx, p.id, "VIP seating chart", { requiresApproval: true, ownerId: pm.userId });
     await changeTaskStatus(pm.ctx, { id: t.id, status: "review" });
     const appr = await requestApproval(emp.ctx, { projectId: p.id, entityType: "TASK", entityId: t.id, title: "Seating chart", approverType: "INTERNAL" });
-    // EXPECTED (four-eyes on work, mirroring the finance rule on spend): the task owner is not a decider
-    await expect(decideApproval(pm.ctx, { approvalId: appr.id, decision: "APPROVED", comment: null })).rejects.toThrow();
+    // EXPECTED under STANDARD ([D4]): the task owner may decide a request someone else made
+    expect((await decideApproval(pm.ctx, { approvalId: appr.id, decision: "APPROVED", comment: null })).status).toBe("APPROVED");
   });
 
-  // Open (S3, F-02 residual): campaign four-eyes excludes the requester but not the author of the content.
-  // Depends on owner decision #4. Proposed for Milestone 2.
-  it.fails("[F-02 residual · owner decision #4] known defect, Milestone 2 — the author of a campaign cannot approve it when a colleague requested the approval", async () => {
+  // F-02 residual #2, resolved by [D4] (§4.1 rule 4, KD-7): the campaign author may approve when a colleague requested
+  // (AP-2); refused under STRICT or the project flag (AP-4). Expectation inverted because the rule changed.
+  it("[F-02 residual · D4] AP-2 the author of a campaign may approve it when a colleague requested the approval (default policy)", async () => {
     const a = await createAgency("QA M1 CampaignAuthor");
     const director = await addMember(a.ctx, "ops_director", "Director who wrote it");
     const pm = await addMember(a.ctx, "project_manager", "PM");
@@ -138,8 +145,8 @@ describe("QA M1 · F-02 approval bypass attempts", () => {
     await upsertProjectMember(a.ctx, member(s.p.id, pm.userId, "MANAGER"));
     await s.save(director.ctx, { bodyTemplate: `${BODY} — written by the director` }); // the director authors the content
     await addAudience(director.ctx, { campaignId: s.c.id, recipientIds: s.rs.map((r) => r.id) });
-    const appr = await requestCampaignApproval(pm.ctx, s.c.id);
-    await expect(decideApproval(director.ctx, { approvalId: appr.id, decision: "APPROVED", comment: null })).rejects.toThrow();
+    const appr = await requestCampaignApproval(pm.ctx, s.c.id, await cver(s.c.id));
+    expect((await decideApproval(director.ctx, { approvalId: appr.id, decision: "APPROVED", comment: null })).status).toBe("APPROVED");
   });
 });
 
@@ -149,7 +156,7 @@ describe("QA M1 · F-03 / F-04 campaign bypass attempts", () => {
     const r = await save(a.ctx, { bodyTemplate: `${BODY} (edited)` });
     expect((r as { approvalInvalidated?: boolean }).approvalInvalidated).toBe(true);
     expect(await status()).toBe("DRAFT");
-    await expect(launchCampaign(a.ctx, c.id)).rejects.toThrow();
+    await expect(launchCampaign(a.ctx, c.id, await cver(c.id))).rejects.toThrow();
     expect(await sent()).toBe(0);
   });
 
@@ -162,7 +169,7 @@ describe("QA M1 · F-03 / F-04 campaign bypass attempts", () => {
 
   it("a campaign scheduled for next week is not released by early scheduler ticks or inline kicks (control)", async () => {
     const { a, c, sent, status } = await approvedCampaign("QA M1 Early", { scheduledAt: new Date(Date.now() + 7 * DAY) });
-    expect((await launchCampaign(a.ctx, c.id)).status).toBe("SCHEDULED");
+    expect((await launchCampaign(a.ctx, c.id, await cver(c.id))).status).toBe("SCHEDULED");
     await schedulerTick();
     await kickOutbox(a.orgId);
     await dispatchDueCampaigns(a.orgId);
@@ -172,7 +179,7 @@ describe("QA M1 · F-03 / F-04 campaign bypass attempts", () => {
 
   it("once due, a scheduled campaign is released by the next inline kick (control)", async () => {
     const { a, c, sent } = await approvedCampaign("QA M1 Due", { scheduledAt: new Date(Date.now() + 7 * DAY) });
-    await launchCampaign(a.ctx, c.id);
+    await launchCampaign(a.ctx, c.id, await cver(c.id));
     await adminDb().invitationCampaign.update({ where: { id: c.id }, data: { scheduledAt: new Date(Date.now() - 60_000) } });
     await kickOutbox(a.orgId);
     expect(await sent()).toBe(3);
@@ -180,8 +187,8 @@ describe("QA M1 · F-03 / F-04 campaign bypass attempts", () => {
 
   it("a scheduled campaign whose project is cancelled before the send time is never sent (control)", async () => {
     const { a, p, c, sent } = await approvedCampaign("QA M1 CancelledLater", { scheduledAt: new Date(Date.now() + 7 * DAY) });
-    await launchCampaign(a.ctx, c.id);
-    await setProjectStatus(a.ctx, p.id, "CANCELLED");
+    await launchCampaign(a.ctx, c.id, await cver(c.id));
+    await setProjectStatus(a.ctx, p.id, "CANCELLED", { version: await projectVersion(p.id), reason: "QA: project cancelled by the client" });
     await adminDb().invitationCampaign.update({ where: { id: c.id }, data: { scheduledAt: new Date(Date.now() - 60_000) } });
     await kickOutbox(a.orgId);
     expect(await sent()).toBe(0);
@@ -190,7 +197,7 @@ describe("QA M1 · F-03 / F-04 campaign bypass attempts", () => {
   // F-03 residual (fixed at the M1 gate): the send time is part of what the approval binds.
   it("[F-03 residual] pulling an approved, scheduled send forward to 'now' needs a fresh approval", async () => {
     const { a, c, save, sent } = await approvedCampaign("QA M1 PullForward", { scheduledAt: new Date(Date.now() + 7 * DAY) });
-    await launchCampaign(a.ctx, c.id);
+    await launchCampaign(a.ctx, c.id, await cver(c.id));
     await save(a.ctx, { scheduledAt: null }).catch(() => undefined); // same content, send time removed
     await kickOutbox(a.orgId);
     // EXPECTED: the approver approved a send next week; nothing goes out today without a new decision
@@ -201,7 +208,7 @@ describe("QA M1 · F-03 / F-04 campaign bypass attempts", () => {
 describe("QA M1 · F-06 RSVP token edges", () => {
   async function tokenFor(name: string) {
     const { a, c } = await approvedCampaign(name);
-    await launchCampaign(a.ctx, c.id);
+    await launchCampaign(a.ctx, c.id, await cver(c.id));
     const job = await adminDb().messageJob.findFirstOrThrow({ where: { invitation: { campaignId: c.id } } });
     const token = /\/rsvp\/([A-Za-z0-9_-]+)/.exec(job.body)![1];
     const setExpiry = (at: Date) => adminDb().publicToken.update({ where: { id: sha256Hex(token) }, data: { expiresAt: at } });

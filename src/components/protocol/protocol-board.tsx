@@ -40,12 +40,12 @@ export function ProtocolBoard({ orgSlug, projectId, data }: { orgSlug: string; p
   const [dlg, setDlg] = useState<Dlg>(null);
   const [revealed, setRevealed] = useState<Record<string, { restrictedNotes: string | null; mobile: string | null }>>({});
   const close = () => setDlg(null);
-  const saveGuest = useAction(saveGuestAction, { orgSlug, onSuccess: close });
+  const saveGuest = useAction(saveGuestAction, { orgSlug, onSuccess: close, conflictUi: "inline" });
   const imp = useAction(importGuestsAction, { orgSlug, success: false, onSuccess: (r) => toast.success(interpolate(t.imported, { n: r.created })) });
   const reveal = useAction(revealRestrictedAction, { orgSlug, success: t.revealed, refresh: false });
   const attend = useAction(setAttendanceAction, { orgSlug, success: false });
   const saveZone = useAction(saveZoneAction, { orgSlug, onSuccess: close });
-  const seat = useAction(assignSeatAction, { orgSlug, onSuccess: close });
+  const seat = useAction(assignSeatAction, { orgSlug, onSuccess: close, conflictUi: "inline" });
   const saveAsg = useAction(saveAssignmentAction, { orgSlug, onSuccess: close });
   const can = data.scope.manage;
   const eventId = data.events[0]?.id ?? null;
@@ -82,7 +82,7 @@ export function ProtocolBoard({ orgSlug, projectId, data }: { orgSlug: string; p
       cell: ({ row: { original: g } }) => (
         <div className="flex flex-wrap items-center gap-1" data-testid={`guest-${g.id}`} data-attendance={g.attendance}>
           <StatusBadge status={g.attendance === "ARRIVED" || g.attendance === "SEATED" ? "DELIVERED" : g.attendance === "NO_SHOW" ? "FAILED" : g.attendance} label={m.enums.attendance[g.attendance]} />
-          {can && NEXT[g.attendance]?.map((n) => <Button key={n.to} size="xs" variant={n.to === "ARRIVED" ? "default" : "outline"} disabled={attend.pending} onClick={(e) => { e.stopPropagation(); attend.run({ guestId: g.id, attendance: n.to as never, expected: g.attendance }); }}>{t[n.key]}</Button>)}
+          {can && NEXT[g.attendance]?.map((n) => <Button key={n.to} size="xs" variant={n.to === "ARRIVED" ? "default" : "outline"} disabled={attend.pending} onClick={(e) => { e.stopPropagation(); attend.run({ guestId: g.id, attendance: n.to as never, version: g.version }); }}>{t[n.key]}</Button>)}
           {data.scope.restricted && g.hasRestricted && !revealed[g.id] && <ActionButton size="icon-xs" variant="ghost" title={t.reveal} aria-label={t.reveal} onClick={(e) => e.stopPropagation()} action={() => reveal.run({ guestId: g.id }).then((r) => r.ok && setRevealed((x) => ({ ...x, [g.id]: r.data })))} data-testid="reveal-restricted"><Eye /></ActionButton>}
         </div>
       ),
@@ -149,7 +149,7 @@ export function ProtocolBoard({ orgSlug, projectId, data }: { orgSlug: string; p
       </div>
 
       {dlg?.kind === "guest" && (
-        <FormDialog open onOpenChange={(o) => !o && close()} title={g?.displayName ?? t.newGuest} fields={guestFields} values={g ? { ...g, mobile: revealed[g.id]?.mobile ?? (data.scope.vip ? g.mobile : null), restrictedNotes: revealed[g.id]?.restrictedNotes ?? null } : { category: "VIP", protocolLevel: 3, eventId }} extra={{ id: g?.id, projectId }} onSubmit={(v) => saveGuest.run({ ...v, protocolLevel: v.protocolLevel ?? 3, ...(data.scope.restricted && g?.hasRestricted && !revealed[g.id] ? { restrictedNotes: undefined } : {}) } as never)} pending={saveGuest.pending} errorFor={saveGuest.errorFor} testId="form-guest">
+        <FormDialog open onOpenChange={(o) => !o && close()} title={g?.displayName ?? t.newGuest} fields={guestFields} values={g ? { ...g, mobile: revealed[g.id]?.mobile ?? (data.scope.vip ? g.mobile : null), restrictedNotes: revealed[g.id]?.restrictedNotes ?? null } : { category: "VIP", protocolLevel: 3, eventId }} extra={{ id: g?.id, projectId, version: g?.version }} onSubmit={(v) => saveGuest.run({ ...v, protocolLevel: v.protocolLevel ?? 3, ...(data.scope.restricted && g?.hasRestricted && !revealed[g.id] ? { restrictedNotes: undefined } : {}) } as never)} pending={saveGuest.pending} errorFor={saveGuest.errorFor} testId="form-guest" conflict={saveGuest.conflict} onConflictResolved={saveGuest.clearConflict}>
           {data.scope.restricted && g?.hasRestricted && !revealed[g.id] && <p className="text-[11px] text-warning"><Lock className="me-1 inline size-3" />{t.restrictedHint}</p>}
         </FormDialog>
       )}
@@ -157,7 +157,7 @@ export function ProtocolBoard({ orgSlug, projectId, data }: { orgSlug: string; p
         <FormDialog open onOpenChange={(o) => !o && close()} title={t.newZone} fields={[{ name: "name", label: m.common.name, required: true }, { name: "capacity", label: t.capacity, type: "number", min: 0, required: true }, { name: "protocolLevel", label: t.minLevel, type: "number", min: 1, max: 5, hint: t.levelHint }, { name: "eventId", label: m.nav.events, type: "select", options: data.events.map((e) => ({ value: e.id, label: e.name })) }]} values={{ eventId, capacity: 20 }} onSubmit={(v) => saveZone.run(v as never)} pending={saveZone.pending} errorFor={saveZone.errorFor} />
       )}
       {dlg?.kind === "seat" && g && (
-        <FormDialog open onOpenChange={(o) => !o && close()} title={`${t.assignSeat} — ${g.displayName}`} fields={[{ name: "seatZoneId", label: t.zone, type: "select", empty: t.noZone, options: data.zones.map((z) => ({ value: z.id, label: `${z.name} (${z.occupied}/${z.capacity || "∞"})` })) }, { name: "seatLabel", label: t.seat, ltr: true }]} values={g} extra={{ guestId: g.id }} onSubmit={(v) => seat.run(v as never)} pending={seat.pending} errorFor={seat.errorFor} />
+        <FormDialog open onOpenChange={(o) => !o && close()} title={`${t.assignSeat} — ${g.displayName}`} fields={[{ name: "seatZoneId", label: t.zone, type: "select", empty: t.noZone, options: data.zones.map((z) => ({ value: z.id, label: `${z.name} (${z.occupied}/${z.capacity || "∞"})` })) }, { name: "seatLabel", label: t.seat, ltr: true }]} values={g} extra={{ guestId: g.id, version: g.version }} onSubmit={(v) => seat.run(v as never)} pending={seat.pending} errorFor={seat.errorFor} testId="form-seat" conflict={seat.conflict} onConflictResolved={seat.clearConflict} />
       )}
       {dlg?.kind === "assignment" && g && (
         <FormDialog

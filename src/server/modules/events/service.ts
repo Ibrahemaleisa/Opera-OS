@@ -1,9 +1,10 @@
 import { z } from "zod";
 import type { Event } from "@/generated/prisma/client";
 import type { ServiceContext } from "@/server/authz/context";
-import { assertCan, can, projectScope, projectVisibilityWhere, type ProjectScope } from "@/server/authz/policy";
+import { assertCan, assertNotArchived, can, projectScope, projectVisibilityWhere, ProjectArchivedError, type ProjectScope } from "@/server/authz/policy";
 import { withTenant, type Tx } from "@/server/db/tenant";
-import { ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/server/errors";
+import { AppError, ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/server/errors";
+import { casUpdate, versionField } from "@/server/concurrency";
 import { audit } from "@/server/modules/audit/audit";
 import { emit } from "@/server/modules/automation/outbox";
 
@@ -23,6 +24,7 @@ export const eventSchema = z.object({
   venueId: z.string().nullish(),
   expectedGuests: z.coerce.number().int().min(0).max(1_000_000).nullish(),
   brief: optText(5000),
+  version: versionField,
 });
 
 export const sessionSchema = z.object({
@@ -149,6 +151,7 @@ async function loadEvent(tx: Tx, ctx: ServiceContext, eventId: string): Promise<
 async function editableEvent(tx: Tx, ctx: ServiceContext, eventId: string) {
   assertCan(ctx, "event.manage");
   const r = await loadEvent(tx, ctx, eventId);
+  assertNotArchived(r.scope); // LC rule 5: archived projects are read-only (incidents have their own tail below)
   if (!r.scope.operate) throw new ForbiddenError();
   return r;
 }
@@ -185,6 +188,7 @@ export async function createEvent(ctx: ServiceContext, input: { projectId: strin
   assertRange(input.startsAt, input.endsAt);
   return withTenant(scoped(ctx), async (tx) => {
     const scope = await projectScope(tx, ctx, input.projectId);
+    assertNotArchived(scope);
     if (!scope.operate || scope.clientView) throw new ForbiddenError();
     const ws = await tx.workstream.findFirst({ where: { projectId: input.projectId, kind: { in: ["CONFERENCE", "EVENT_OPS"] } } });
     const e = await tx.event.create({ data: { organizationId: ctx.orgId, projectId: input.projectId, workstreamId: ws?.id ?? null, name: input.name, type: scope.project.type, venueId: null, startsAt: input.startsAt, endsAt: input.endsAt } });
@@ -199,8 +203,10 @@ export async function updateEvent(ctx: ServiceContext, input: z.output<typeof ev
   return withTenant(scoped(ctx), async (tx) => {
     const { event } = await editableEvent(tx, ctx, input.id);
     if (input.venueId && !(await tx.venue.findUnique({ where: { id: input.venueId } }))) throw new NotFoundError();
-    const { id: _id, ...data } = input;
-    const e = await tx.event.update({ where: { id: event.id }, data });
+    const { version, ...fields } = input;
+    const data: Partial<typeof fields> = { ...fields };
+    delete data.id;
+    const e = await casUpdate<Event>({ tx, ctx, model: "event", id: event.id, version, data, entityType: "EVENT" });
     if (event.phase !== e.phase) await audit(tx, ctx, { action: "event.phase", entityType: "EVENT", entityId: e.id, projectId: e.projectId, summary: `${event.phase} → ${e.phase}` });
     else await audit(tx, ctx, { action: "event.update", entityType: "EVENT", entityId: e.id, projectId: e.projectId, summary: e.name });
     return e;
@@ -233,7 +239,10 @@ export async function getEventWorkspace(ctx: ServiceContext, eventId: string) {
       event,
       project: { id: scope.project.id, name: scope.project.name, code: scope.project.code },
       canManage: can(ctx, "event.manage") && scope.operate,
-      canReport: can(ctx, "incident.report") || can(ctx, "event.manage"),
+      canReport: (can(ctx, "incident.report") || can(ctx, "event.manage")) && !scope.archived,
+      /** incident tail (§1.5): open incidents stay operable after the project is archived */
+      canHandleIncidents: can(ctx, "event.manage") && (scope.archived ? scope.tailOperate : scope.operate),
+      archived: scope.archived,
       sessions,
       speakers: speakers.map((s) => ({ ...s, phone: mask(s.phone), email: mask(s.email) })),
       runOfShow,
@@ -341,14 +350,20 @@ export async function setRunItemStatus(ctx: ServiceContext, input: { id: string;
 
 // ── Staffing ────────────────────────────────────────────────────────────────
 
+/** §1.6: ON_HOLD and COMPLETED projects take no new shifts. */
+function assertRunning(scope: ProjectScope) {
+  if (scope.project.status === "ON_HOLD" || scope.project.status === "COMPLETED") throw new AppError("errors.projectNotRunning", "PROJECT_NOT_RUNNING", 409);
+}
+
 export async function saveShift(ctx: ServiceContext, input: z.output<typeof shiftSchema>) {
   assertRange(input.startsAt, input.endsAt);
   return withTenant(scoped(ctx), async (tx) => {
-    const { event } = await editableEvent(tx, ctx, input.eventId);
+    const { event, scope } = await editableEvent(tx, ctx, input.eventId);
+    if (!input.id) assertRunning(scope);
     if (input.userId && !(await tx.membership.findFirst({ where: { userId: input.userId, status: "ACTIVE" } }))) throw new NotFoundError();
     if (input.userId) {
-      // prevent double-booking the same person on overlapping shifts
-      const clash = await tx.shift.findFirst({ where: { userId: input.userId, id: input.id ? { not: input.id } : undefined, startsAt: { lt: input.endsAt }, endsAt: { gt: input.startsAt } } });
+      // prevent double-booking the same person on overlapping shifts (cancelled shifts don't count)
+      const clash = await tx.shift.findFirst({ where: { userId: input.userId, status: { not: "CANCELLED" }, id: input.id ? { not: input.id } : undefined, startsAt: { lt: input.endsAt }, endsAt: { gt: input.startsAt } } });
       if (clash) throw new ValidationError("errors.validation", { userId: ["events.shiftClash"] });
     }
     const { id: sid, ...data } = input;
@@ -370,6 +385,9 @@ export async function setShiftStatus(ctx: ServiceContext, input: { id: string; s
     const shift = await tx.shift.findUnique({ where: { id: input.id } });
     if (!shift) throw new NotFoundError();
     const { event, scope } = await loadEvent(tx, ctx, shift.eventId);
+    assertNotArchived(scope);
+    // a shift cancelled with its project (§1.3) is not restored by a later reopen
+    if (shift.status === "CANCELLED") throw new ValidationError("errors.invalidTransition");
     const self = shift.userId === ctx.userId && input.status === "CHECKED_IN";
     if (!self && !(can(ctx, "event.manage") && scope.operate)) throw new ForbiddenError();
     const s = await tx.shift.update({ where: { id: shift.id }, data: { status: input.status, checkedInAt: input.status === "CHECKED_IN" ? new Date() : shift.checkedInAt } });
@@ -415,6 +433,8 @@ export async function reportIncident(ctx: ServiceContext, input: z.output<typeof
   return withTenant(scoped(ctx), async (tx) => {
     const scope = await projectScope(tx, ctx, input.projectId);
     if (scope.clientView) throw new NotFoundError();
+    // the incident tail (§1.5) covers the incidents already open, not new reports
+    assertNotArchived(scope);
     if (input.eventId && !(await tx.event.findFirst({ where: { id: input.eventId, projectId: input.projectId } }))) throw new NotFoundError();
     const i = await tx.incident.create({ data: { ...input, organizationId: ctx.orgId, reportedById: ctx.userId } });
     await audit(tx, ctx, { action: "incident.report", entityType: "INCIDENT", entityId: i.id, projectId: i.projectId, summary: `${i.severity}: ${i.title}` });
@@ -437,7 +457,9 @@ export async function updateIncident(ctx: ServiceContext, input: z.output<typeof
     const i = await tx.incident.findUnique({ where: { id: input.id } });
     if (!i) throw new NotFoundError();
     const scope = await projectScope(tx, ctx, i.projectId);
-    if (!scope.operate || scope.clientView) throw new ForbiddenError();
+    // incident tail (BUSINESS_RULES §1.5): status, owner and resolution stay operable in archived projects
+    if (!(scope.archived ? scope.tailOperate : scope.operate) || scope.clientView) throw new ForbiddenError();
+    if (scope.archived && (input.escalate || (input.severity && input.severity !== i.severity))) throw new ProjectArchivedError();
     if (input.status && input.status !== i.status && !INCIDENT_FLOW[i.status]?.includes(input.status)) throw new ValidationError("errors.invalidTransition");
     if (input.status === "RESOLVED" && !(input.resolution ?? i.resolution)?.trim()) throw new ValidationError("errors.validation", { resolution: ["events.resolutionRequired"] });
     if (input.ownerId && !(await tx.membership.findFirst({ where: { userId: input.ownerId, status: "ACTIVE" } }))) throw new NotFoundError();
@@ -466,6 +488,7 @@ export async function saveLogistics(ctx: ServiceContext, input: z.output<typeof 
   assertCan(ctx, "event.manage");
   return withTenant(scoped(ctx), async (tx) => {
     const scope = await projectScope(tx, ctx, input.projectId);
+    assertNotArchived(scope);
     if (!scope.operate || scope.clientView) throw new ForbiddenError();
     if (input.eventId && !(await tx.event.findFirst({ where: { id: input.eventId, projectId: input.projectId } }))) throw new NotFoundError();
     if (input.vendorId && !(await tx.vendor.findUnique({ where: { id: input.vendorId } }))) throw new NotFoundError();

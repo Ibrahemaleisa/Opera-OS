@@ -1,14 +1,20 @@
 import { z } from "zod";
-import type { DeliveryStatus, Prisma, Recipient } from "@/generated/prisma/client";
+import type { DeliveryStatus, InvitationCampaign, Prisma, Recipient } from "@/generated/prisma/client";
 import { createId, shortCode } from "@/lib/id";
 import { maskPhone } from "@/lib/phone";
 import type { ServiceContext } from "@/server/authz/context";
-import { assertCan, can, projectScope, type ProjectScope } from "@/server/authz/policy";
+import { assertCan, assertNotArchived, can, projectScope, ProjectArchivedError, type ProjectScope } from "@/server/authz/policy";
 import { withTenant, type Tx } from "@/server/db/tenant";
-import { AppError, ConflictError, ForbiddenError, NotFoundError, ValidationError } from "@/server/errors";
+import { casUpdate, versionField } from "@/server/concurrency";
+import { AppError, ForbiddenError, NotFoundError, ValidationError } from "@/server/errors";
 import { audit } from "@/server/modules/audit/audit";
 import { emit } from "@/server/modules/automation/outbox";
 import { ACTIVE_FIELD_STATUSES, ASSIGNABLE, ATTEMPT_OUTCOMES, canTransition, FAILURE_REASONS } from "./state-machine";
+
+/** §1.6: ON_HOLD and COMPLETED projects take no new assignments or batches. */
+function assertRunning(scope: ProjectScope) {
+  if (scope.project.status === "ON_HOLD" || scope.project.status === "COMPLETED") throw new AppError("errors.projectNotRunning", "PROJECT_NOT_RUNNING", 409);
+}
 
 export interface CampaignConfig {
   requireEvidence: boolean;
@@ -23,7 +29,7 @@ export function campaignConfig(raw: unknown): CampaignConfig {
 
 // ── Masking (least privilege) ───────────────────────────────────────────────
 
-export type MaskedRecipient = Pick<Recipient, "id" | "code" | "nameAr" | "nameEn" | "honorific" | "jobTitle" | "organizationName" | "vipTier" | "category" | "city" | "district" | "priority" | "invitationType" | "verificationStatus" | "preferredWindow"> & {
+export type MaskedRecipient = Pick<Recipient, "id" | "version" | "code" | "nameAr" | "nameEn" | "honorific" | "jobTitle" | "organizationName" | "vipTier" | "category" | "city" | "district" | "priority" | "invitationType" | "verificationStatus" | "preferredWindow"> & {
   mobile: string | null;
   altPhone: string | null;
   email: string | null;
@@ -37,7 +43,7 @@ export type MaskedRecipient = Pick<Recipient, "id" | "code" | "nameAr" | "nameEn
 
 export function maskRecipient(r: Recipient, reveal: boolean): MaskedRecipient {
   return {
-    id: r.id, code: r.code, nameAr: r.nameAr, nameEn: r.nameEn, honorific: r.honorific, jobTitle: r.jobTitle, organizationName: r.organizationName, vipTier: r.vipTier, category: r.category,
+    id: r.id, version: r.version, code: r.code, nameAr: r.nameAr, nameEn: r.nameEn, honorific: r.honorific, jobTitle: r.jobTitle, organizationName: r.organizationName, vipTier: r.vipTier, category: r.category,
     city: r.city, district: r.district, priority: r.priority, invitationType: r.invitationType, verificationStatus: r.verificationStatus, preferredWindow: r.preferredWindow,
     mobile: reveal ? r.mobile : maskPhone(r.mobile),
     altPhone: reveal ? r.altPhone : maskPhone(r.altPhone),
@@ -62,17 +68,19 @@ export const campaignSchema = z.object({
   requireEvidence: z.boolean().default(true),
   requireReceiverName: z.boolean().default(true),
   maxAttempts: z.coerce.number().int().min(1).max(10).default(3),
+  version: versionField,
 });
 
 export async function saveCampaign(ctx: ServiceContext, input: z.output<typeof campaignSchema>) {
   assertCan(ctx, "delivery.dispatch");
   return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
     const scope = await projectScope(tx, ctx, input.projectId);
+    assertNotArchived(scope);
     if (!scope.operate) throw new ForbiddenError();
     const ws = await tx.workstream.findFirst({ where: { projectId: input.projectId, kind: "VIP_DELIVERY" } });
     const data = { name: input.name, invitationType: input.invitationType ?? null, deliveryDeadline: input.deliveryDeadline ?? null, config: { requireEvidence: input.requireEvidence, requireReceiverName: input.requireReceiverName, maxAttempts: input.maxAttempts } };
     const c = input.id
-      ? await tx.invitationCampaign.update({ where: { id: (await tx.invitationCampaign.findFirstOrThrow({ where: { id: input.id, projectId: input.projectId } })).id }, data })
+      ? await casUpdate<InvitationCampaign>({ tx, ctx, model: "invitationCampaign", id: (await tx.invitationCampaign.findFirstOrThrow({ where: { id: input.id, projectId: input.projectId } })).id, version: input.version, data, entityType: "CAMPAIGN" })
       : await tx.invitationCampaign.create({ data: { ...data, organizationId: ctx.orgId, projectId: input.projectId, workstreamId: ws?.id ?? null, type: "PHYSICAL", createdById: ctx.userId } });
     await audit(tx, ctx, { action: input.id ? "campaign.update" : "campaign.create", entityType: "CAMPAIGN", entityId: c.id, projectId: input.projectId, after: data });
     return c;
@@ -86,6 +94,7 @@ export async function generateDeliveries(ctx: ServiceContext, input: { campaignI
     const c = await tx.invitationCampaign.findUnique({ where: { id: input.campaignId } });
     if (!c || c.type !== "PHYSICAL") throw new NotFoundError();
     const scope = await projectScope(tx, ctx, c.projectId);
+    assertNotArchived(scope);
     if (!scope.operate) throw new ForbiddenError();
     const recipients = await tx.recipient.findMany({ where: { id: { in: input.recipientIds }, projectId: c.projectId, deletedAt: null } });
     const existing = new Set((await tx.delivery.findMany({ where: { campaignId: c.id, recipientId: { in: recipients.map((r) => r.id) } }, select: { recipientId: true } })).map((d) => d.recipientId));
@@ -214,7 +223,9 @@ export async function bulkAssign(ctx: ServiceContext, input: z.output<typeof ass
   assertCan(ctx, "delivery.dispatch");
   return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
     const scope = await projectScope(tx, ctx, input.projectId);
+    assertNotArchived(scope);
     if (!scope.operate || scope.clientView) throw new ForbiddenError();
+    if (input.agentId) assertRunning(scope);
     const deliveries = await tx.delivery.findMany({ where: { id: { in: input.deliveryIds }, projectId: input.projectId } });
     if (input.batchId && !(await tx.deliveryBatch.findFirst({ where: { id: input.batchId, projectId: input.projectId } }))) throw new NotFoundError();
     const skipped: { id: string; reason: string }[] = [];
@@ -261,7 +272,9 @@ export async function createBatch(ctx: ServiceContext, input: z.output<typeof ba
   assertCan(ctx, "delivery.dispatch");
   return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
     const scope = await projectScope(tx, ctx, input.projectId);
+    assertNotArchived(scope);
     if (!scope.operate) throw new ForbiddenError();
+    assertRunning(scope);
     if (!(await tx.invitationCampaign.findFirst({ where: { id: input.campaignId, projectId: input.projectId } }))) throw new NotFoundError();
     const b = await tx.deliveryBatch.create({ data: { organizationId: ctx.orgId, projectId: input.projectId, campaignId: input.campaignId, code: `BT-${shortCode(5)}`, name: input.name, territory: input.territory ?? null, plannedDate: input.plannedDate ?? null, createdById: ctx.userId } });
     if (input.deliveryIds.length) await tx.delivery.updateMany({ where: { id: { in: input.deliveryIds }, projectId: input.projectId }, data: { batchId: b.id } });
@@ -319,6 +332,14 @@ export async function updateDeliveryStatusTx(tx: Tx, ctx: ServiceContext, input:
   } else if (!can(ctx, "delivery.update") && !can(ctx, "delivery.dispatch")) throw new ForbiddenError();
   if (scope.clientView) throw new NotFoundError();
   if (input.version !== undefined && input.version !== d.version) throw new DeliveryConflictError({ status: d.status, version: d.version });
+  if (scope.archived) {
+    // LC rule 5 / §1.3: in an archived project only the in-car tail moves. The agent records the truth
+    // (RETURNED, or DELIVERED if already handed over) and dispatch closes RETURNED → CANCELLED.
+    if (d.status === "OUT_FOR_DELIVERY" && !["RETURNED", "DELIVERED"].includes(input.to)) throw new AppError("errors.archivedOutForDelivery", "PROJECT_ARCHIVED", 409);
+    if (d.status === "CANCELLED" && input.to === "READY") throw new AppError("errors.archivedNoReopen", "PROJECT_ARCHIVED", 409);
+    const tail = d.status === "OUT_FOR_DELIVERY" || (d.status === "RETURNED" && input.to === "CANCELLED" && !field && can(ctx, "delivery.dispatch"));
+    if (!tail) throw new ProjectArchivedError();
+  } else if (input.to === "ASSIGNED") assertRunning(scope);
   if (!canTransition(d.status, input.to, field)) throw new ValidationError("errors.invalidTransition", { to: [`${d.status}→${input.to}`] });
   const campaign = await tx.invitationCampaign.findUniqueOrThrow({ where: { id: d.campaignId } });
   const cfg = campaignConfig(campaign.config);
@@ -383,7 +404,7 @@ export async function escalateDelivery(ctx: ServiceContext, input: { deliveryId:
   return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
     const d = await tx.delivery.findUnique({ where: { id: input.deliveryId } });
     if (!d) throw new NotFoundError();
-    await projectScope(tx, ctx, d.projectId);
+    assertNotArchived(await projectScope(tx, ctx, d.projectId));
     await tx.delivery.update({ where: { id: d.id }, data: { escalatedAt: new Date(), escalationNote: input.note, version: { increment: 1 } } });
     await tx.deliveryEvent.create({ data: { organizationId: ctx.orgId, deliveryId: d.id, fromStatus: d.status, toStatus: d.status, actorId: ctx.userId, reason: "ESCALATED", note: input.note } });
     await audit(tx, ctx, { action: "delivery.escalate", entityType: "DELIVERY", entityId: d.id, projectId: d.projectId, summary: input.note });
@@ -483,6 +504,7 @@ export const recipientPatchSchema = z.object({
   priority: z.enum(["LOW", "MEDIUM", "HIGH", "CRITICAL"]).optional(),
   verificationStatus: z.enum(["UNVERIFIED", "VERIFIED", "INVALID"]).optional(),
   notes: z.string().trim().max(2000).nullish(),
+  version: versionField,
 });
 
 export async function updateRecipient(ctx: ServiceContext, input: z.output<typeof recipientPatchSchema>) {
@@ -491,8 +513,9 @@ export async function updateRecipient(ctx: ServiceContext, input: z.output<typeo
     const r = await tx.recipient.findUnique({ where: { id: input.id } });
     if (!r || r.deletedAt) throw new NotFoundError();
     const scope = await projectScope(tx, ctx, r.projectId);
+    assertNotArchived(scope);
     if (!scope.operate) throw new ForbiddenError();
-    const { id, mobile, mapsUrl, ...rest } = input;
+    const { id, mobile, mapsUrl, version, ...rest } = input;
     const data: Prisma.RecipientUpdateInput = { ...rest };
     // contact fields require VIP visibility (you cannot overwrite what you cannot see)
     if (mobile !== undefined || mapsUrl !== undefined || rest.address !== undefined) {
@@ -512,8 +535,8 @@ export async function updateRecipient(ctx: ServiceContext, input: z.output<typeo
         if (c) { data.lat = c.lat; data.lng = c.lng; }
       }
     }
-    const updated = await tx.recipient.update({ where: { id }, data });
-    const changed = Object.keys(input).filter((k) => k !== "id");
+    const updated = await casUpdate<Recipient>({ tx, ctx, model: "recipient", id, version, data: data as Record<string, unknown>, entityType: "RECIPIENT", redact: scope.vip ? [] : ["deliveryInstructions", "notes"] });
+    const changed = Object.keys(input).filter((k) => k !== "id" && k !== "version");
     await audit(tx, ctx, { action: "recipient.update", entityType: "RECIPIENT", entityId: id, projectId: r.projectId, summary: `${r.code}: ${changed.join(", ")}`, before: Object.fromEntries(changed.map((k) => [k, (r as Record<string, unknown>)[k]])), after: Object.fromEntries(changed.map((k) => [k, (updated as Record<string, unknown>)[k]])) });
     return maskRecipient(updated, scope.vip);
   });
@@ -524,17 +547,18 @@ export async function anonymizeRecipients(ctx: ServiceContext, input: { projectI
   assertCan(ctx, "recipient.manage");
   return withTenant({ orgId: ctx.orgId, userId: ctx.userId }, async (tx) => {
     const scope = await projectScope(tx, ctx, input.projectId);
-    if (!scope.manage) throw new ForbiddenError();
+    // anonymisation and retention stay available in archived projects (PDPL, LC rule 5)
+    if (!(scope.manage || (scope.archived && scope.tailOperate))) throw new ForbiddenError();
     const where: Prisma.RecipientWhereInput = { projectId: input.projectId, anonymizedAt: null, ...(input.recipientIds ? { id: { in: input.recipientIds } } : {}), ...(input.expiredOnly ? { retentionUntil: { lt: new Date() } } : {}) };
     const ids = (await tx.recipient.findMany({ where, select: { id: true } })).map((x) => x.id);
     const r = await tx.recipient.updateMany({
       where: { id: { in: ids } },
-      data: { nameAr: null, nameEn: null, honorific: null, jobTitle: null, mobile: null, mobileRaw: null, altPhone: null, email: null, address: null, mapsUrl: null, lat: null, lng: null, deliveryInstructions: null, notes: null, matchKey: null, externalRef: null, anonymizedAt: new Date() },
+      data: { nameAr: null, nameEn: null, honorific: null, jobTitle: null, mobile: null, mobileRaw: null, altPhone: null, email: null, address: null, mapsUrl: null, lat: null, lng: null, deliveryInstructions: null, notes: null, matchKey: null, externalRef: null, anonymizedAt: new Date(), version: { increment: 1 } },
     });
     if (ids.length) {
       // erase the copies too: protocol guests, invitation addresses and rendered messages, RSVP notes,
       // receiver names, and the raw spreadsheet rows they were imported from
-      await tx.guest.updateMany({ where: { recipientId: { in: ids } }, data: { nameAr: "—", nameEn: null, honorific: null, title: null, organizationName: null, mobile: null, specialInstructions: null, restrictedNotes: null } });
+      await tx.guest.updateMany({ where: { recipientId: { in: ids } }, data: { nameAr: "—", nameEn: null, honorific: null, title: null, organizationName: null, mobile: null, specialInstructions: null, restrictedNotes: null, version: { increment: 1 } } });
       await tx.messageJob.updateMany({ where: { invitation: { recipientId: { in: ids } } }, data: { to: "", subject: null, body: "[erased]" } });
       await tx.rSVP.updateMany({ where: { invitation: { recipientId: { in: ids } } }, data: { note: null, ip: null } });
       await tx.digitalInvitation.updateMany({ where: { recipientId: { in: ids } }, data: { address: "", personalization: {} } });

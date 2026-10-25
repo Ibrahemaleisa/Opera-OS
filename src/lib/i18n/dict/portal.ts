@@ -7,6 +7,10 @@ export const portal = defineMessages(
     subtitle: "تابعوا التقدم المعتمد، واعتمدوا التصاميم والمخرجات، وأرسلوا طلبات التعديل.",
     projects: "المشاريع",
     noProjects: "لا توجد مشاريع مشتركة معكم حالياً",
+    // Milestone 2: archived projects (BUSINESS_RULES §1.5 LC rule 7)
+    pastProjects: "مشاريع سابقة",
+    pastHint: "للاطلاع فقط، وتبقى ظاهرة 180 يوماً بعد انتهائها.",
+    readOnly: "هذا المشروع {status} وللاطلاع فقط: لا طلبات تغيير أو قرارات جديدة.",
     progress: "التقدم المعتمد",
     progressHint: "تُحتسب الأعمال المكتملة والمعتمدة فقط",
     pending: "بانتظار اعتمادكم",
@@ -50,6 +54,10 @@ export const portal = defineMessages(
     subtitle: "Follow approved progress, approve designs and deliverables, and send change requests.",
     projects: "Projects",
     noProjects: "No projects are shared with you yet",
+    // Milestone 2: archived projects (BUSINESS_RULES §1.5 LC rule 7)
+    pastProjects: "Past projects",
+    pastHint: "Read-only. Shown for 180 days after the project ended.",
+    readOnly: "This project is {status} and read-only: no new change requests or decisions.",
     progress: "Approved progress",
     progressHint: "Only completed, approved work is counted",
     pending: "Awaiting your approval",

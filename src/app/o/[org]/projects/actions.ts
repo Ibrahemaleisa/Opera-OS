@@ -3,7 +3,8 @@
 import { z } from "zod";
 import { orgAction } from "@/server/action";
 import * as projects from "@/server/modules/projects/service";
-import { createProjectSchema, deliverableSchema, memberSchema, milestoneSchema, projectSchema, riskSchema } from "@/server/modules/projects/schemas";
+import { createProjectSchema, deliverableSchema, independentApprovalSchema, memberSchema, milestoneSchema, projectSchema, riskSchema } from "@/server/modules/projects/schemas";
+import { LIFECYCLE_TARGETS, statusChangeInput } from "@/server/modules/projects/lifecycle";
 import * as tasks from "@/server/modules/tasks/service";
 import * as approvals from "@/server/modules/approvals/service";
 import * as templates from "@/server/modules/templates/service";
@@ -14,7 +15,11 @@ export const createProjectAction = orgAction(createProjectSchema, async (ctx, i)
   return { id: r.project.id, code: r.project.code };
 });
 export const updateProjectAction = orgAction(z.object({ id: z.string() }).and(projectSchema), (ctx, { id, ...i }) => projects.updateProject(ctx, id, i as never).then((p) => ({ id: p.id })));
-export const setProjectStatusAction = orgAction(z.object({ id: z.string(), status: z.enum(["DRAFT", "PLANNING", "ACTIVE", "ON_HOLD", "AT_RISK", "COMPLETED", "CLOSED", "CANCELLED"]) }), (ctx, i) => projects.setProjectStatus(ctx, i.id, i.status).then(() => null));
+/** Lifecycle moves (BUSINESS_RULES §1): the loaded version, a reason where required, the client notice on cancel. AT_RISK is not settable. */
+export const setProjectStatusAction = orgAction(statusChangeInput, (ctx, { id, status, ...opts }) => projects.setProjectStatus(ctx, id, status, opts).then((p) => ({ status: p.status, version: p.version })));
+/** The read-only impact preview the status dialog shows before cancel, close, hold, complete or reopen (LC rule 4). */
+export const previewStatusAction = orgAction(z.object({ id: z.string(), status: z.enum(LIFECYCLE_TARGETS) }), (ctx, i) => projects.previewProjectStatusChange(ctx, i.id, i.status));
+export const setIndependentApprovalAction = orgAction(independentApprovalSchema, (ctx, i) => projects.setIndependentApproval(ctx, i).then((p) => ({ version: p.version })));
 export const upsertMemberAction = orgAction(memberSchema, (ctx, i) => projects.upsertProjectMember(ctx, i).then(() => null));
 export const removeMemberAction = orgAction(z.object({ projectId: z.string(), userId: z.string() }), (ctx, i) => projects.removeProjectMember(ctx, i.projectId, i.userId));
 export const saveMilestoneAction = orgAction(milestoneSchema, (ctx, i) => projects.saveMilestone(ctx, i).then(() => null));

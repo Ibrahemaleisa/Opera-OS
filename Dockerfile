@@ -29,10 +29,10 @@ CMD ["pnpm", "worker"]
 FROM node:${NODE_VERSION} AS app
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=3000 HOSTNAME=0.0.0.0
 WORKDIR /app
-RUN groupadd --system --gid 1001 operra && useradd --system --uid 1001 --gid operra operra && mkdir -p /app/storage && chown operra:operra /app/storage
-COPY --from=build --chown=operra:operra /app/.next/standalone ./
-COPY --from=build --chown=operra:operra /app/.next/static ./.next/static
-COPY --from=build --chown=operra:operra /app/public ./public
-USER operra
+RUN groupadd --system --gid 1001 opera && useradd --system --uid 1001 --gid opera opera && mkdir -p /app/storage && chown opera:opera /app/storage
+COPY --from=build --chown=opera:opera /app/.next/standalone ./
+COPY --from=build --chown=opera:opera /app/.next/static ./.next/static
+COPY --from=build --chown=opera:opera /app/public ./public
+USER opera
 EXPOSE 3000
 CMD ["node", "server.js"]

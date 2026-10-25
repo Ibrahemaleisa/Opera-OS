@@ -26,6 +26,16 @@ export default async function RsvpPage({ params, searchParams }: { params: Promi
     );
   };
   if (!data) return shell(<h1 className="text-lg font-medium">{m.errors.tokenInvalid}</h1>);
+  const orgLabel = locale === "en" ? data.org.nameEn ?? data.org.name : data.org.name;
+  if (data.inactive) {
+    return shell(
+      <div className="grid gap-3" data-testid="rsvp-inactive">
+        <p className="eyebrow">{orgLabel}</p>
+        <h1 className="text-lg font-medium">{p.inactive}</h1>
+      </div>,
+      data.org.brandColor,
+    );
+  }
 
   const name = (locale === "en" ? data.recipient?.nameEn ?? data.recipient?.nameAr : data.recipient?.nameAr ?? data.recipient?.nameEn) ?? "";
   const orgName = locale === "en" ? data.org.nameEn ?? data.org.name : data.org.name;

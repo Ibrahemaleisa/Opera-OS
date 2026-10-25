@@ -23,6 +23,9 @@ import { createWorkOrder, saveVendor } from "@/server/modules/vendors/service";
 import { addMember, createAgency } from "../../helpers";
 import { PNG, blankProject, clientUser, createClientCompany, membershipId, recipients, task, templateId } from "./qa-helpers";
 
+// Milestone 2 (BUSINESS_RULES §1, §6): project edits and status changes carry the version the user loaded
+const projectVersion = async (id: string) => (await adminDb().project.findUniqueOrThrow({ where: { id }, select: { version: true } })).version;
+
 const DAY = 86_400_000;
 const member = (projectId: string, userId: string, role: "MANAGER" | "LEAD" | "MEMBER" | "FREELANCER" | "CLIENT_APPROVER", extra: Partial<{ workstreamIds: string[]; canViewVip: boolean; canApprove: boolean }> = {}) => ({
   projectId, userId, role, canApprove: extra.canApprove ?? false, canExport: false, canViewFinance: false, canViewVip: extra.canViewVip ?? false, workstreamIds: extra.workstreamIds ?? [],
@@ -141,10 +144,14 @@ describe("QA: people leave mid-project", () => {
     const pm = await addMember(a.ctx, "project_manager", "Leaving PM");
     const p = await blankProject(pm.ctx, "PM-owned project"); // pm is the sole MANAGER
     const t = await task(pm.ctx, p.id, "Confirm venue contract", { ownerId: pm.userId, dueAt: new Date(Date.now() - 2 * DAY), priority: "CRITICAL" });
-    await setMemberStatus(a.ctx, { membershipId: await membershipId(a.orgId, pm.userId), status: "SUSPENDED" });
+    // M2 HO rule 3 (BUSINESS_RULES §2.2): the last PM of a live project can't leave without a replacement PM,
+    // so the owner takes the PM role; the task itself is left unowned (no H1 replacement chosen).
+    await setMemberStatus(a.ctx, { membershipId: await membershipId(a.orgId, pm.userId), status: "SUSPENDED", handover: { perCategory: { H6: a.userId } } });
     await schedulerTick();
     await processOutbox(a.orgId);
-    const notes = await withTenant({ orgId: a.orgId }, (tx) => tx.notification.findMany({ where: { type: "task.overdue", entityId: t.id } }));
+    // M2 ladder (BUSINESS_RULES §3.4): an owner who left is skipped and the task goes straight to L2
+    // (`task.escalated`) for the PMs, falling back to directors → owners when no PM is active.
+    const notes = await withTenant({ orgId: a.orgId }, (tx) => tx.notification.findMany({ where: { type: { in: ["task.overdue", "task.escalated"] }, entityId: t.id } }));
     // [arch-audit fix] inactive members are no longer notified (was: "the alert fired — to the suspended PM")
     expect(notes.some((n) => n.userId === pm.userId), "no alert to the suspended PM").toBe(false);
     // EXPECTED: somebody who can still act (an active manager / org admin) is told
@@ -171,8 +178,12 @@ describe("QA: people leave mid-project", () => {
     const d = await saveDeliverable(a.ctx, { projectId: p.id, title: "Run of show v3", status: "IN_PROGRESS", clientVisible: true, requiresApproval: true });
     await requestApproval(a.ctx, { projectId: p.id, entityType: "DELIVERABLE", entityId: d.id, title: "Approve run of show", approverType: "CLIENT", approverUserId: c1.userId });
     await setMemberStatus(a.ctx, { membershipId: await membershipId(a.orgId, c1.userId), status: "SUSPENDED" });
-    // EXPECTED: the agency can re-route the approval to the remaining client approver
-    await expect(requestApproval(a.ctx, { projectId: p.id, entityType: "DELIVERABLE", entityId: d.id, title: "Approve run of show (re-routed)", approverType: "CLIENT", approverUserId: c2.userId })).resolves.toBeTruthy();
+    // EXPECTED: the approval is recoverable by the remaining client approver. Since M2 (HO-3, BUSINESS_RULES §2.1 H3)
+    // the handover clears the departed approver's designation itself, so the request stays PENDING for the pool
+    // (re-requesting is no longer needed) and the remaining client approver can decide it.
+    const pending = await withTenant({ orgId: a.orgId }, (tx) => tx.approval.findFirstOrThrow({ where: { entityId: d.id, status: "PENDING" } }));
+    expect(pending.approverUserId).toBeNull();
+    await expect(decideApproval(c2.ctx, { approvalId: pending.id, decision: "APPROVED", comment: null })).resolves.toBeTruthy();
   });
 
   it("suspending a field agent records the unassignment and does not strand in-flight deliveries", async () => {
@@ -288,7 +299,7 @@ describe("QA: scope boundaries inside a tenant", () => {
     const p = await blankProject(a.ctx, "Re-assigned project", { clientId: coA.id });
     await upsertProjectMember(a.ctx, member(p.id, clA.userId, "CLIENT_APPROVER"));
     expect((await portalProject(clA.ctx, p.id)).project.id).toBe(p.id);
-    await updateProject(a.ctx, p.id, { name: p.name, type: "CUSTOM", priority: "MEDIUM", currency: "SAR", clientPortal: true, venueIds: [], clientId: coB.id });
+    await updateProject(a.ctx, p.id, { name: p.name, type: "CUSTOM", priority: "MEDIUM", currency: "SAR", clientPortal: true, venueIds: [], clientId: coB.id, version: await projectVersion(p.id) });
     // EXPECTED: Client A no longer sees Client B's project
     await expect(portalProject(clA.ctx, p.id)).rejects.toThrow();
   });
@@ -306,16 +317,17 @@ describe("QA: scope boundaries inside a tenant", () => {
 });
 
 describe("QA: concurrency & lost updates", () => {
-  // Open defect (QA S3-1, register §3 "Concurrency"): no optimistic concurrency on project edits. Deferred to Milestone 2.
-  it.fails("[S3-1] known defect, Milestone 2 — two managers editing project details: the second, stale save does not silently revert the first", async () => {
+  // QA S3-1, fixed in Milestone 2 by compare-and-set on Project.version (BUSINESS_RULES §6, CE-1). The forms now
+  // carry the version they loaded; a save without one is refused (CE-3), so the stale form sends the version it loaded.
+  it("[S3-1] two managers editing project details: the second, stale save does not silently revert the first (CE-1)", async () => {
     const a = await createAgency("QA ProjectLostUpdate");
     const pm = await addMember(a.ctx, "project_manager", "PM B");
     const p = await blankProject(a.ctx, "Original name");
     await upsertProjectMember(a.ctx, member(p.id, pm.userId, "MANAGER"));
-    const base = { type: "CUSTOM" as const, priority: "MEDIUM" as const, currency: "SAR", clientPortal: true, venueIds: [] };
-    // both managers opened the edit form showing "Original name"
+    // both managers opened the edit form showing "Original name" at the same version
+    const base = { type: "CUSTOM" as const, priority: "MEDIUM" as const, currency: "SAR", clientPortal: true, venueIds: [], version: await projectVersion(p.id) };
     await updateProject(a.ctx, p.id, { ...base, name: "Renamed by owner", description: null });
-    await updateProject(pm.ctx, p.id, { ...base, name: "Original name", description: "Added by PM from a stale form" }).catch(() => undefined);
+    await expect(updateProject(pm.ctx, p.id, { ...base, name: "Original name", description: "Added by PM from a stale form" })).rejects.toMatchObject({ code: "CONFLICT" });
     const now = await withTenant({ orgId: a.orgId }, (tx) => tx.project.findUniqueOrThrow({ where: { id: p.id } }));
     expect(now.name).toBe("Renamed by owner");
   });
@@ -336,8 +348,8 @@ describe("QA: concurrency & lost updates", () => {
 });
 
 describe("QA: deadlines, cancellation and integrity", () => {
-  // Open defect (QA S3-3, register §3 "Operations"): overdue vendor work orders never escalate. Deferred to Milestone 2/3.
-  it.fails("[S3-3] known defect, Milestone 2 — an overdue vendor work order raises an escalation", async () => {
+  // QA S3-3 (register §3 "Operations"), fixed in Milestone 2 by the work-order ladder (BUSINESS_RULES §3.4, KD-1 / ES-1).
+  it("[S3-3] an overdue vendor work order raises an escalation (ES-1)", async () => {
     const a = await createAgency("QA VendorLate");
     const p = await blankProject(a.ctx);
     const v = await saveVendor(a.ctx, { name: "AV Rentals", category: "AV", status: "ACTIVE" });
@@ -352,19 +364,20 @@ describe("QA: deadlines, cancellation and integrity", () => {
     const a = await createAgency("QA CancelProject");
     const p = await blankProject(a.ctx, "To be cancelled");
     const t = await task(a.ctx, p.id, "Overdue item", { ownerId: a.userId, dueAt: new Date(Date.now() - DAY) });
-    await setProjectStatus(a.ctx, p.id, "CANCELLED");
+    await setProjectStatus(a.ctx, p.id, "CANCELLED", { version: await projectVersion(p.id), reason: "QA: project cancelled by the client" });
     const since = new Date();
     await schedulerTick();
     const overdue = await withTenant({ orgId: a.orgId }, (tx) => tx.outboxEvent.findMany({ where: { type: "task.overdue", createdAt: { gte: since } } }));
     expect(overdue.filter((e) => JSON.stringify(e.payload).includes(t.id)), "no overdue alert for a cancelled project").toHaveLength(0);
   });
 
-  // Open defect (F-22 cascade): cancelling a project leaves its tasks open. Deferred to Milestone 2 (lifecycle cascade).
-  it.fails("[F-22] known defect, Milestone 2 — cancelling a project closes its open tasks", async () => {
+  // F-22 cascade, fixed in Milestone 2 by the lifecycle cascade (BUSINESS_RULES §1.3, LC-1). Cancelling now needs the
+  // loaded version and a reason (§1.2).
+  it("[F-22] cancelling a project closes its open tasks (LC-1)", async () => {
     const a = await createAgency("QA CancelCascade");
     const p = await blankProject(a.ctx, "To be cancelled");
     const t = await task(a.ctx, p.id, "Overdue item", { ownerId: a.userId, dueAt: new Date(Date.now() - DAY) });
-    await setProjectStatus(a.ctx, p.id, "CANCELLED");
+    await setProjectStatus(a.ctx, p.id, "CANCELLED", { version: await projectVersion(p.id), reason: "QA: project cancelled by the client" });
     const after = await withTenant({ orgId: a.orgId }, (tx) => tx.task.findUniqueOrThrow({ where: { id: t.id } }));
     expect(after.statusCategory, "open tasks of a cancelled project are closed/cancelled").toBe("CANCELLED");
   });

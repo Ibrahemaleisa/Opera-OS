@@ -23,9 +23,11 @@ describe("booth & pavilion production", () => {
   it("stage gates, design approval, BOQ, inspections, snag verification and handover", async () => {
     const { a, project, director } = await setup();
     const booth = await withTenant({ orgId: a.orgId }, (tx) => tx.booth.findFirstOrThrow({ where: { projectId: project.id } }));
+    // every booth update and stage move carries the version the user loaded (BUSINESS_RULES §6)
+    const ver = () => withTenant({ orgId: a.orgId }, (tx) => tx.booth.findUniqueOrThrow({ where: { id: booth.id } })).then((x) => x.version);
 
-    await expect(setBoothStage(a.ctx, { boothId: booth.id, stage: "PROCUREMENT" })).rejects.toThrow("booths.gateBlocked");
-    await expect(saveBooth(a.ctx, { id: booth.id, projectId: project.id, name: booth.name, kind: "BOOTH", permitStatus: "NOT_STARTED", buildStartAt: new Date("2026-12-10"), siteAccessAt: new Date("2026-12-12") })).rejects.toThrow("errors.validation");
+    await expect(setBoothStage(a.ctx, { boothId: booth.id, stage: "PROCUREMENT", version: await ver() })).rejects.toThrow("booths.gateBlocked");
+    await expect(saveBooth(a.ctx, { id: booth.id, projectId: project.id, name: booth.name, kind: "BOOTH", permitStatus: "NOT_STARTED", buildStartAt: new Date("2026-12-10"), siteAccessAt: new Date("2026-12-12"), version: await ver() })).rejects.toThrow("errors.validation");
 
     const rev = await createRevision(a.ctx, { boothId: booth.id, title: "Concept A" });
     await expect(submitRevision(a.ctx, { revisionId: rev.id, approverType: "INTERNAL" })).rejects.toThrow("booths.revisionNeedsFile");
@@ -42,25 +44,25 @@ describe("booth & pavilion production", () => {
     b = await getBooth(a.ctx, booth.id);
     expect(b.totals.estimate).toBe(10000);
 
-    await setBoothStage(a.ctx, { boothId: booth.id, stage: "FABRICATION" });
-    await setBoothStage(a.ctx, { boothId: booth.id, stage: "LOGISTICS" });
-    await expect(setBoothStage(a.ctx, { boothId: booth.id, stage: "INSTALLATION" })).rejects.toThrow("booths.gateBlocked"); // permit
-    await saveBooth(a.ctx, { id: booth.id, projectId: project.id, name: booth.name, kind: "BOOTH", permitStatus: "APPROVED" });
-    await setBoothStage(a.ctx, { boothId: booth.id, stage: "INSTALLATION" });
-    await expect(setBoothStage(a.ctx, { boothId: booth.id, stage: "LOGISTICS" })).rejects.toThrow("errors.validation"); // back needs reason
+    await setBoothStage(a.ctx, { boothId: booth.id, stage: "FABRICATION", version: await ver() });
+    await setBoothStage(a.ctx, { boothId: booth.id, stage: "LOGISTICS", version: await ver() });
+    await expect(setBoothStage(a.ctx, { boothId: booth.id, stage: "INSTALLATION", version: await ver() })).rejects.toThrow("booths.gateBlocked"); // permit
+    await saveBooth(a.ctx, { id: booth.id, projectId: project.id, name: booth.name, kind: "BOOTH", permitStatus: "APPROVED", version: await ver() });
+    await setBoothStage(a.ctx, { boothId: booth.id, stage: "INSTALLATION", version: await ver() });
+    await expect(setBoothStage(a.ctx, { boothId: booth.id, stage: "LOGISTICS", version: await ver() })).rejects.toThrow("errors.validation"); // back needs reason
 
     const snag = await saveSnag(a.ctx, { boothId: booth.id, title: "Loose panel", severity: "HIGH" });
     await expect(recordInspection(a.ctx, { boothId: booth.id, type: "SAFETY", result: "FAIL" })).rejects.toThrow("errors.validation");
     for (const type of ["STRUCTURAL", "ELECTRICAL", "SAFETY"] as const) await recordInspection(a.ctx, { boothId: booth.id, type, result: "PASS" });
-    await expect(signHandover(a.ctx, { boothId: booth.id, signedBy: "Client rep (synthetic)" })).rejects.toThrow("booths.gateBlocked"); // open HIGH snag
+    await expect(signHandover(a.ctx, { boothId: booth.id, signedBy: "Client rep (synthetic)", version: await ver() })).rejects.toThrow("booths.gateBlocked"); // open HIGH snag
     await setSnagStatus(a.ctx, { id: snag.id, status: "FIXED" });
     await expect(setSnagStatus(a.ctx, { id: snag.id, status: "VERIFIED" })).rejects.toThrow("booths.verifyOwnFix");
     await setSnagStatus(director.ctx, { id: snag.id, status: "VERIFIED" });
-    await signHandover(a.ctx, { boothId: booth.id, signedBy: "Client rep (synthetic)" });
+    await signHandover(a.ctx, { boothId: booth.id, signedBy: "Client rep (synthetic)", version: await ver() });
     b = await getBooth(a.ctx, booth.id);
     expect(b.booth.stage).toBe("HANDOVER");
     expect(b.readiness.every((r) => r.ok)).toBe(true);
-    await setBoothStage(a.ctx, { boothId: booth.id, stage: "LIVE" });
+    await setBoothStage(a.ctx, { boothId: booth.id, stage: "LIVE", version: await ver() });
 
     const other = await createAgency("Other");
     await expect(getBooth(other.ctx, booth.id)).rejects.toThrow();

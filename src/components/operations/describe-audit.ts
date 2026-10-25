@@ -40,6 +40,6 @@ export function describeAudit(e: { action: string; summary: string | null; actor
   const entities = a.entity as Record<string, string>;
   const prefix = e.action.split(".")[0];
   const title = actions[e.action] ?? interpolate(a.updated, { entity: entities[prefix] ?? a.activity });
-  const actor = !e.actorName || e.actorName === "Operra" || e.actorName === "system" ? a.system : e.actorName;
+  const actor = !e.actorName || e.actorName === "Opera" || e.actorName === "Operra" /* earlier system name */ || e.actorName === "system" ? a.system : e.actorName;
   return { title, actor, detail: e.summary ? localizeSummary(e.action, e.summary, m, locale === "ar") : null };
 }

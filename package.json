@@ -1,8 +1,8 @@
 {
-  "name": "operra-events-os",
+  "name": "opera",
   "version": "0.1.0",
   "private": true,
-  "description": "Operra Events OS — Arabic-first multi-tenant operations platform for Saudi event, protocol, VIP invitation and exhibition agencies.",
+  "description": "Opera — Arabic-first multi-tenant operations platform by Opera Technologies for agencies and organizations that run complex operations: events, conferences, protocol, VIP invitations and exhibitions.",
   "packageManager": "pnpm@10.28.0",
   "engines": {
     "node": ">=22"
