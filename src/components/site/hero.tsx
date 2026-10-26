@@ -1,5 +1,7 @@
+import Image from "next/image";
 import Link from "next/link";
 import { SYMBOL } from "@/components/brand/logo-paths";
+import { HERO_PHOTO } from "@/content/field";
 import type { SiteCopy } from "@/content/site-copy";
 import { Container } from "./primitives";
 
@@ -16,6 +18,13 @@ function Orbit({ className }: { className?: string }) {
 export function Hero({ t, country }: { t: SiteCopy; country: string }) {
   return (
     <section aria-labelledby="hero-title" className="bg-night-gradient relative isolate -mt-[72px] overflow-hidden text-mist">
+      {/* a real exhibition floor, held in the brand's night: full-bleed under the words on phones,
+          the far side of the page on desktop, fading into the night toward the headline */}
+      <div aria-hidden className="absolute inset-y-0 end-0 -z-20 w-full lg:w-[64%] lg:ltr:[mask-image:linear-gradient(to_right,transparent_0%,black_50%)] lg:rtl:[mask-image:linear-gradient(to_left,transparent_0%,black_50%)]">
+        <Image src={HERO_PHOTO.src} alt="" fill loading="eager" fetchPriority="high" sizes="(min-width: 1024px) 64vw, 100vw" className="object-cover opacity-45 lg:opacity-60" style={{ objectPosition: HERO_PHOTO.focus }} />
+        <div className="absolute inset-0 bg-aubergine/25 mix-blend-multiply" />
+        <div className="absolute inset-0 bg-[linear-gradient(to_top,var(--night)_0%,rgb(8_5_14/0.75)_30%,transparent_65%),linear-gradient(to_bottom,rgb(8_5_14/0.65)_0%,transparent_22%)]" />
+      </div>
       <Orbit className="pointer-events-none absolute -end-[34%] top-[56px] -z-10 aspect-square w-[88%] rtl:-end-[10%] sm:-end-[18%] sm:w-[70%] sm:rtl:-end-[4%] lg:rtl:-end-[6%] lg:-end-[6%] lg:top-[88px] lg:w-[min(68vh,44vw)]" />
       <Container className="flex min-h-[100svh] flex-col pt-[136px] pb-10">
         <div className="mt-auto">

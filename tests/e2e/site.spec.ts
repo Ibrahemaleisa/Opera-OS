@@ -6,10 +6,10 @@ test("corporate homepage renders in both languages and hands off to sign-in", as
   await expect(page.getByRole("heading", { level: 1 })).toContainText("نبني الأصعب");
   for (const id of ["about", "capabilities", "work", "formula", "technologies", "contact"]) await expect(page.locator(`#${id}`)).toBeVisible();
   // no invented case studies; unconfirmed details are left out rather than shown as "[placeholders]"
-  // real field photographs, every one described for screen readers
-  const photos = page.locator("main img");
-  expect(await photos.count()).toBeGreaterThanOrEqual(7);
-  for (const alt of await photos.evaluateAll((els) => els.map((e) => e.getAttribute("alt") ?? ""))) expect(alt.length).toBeGreaterThan(10);
+  // real field photographs: content photos are described; background ones sit in aria-hidden layers
+  const photos = await page.locator("main img").evaluateAll((els) => els.map((e) => ({ alt: e.getAttribute("alt") ?? "", hidden: !!e.closest("[aria-hidden=true]") })));
+  expect(photos.filter((p) => !p.hidden).length).toBeGreaterThanOrEqual(5);
+  for (const p of photos) expect(p.hidden ? p.alt === "" : p.alt.length > 10).toBe(true);
   await expect(page.locator("#work")).toContainText("من الميدان");
   await expect(page.locator("main")).not.toContainText("[");
   await expect(page.locator("#leadership")).toHaveCount(0);

@@ -1,4 +1,6 @@
+import Image from "next/image";
 import { COMPANY } from "@/content/company";
+import { TEAM_PHOTO } from "@/content/field";
 import type { SiteCopy } from "@/content/site-copy";
 import { Container, SectionMark } from "./primitives";
 
@@ -18,6 +20,14 @@ export function Contact({ t, locale }: { t: SiteCopy; locale: "ar" | "en" }) {
   const { email, phone, address } = COMPANY.contact;
   return (
     <section id="contact" aria-labelledby="contact-title" className="bg-night-gradient relative isolate overflow-hidden py-24 text-mist sm:py-36">
+      {/* the people behind the promise, held back in the night so the words lead */}
+      <div aria-hidden className="absolute inset-0 -z-10">
+        <Image src={TEAM_PHOTO.src} alt="" fill sizes="100vw" className="object-cover opacity-40" style={{ objectPosition: TEAM_PHOTO.focus }} />
+        <div className="absolute inset-0 bg-aubergine/30 mix-blend-multiply" />
+        <div className="absolute inset-0 bg-[linear-gradient(to_top,var(--night)_0%,rgb(8_5_14/0.55)_45%,rgb(8_5_14/0.3)_100%)]" />
+        {/* deepest behind the headline, lighter where the team stands clear of it */}
+        <div className="absolute inset-0 ltr:bg-[linear-gradient(to_right,rgb(8_5_14/0.85)_0%,rgb(8_5_14/0.45)_55%,rgb(8_5_14/0.1)_100%)] rtl:bg-[linear-gradient(to_left,rgb(8_5_14/0.85)_0%,rgb(8_5_14/0.45)_55%,rgb(8_5_14/0.1)_100%)]" />
+      </div>
       <Container>
         <SectionMark index="06" label={c.label} />
         <div className="mt-14 grid gap-14 lg:grid-cols-12">
