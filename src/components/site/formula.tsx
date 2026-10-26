@@ -24,7 +24,7 @@ export function Formula({ t }: { t: SiteCopy }) {
   return (
     <section id="formula" aria-labelledby="formula-title" className="bg-mist py-24 text-ink sm:py-32">
       <Container>
-        <SectionMark index="03" label={f.label} />
+        <SectionMark index="04" label={f.label} />
         <div className="mt-12 grid items-center gap-14 lg:grid-cols-12">
           <div className="lg:col-span-6">
             <h2 id="formula-title" className="reveal site-h2">{f.title}</h2>

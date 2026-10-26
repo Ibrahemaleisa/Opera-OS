@@ -4,9 +4,13 @@ test("corporate homepage renders in both languages and hands off to sign-in", as
   await page.goto("/");
   await expect(page.locator("html")).toHaveAttribute("dir", "rtl");
   await expect(page.getByRole("heading", { level: 1 })).toContainText("نبني الأصعب");
-  for (const id of ["about", "capabilities", "formula", "work", "technologies", "contact"]) await expect(page.locator(`#${id}`)).toBeVisible();
+  for (const id of ["about", "capabilities", "work", "formula", "technologies", "contact"]) await expect(page.locator(`#${id}`)).toBeVisible();
   // no invented case studies; unconfirmed details are left out rather than shown as "[placeholders]"
-  await expect(page.locator("#work")).toContainText("نُعدّ حالياً");
+  // real field photographs, every one described for screen readers
+  const photos = page.locator("main img");
+  expect(await photos.count()).toBeGreaterThanOrEqual(7);
+  for (const alt of await photos.evaluateAll((els) => els.map((e) => e.getAttribute("alt") ?? ""))) expect(alt.length).toBeGreaterThan(10);
+  await expect(page.locator("#work")).toContainText("من الميدان");
   await expect(page.locator("main")).not.toContainText("[");
   await expect(page.locator("#leadership")).toHaveCount(0);
   // the illustrative status card says what each ring shows

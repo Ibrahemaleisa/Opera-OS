@@ -43,10 +43,10 @@ export default async function HomePage() {
     <>
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd).replace(/</g, "\\u003c") }} />
       <Hero t={t} country={COMPANY.country[locale]} />
-      <About t={t} />
+      <About t={t} locale={locale} />
       <Capabilities t={t} />
-      <Formula t={t} />
       <Work t={t} locale={locale} />
+      <Formula t={t} />
       <Technologies t={t} />
       <Contact t={t} locale={locale} />
     </>
