@@ -4,7 +4,6 @@ import { Capabilities } from "@/components/site/capabilities";
 import { Contact } from "@/components/site/contact";
 import { Formula } from "@/components/site/formula";
 import { Hero } from "@/components/site/hero";
-import { Leadership } from "@/components/site/leadership";
 import { Technologies } from "@/components/site/technologies";
 import { Work } from "@/components/site/work";
 import { COMPANY } from "@/content/company";
@@ -49,7 +48,6 @@ export default async function HomePage() {
       <Formula t={t} />
       <Work t={t} locale={locale} />
       <Technologies t={t} />
-      <Leadership t={t} locale={locale} />
       <Contact t={t} locale={locale} />
     </>
   );

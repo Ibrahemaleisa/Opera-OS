@@ -79,20 +79,18 @@ const ar = {
     body: "Opera Technologies هي الذراع التقنية لأوبيرا. نبني المنتجات الرقمية والأنظمة التشغيلية وحلول الأتمتة التي تعتمد عليها مشاريعنا، ونطوّر حلولاً تقنية لعملائنا.",
     proof: "تُدار مشاريعنا على منصة تشغيل بنيناها بأنفسنا: المهام، والتوصيل الميداني، والمراسم، والمشتريات، والمالية، في نظام واحد.",
     items: ["المنتجات والمنصات الرقمية", "البرمجيات المخصصة", "أنظمة الإدارة التشغيلية", "أتمتة سير العمل", "حلول أعمال مدعومة بالتقنية"],
-    panelTitle: "حالة العمل، الآن",
-    panelNote: "عرض توضيحي",
-    rows: [
-      { name: "استقبال الطلب", state: "مكتمل" },
-      { name: "التخطيط", state: "مكتمل" },
-      { name: "التنفيذ الميداني", state: "قيد التنفيذ" },
-      { name: "اعتماد العميل", state: "بانتظار الاعتماد" },
-      { name: "تقرير التسليم", state: "لم يبدأ" },
-    ],
-  },
-  leadership: {
-    label: "القيادة",
-    title: "القيادة",
-    titlePlaceholder: "[المسمى الوظيفي]",
+    panel: {
+      title: "مؤتمر سنوي",
+      when: "الافتتاح بعد 12 يوماً",
+      note: "مثال توضيحي",
+      rows: [
+        { name: "خطة الحدث وجدول الأعمال", state: "مكتمل" },
+        { name: "تصميم المسرح", state: "جاهز، بانتظار اعتماد العميل" },
+        { name: "توصيل الدعوات", state: "سُلّمت 340 من 500" },
+        { name: "ترتيب المقاعد", state: "يبدأ بعد إغلاق تأكيد الحضور" },
+        { name: "تقرير الختام", state: "يُعدّ بعد الحدث" },
+      ],
+    },
   },
   contact: {
     label: "تواصل",
@@ -103,8 +101,6 @@ const ar = {
     email: "البريد الإلكتروني",
     phone: "الهاتف",
     address: "العنوان",
-    emailPlaceholder: "[البريد الإلكتروني]",
-    phonePlaceholder: "[رقم التواصل]",
   },
   footer: {
     promise: "كل عمل في حلقته، وكل لحظة في مكانها.",
@@ -193,20 +189,18 @@ const en: Copy = {
     body: "Opera Technologies is Opera's technology division. We build the digital products, operational systems and automation our projects run on — and develop technology solutions for clients.",
     proof: "Our projects run on an operations platform we built ourselves: tasks, field delivery, protocol, procurement and finance in one system.",
     items: ["Digital products & platforms", "Custom software", "Operational management systems", "Workflow automation", "Technology-enabled business solutions"],
-    panelTitle: "Work, as it stands",
-    panelNote: "Illustrative",
-    rows: [
-      { name: "Request intake", state: "Complete" },
-      { name: "Planning", state: "Complete" },
-      { name: "Field execution", state: "In progress" },
-      { name: "Client approval", state: "Awaiting approval" },
-      { name: "Delivery report", state: "Not started" },
-    ],
-  },
-  leadership: {
-    label: "Leadership",
-    title: "Leadership",
-    titlePlaceholder: "[Title]",
+    panel: {
+      title: "Annual conference",
+      when: "Opens in 12 days",
+      note: "Illustrative example",
+      rows: [
+        { name: "Event plan & agenda", state: "Complete" },
+        { name: "Stage design", state: "Ready, awaiting client approval" },
+        { name: "Invitation delivery", state: "340 of 500 delivered" },
+        { name: "Seating plan", state: "Starts when RSVPs close" },
+        { name: "Close-out report", state: "Prepared after the event" },
+      ],
+    },
   },
   contact: {
     label: "Contact",
@@ -217,8 +211,6 @@ const en: Copy = {
     email: "Email",
     phone: "Phone",
     address: "Address",
-    emailPlaceholder: "[Email address]",
-    phonePlaceholder: "[Phone number]",
   },
   footer: {
     promise: "Every task in its loop. Every moment in its place.",

@@ -4,10 +4,13 @@ test("corporate homepage renders in both languages and hands off to sign-in", as
   await page.goto("/");
   await expect(page.locator("html")).toHaveAttribute("dir", "rtl");
   await expect(page.getByRole("heading", { level: 1 })).toContainText("نبني الأصعب");
-  for (const id of ["about", "capabilities", "formula", "work", "technologies", "leadership", "contact"]) await expect(page.locator(`#${id}`)).toBeVisible();
-  // no invented case studies or contact details: placeholders are explicit
+  for (const id of ["about", "capabilities", "formula", "work", "technologies", "contact"]) await expect(page.locator(`#${id}`)).toBeVisible();
+  // no invented case studies; unconfirmed details are left out rather than shown as "[placeholders]"
   await expect(page.locator("#work")).toContainText("نُعدّ حالياً");
-  await expect(page.locator("#contact")).toContainText("[البريد الإلكتروني]");
+  await expect(page.locator("main")).not.toContainText("[");
+  await expect(page.locator("#leadership")).toHaveCount(0);
+  // the illustrative status card says what each ring shows
+  await expect(page.locator("#technologies")).toContainText("سُلّمت 340 من 500");
 
   await context.addCookies([{ name: "operra_locale", value: "en", url: page.url() }]);
   await page.reload();

@@ -2,16 +2,12 @@ import { COMPANY } from "@/content/company";
 import type { SiteCopy } from "@/content/site-copy";
 import { Container, SectionMark } from "./primitives";
 
-function Row({ label, value, href, placeholder }: { label: string; value: string | null; href?: string; placeholder: string }) {
+function Row({ label, value, href }: { label: string; value: string; href?: string }) {
   return (
     <div className="flex flex-col gap-1 border-t border-mist/15 py-5 sm:flex-row sm:items-baseline sm:justify-between">
       <dt className="text-sm text-mist/60">{label}</dt>
       <dd className="text-lg">
-        {value ? (
-          href ? <a href={href} className="ltr-nums rounded-sm underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-lilac">{value}</a> : value
-        ) : (
-          <span className="text-mist/45">{placeholder}</span>
-        )}
+        {href ? <a href={href} className="ltr-nums rounded-sm underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-lilac">{value}</a> : value}
       </dd>
     </div>
   );
@@ -23,7 +19,7 @@ export function Contact({ t, locale }: { t: SiteCopy; locale: "ar" | "en" }) {
   return (
     <section id="contact" aria-labelledby="contact-title" className="bg-night-gradient relative isolate overflow-hidden py-24 text-mist sm:py-36">
       <Container>
-        <SectionMark index="07" label={c.label} />
+        <SectionMark index="06" label={c.label} />
         <div className="mt-14 grid gap-14 lg:grid-cols-12">
           <h2 id="contact-title" className="reveal site-display !text-[clamp(2.25rem,5.4vw,5rem)] lg:col-span-8">
             <span className="block">{c.line1}</span>
@@ -38,11 +34,14 @@ export function Contact({ t, locale }: { t: SiteCopy; locale: "ar" | "en" }) {
             )}
           </div>
         </div>
-        <dl className="reveal mt-16 border-b border-mist/15 lg:w-2/3">
-          <Row label={c.email} value={email} href={email ? `mailto:${email}` : undefined} placeholder={c.emailPlaceholder} />
-          <Row label={c.phone} value={phone} href={phone ? `tel:${phone}` : undefined} placeholder={c.phonePlaceholder} />
-          {address && <Row label={c.address} value={address[locale]} placeholder="" />}
-        </dl>
+        {/* only confirmed details are listed; nothing is shown in place of a missing one */}
+        {(email || phone || address) && (
+          <dl className="reveal mt-16 border-b border-mist/15 lg:w-2/3">
+            {email && <Row label={c.email} value={email} href={`mailto:${email}`} />}
+            {phone && <Row label={c.phone} value={phone} href={`tel:${phone}`} />}
+            {address && <Row label={c.address} value={address[locale]} />}
+          </dl>
+        )}
       </Container>
     </section>
   );
